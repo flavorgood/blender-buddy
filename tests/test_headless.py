@@ -1,4 +1,4 @@
-"""Headless proof for the Blender Bender prototype.
+"""Headless proof for the Blender Buddy prototype.
 
 Run with:
   blender -b --factory-startup --python tests/test_headless.py
@@ -20,31 +20,31 @@ sys.path.insert(0, ROOT)
 DEMO_DIR = os.path.join(ROOT, "demo")
 os.makedirs(DEMO_DIR, exist_ok=True)
 
-import blender_bender  # noqa: E402
+import blender_buddy  # noqa: E402
 
-blender_bender.register()
+blender_buddy.register()
 print("TEST_PASS register")
 
-assert hasattr(bpy.ops.bender, "action"), "bender.action operator missing"
-assert "VIEW3D_PT_blender_bender" in dir(bpy.types) or hasattr(
-    bpy.types, "VIEW3D_PT_blender_bender"), "panel class missing"
+assert hasattr(bpy.ops.buddy, "action"), "buddy.action operator missing"
+assert "VIEW3D_PT_blender_buddy" in dir(bpy.types) or hasattr(
+    bpy.types, "VIEW3D_PT_blender_buddy"), "panel class missing"
 print("TEST_PASS operator+panel present")
 
 # --- plain-words search ------------------------------------------------------
 def ids(query):
-    return [a["id"] for a in blender_bender.search_actions(query)]
+    return [a["id"] for a in blender_buddy.search_actions(query)]
 
 assert "round_edge" in ids("round the edges"), ids("round the edges")
 assert "copy_it" in ids("make a copy"), ids("make a copy")
 assert "cut_hole" in ids("cut a hole"), ids("cut a hole")
 assert "make_smoother" in ids("make it smoother"), ids("make it smoother")
 assert "tool_move" in ids("move it"), ids("move it")
-assert ids("zzzz-not-a-thing") == []
+assert ids("xyzqq zzz") == []  # pure gibberish still finds nothing (v0.3 loose search)
 print("TEST_PASS plain-words search")
 
 
 def run(action_id):
-    return bpy.ops.bender.action(action_id=action_id)
+    return bpy.ops.buddy.action(action_id=action_id)
 
 
 def clear_scene():
@@ -74,7 +74,7 @@ run("make_smoother")
 assert any(m.type == "SUBSURF" for m in ball.modifiers), "no SUBSURF modifier"
 run("look_smooth")
 run("give_colour")
-assert ball.data.materials and ball.data.materials[0].name == "Bender Red"
+assert ball.data.materials and ball.data.materials[0].name == "Buddy Red"
 print("TEST_PASS smoother + smooth shading + colour")
 
 select_only(cube)
@@ -163,11 +163,11 @@ scene.cycles.samples = 24
 scene.cycles.device = "CPU"
 scene.render.resolution_x = 720
 scene.render.resolution_y = 540
-scene.render.filepath = os.path.join(DEMO_DIR, "bender_demo.png")
+scene.render.filepath = os.path.join(DEMO_DIR, "buddy_demo.png")
 bpy.ops.render.render(write_still=True)
 assert os.path.getsize(scene.render.filepath) > 10000, "render too small"
-bpy.ops.wm.save_as_mainfile(filepath=os.path.join(DEMO_DIR, "bender_demo.blend"))
+bpy.ops.wm.save_as_mainfile(filepath=os.path.join(DEMO_DIR, "buddy_demo.blend"))
 print("TEST_PASS demo scene rendered + saved")
 
-blender_bender.unregister()
+blender_buddy.unregister()
 print("ALL TESTS PASSED")

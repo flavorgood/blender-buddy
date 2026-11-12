@@ -1,4 +1,4 @@
-"""Blender Bender v0.2 proof.
+"""Blender Buddy v0.2 proof.
 
 Run with:
   blender -b --factory-startup --python tests/test_v02.py
@@ -20,7 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 HOME = os.path.expanduser("~")
 
-import blender_bender as bb  # noqa: E402
+import blender_buddy as bb  # noqa: E402
 
 bb.register()
 print("TEST_PASS register")
@@ -44,7 +44,7 @@ print("TEST_PASS complete index + search")
 
 
 def run(action_id):
-    return bpy.ops.bender.action(action_id=action_id)
+    return bpy.ops.buddy.action(action_id=action_id)
 
 
 def clear():
@@ -59,7 +59,7 @@ def select_only(obj):
 
 # index Run button executes a real Blender tool
 clear()
-res = bpy.ops.bender.run_any(op_id="mesh.primitive_cube_add")
+res = bpy.ops.buddy.run_any(op_id="mesh.primitive_cube_add")
 assert "FINISHED" in res and bpy.context.object is not None
 print("TEST_PASS index run button")
 
@@ -103,19 +103,19 @@ assert tuple(cube.location) == (0.0, 0.0, 0.0)
 print("TEST_PASS centre world")
 
 # --- finish: exports, picture, save -------------------------------------------
-for name in ("blender_bender_model.glb", "blender_bender_model.stl",
-             "blender_bender_model.obj", "blender_bender_picture.png",
-             "blender_bender_my_model.blend"):
+for name in ("blender_buddy_model.glb", "blender_buddy_model.stl",
+             "blender_buddy_model.obj", "blender_buddy_picture.png",
+             "blender_buddy_my_model.blend"):
     p = os.path.join(HOME, name)
     if os.path.exists(p):
         os.remove(p)
 
 run("send_web")
-assert os.path.getsize(os.path.join(HOME, "blender_bender_model.glb")) > 100
+assert os.path.getsize(os.path.join(HOME, "blender_buddy_model.glb")) > 100
 run("send_print")
-assert os.path.getsize(os.path.join(HOME, "blender_bender_model.stl")) > 100
+assert os.path.getsize(os.path.join(HOME, "blender_buddy_model.stl")) > 100
 run("send_obj")
-assert os.path.getsize(os.path.join(HOME, "blender_bender_model.obj")) > 100
+assert os.path.getsize(os.path.join(HOME, "blender_buddy_model.obj")) > 100
 print("TEST_PASS exports glb/stl/obj")
 
 scene = bpy.context.scene
@@ -124,11 +124,11 @@ scene.cycles.samples = 1
 scene.render.resolution_x = 64
 scene.render.resolution_y = 64
 run("take_picture")
-assert os.path.getsize(os.path.join(HOME, "blender_bender_picture.png")) > 1000
+assert os.path.getsize(os.path.join(HOME, "blender_buddy_picture.png")) > 1000
 print("TEST_PASS take the picture")
 
 run("save_work")
-assert os.path.exists(os.path.join(HOME, "blender_bender_my_model.blend"))
+assert os.path.exists(os.path.join(HOME, "blender_buddy_my_model.blend"))
 print("TEST_PASS save your work")
 
 bb.unregister()

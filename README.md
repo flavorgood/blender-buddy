@@ -1,4 +1,4 @@
-# Blender Bender — Blender in plain words
+# Blender Buddy — Blender in plain words
 
 A free add-on that puts a plain-words layer over Blender 4.2, built on
 one rule:
@@ -6,7 +6,7 @@ one rule:
 > **If a day-1 beginner can't use it, we aren't done.**
 
 Blender's problem isn't missing power — it's that the power is hidden
-behind shortcuts and names you have to already know. Blender Bender
+behind shortcuts and names you have to already know. Blender Buddy
 changes none of Blender's functions. It makes them visible:
 
 - **Every button is labelled by the job, not the jargon.**
@@ -25,15 +25,19 @@ changes none of Blender's functions. It makes them visible:
   picks everything, and tells you to press the same button again. Press
   "Take the picture" in a scene with no camera or light and it adds
   them for you instead of failing.
-- **Search in your own words.** Type "round the edges", "make a copy",
-  "cut a hole" into the box at the top; the matching tools appear.
+- **Search in your own words — loosely.** Type "round the edges",
+  "make a copy", "cut a hole" and the matching tools appear. Loose
+  words work too: everyday synonyms ("squish", "clone", "glow"),
+  half-words ("extrud"), US spellings ("color") and plain typos
+  ("bevell") all find their tool, ranked best-first. Gibberish still
+  finds nothing.
 - **One press for multi-step jobs.** "Cut one shape out of another"
   does the whole Boolean setup and applies it. "Give it a colour"
   builds and assigns the material.
 
 ## Nothing is lost
 
-Blender 4.2.5 exposes **2,410 tools**. Blender Bender puts **93** of
+Blender 4.2.5 exposes **2,410 tools**. Blender Buddy puts **93** of
 the everyday ones on plain-words buttons in 13 job-ordered sections —
 and **all 2,410** are in the searchable "Everything else Blender can
 do" index at the bottom of the same panel, each with Blender's own
@@ -51,14 +55,14 @@ Animate it · Finish: picture, save, send it out · Find your way around.
 
 You need Blender 4.2 or newer (free at blender.org).
 
-1. Download **[blender_bender.py](https://raw.githubusercontent.com/flavorgood/blender-bender/main/blender_bender.py)**
+1. Download **[blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/main/blender_buddy.py)**
    (right-click → Save link as… if it opens in the browser instead of downloading).
 2. In Blender: **Edit → Preferences → Add-ons → Install…** and pick
-   the downloaded `blender_bender.py`.
-3. Tick the checkbox next to **"Blender Bender - Blender in Plain Words"**.
-4. In the 3D Viewport press **N** and open the **Blender Bender** tab.
+   the downloaded `blender_buddy.py`.
+3. Tick the checkbox next to **"Blender Buddy - Blender in Plain Words"**.
+4. In the 3D Viewport press **N** and open the **Blender Buddy** tab.
 
-Developers: the `blender_bender/` folder in this repo is the same
+Developers: the `blender_buddy/` folder in this repo is the same
 add-on in package form (zip it and install the zip), and
 `tests/` holds the headless proof suites.
 
