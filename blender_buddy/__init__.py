@@ -1,5 +1,5 @@
 """
-Blender Buddy - Blender in plain words (prototype 0.3)
+Blender Buddy - Blender in plain words (prototype 0.4)
 
 Design rule (the whole point of this add-on):
     A day-1 beginner must be able to use every button without already
@@ -21,19 +21,21 @@ Nothing is removed or replaced: every button simply runs Blender's
 own tool underneath, and Blender's normal interface stays untouched.
 """
 
+import math
 import os
+import random
 import re
 import textwrap
 from difflib import SequenceMatcher
 
 import bpy
-from bpy.props import BoolProperty, StringProperty
+from bpy.props import BoolProperty, IntProperty, StringProperty
 from bpy.types import Operator, Panel
 
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (0, 3, 0),
+    "version": (0, 4, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -954,6 +956,246 @@ def search_index(query, limit=15):
 
 
 # ----------------------------------------------------------------------------
+# Day 1: the Donut Tour. The donut is the famous first Blender project -
+# the Blender Guru's tutorial made it the rite of passage. This is the
+# same donut in plain words: 8 steps, one press each, and a step only
+# ticks off when the SCENE proves it happened (the object, the colour,
+# the camera are really there) - never just because a button was pressed.
+# ----------------------------------------------------------------------------
+
+def _scene_obj(context, name):
+    return context.scene.objects.get(name)
+
+
+def _dough(context):
+    skip = {"Icing", "Sprinkles", "Plate"}
+    cands = [o for o in context.scene.objects
+             if o.type == "MESH" and o.name not in skip
+             and len(o.data.vertices) >= 300]
+    if not cands:
+        return None
+    cands.sort(key=lambda o: len(o.data.vertices), reverse=True)
+    return cands[0]
+
+
+def _first_colour(obj):
+    if obj is None or not obj.data.materials:
+        return None
+    mat = obj.data.materials[0]
+    return mat.diffuse_color if mat else None
+
+
+def _paint(obj, mat_name, rgba):
+    mat = bpy.data.materials.get(mat_name)
+    if mat is None:
+        mat = bpy.data.materials.new(mat_name)
+    mat.diffuse_color = rgba
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
+
+
+def _tour_step_dough(context):
+    # The famous tutorial's first move: get rid of the starter cube.
+    # Only when the scene is EXACTLY Blender's untouched starter set
+    # (Cube, Camera, Light and nothing else) - a lived-in scene is
+    # never touched.
+    objs = list(context.scene.objects)
+    if {o.name for o in objs} <= {"Cube", "Camera", "Light"}:
+        bpy.ops.object.select_all(action="SELECT")
+        bpy.ops.object.delete()
+    bpy.ops.buddy.action(action_id="add_ring")
+    obj = context.object
+    if obj is not None:
+        obj.name = "Dough"
+
+
+def _tour_step_icing(context):
+    dough = _dough(context)
+    if dough is None:
+        raise RuntimeError("The dough ring is not there yet - do step 1 first.")
+    icing = dough.copy()
+    icing.data = dough.data.copy()
+    context.scene.collection.objects.link(icing)
+    icing.name = "Icing"
+    icing.data.name = "Icing"
+    icing.scale = (0.99, 0.99, 0.8)
+    icing.location.z = dough.location.z + 0.06
+    for poly in icing.data.polygons:
+        poly.use_smooth = True
+    mod = icing.modifiers.new("Smoother", "SUBSURF")
+    mod.levels = 2
+    bpy.ops.object.select_all(action="DESELECT")
+    icing.select_set(True)
+    context.view_layer.objects.active = icing
+
+
+def _tour_step_icing_pink(context):
+    icing = _scene_obj(context, "Icing")
+    if icing is None:
+        raise RuntimeError("There is no icing yet - do the icing step first.")
+    _paint(icing, "Buddy Pink", (0.96, 0.45, 0.62, 1.0))
+
+
+def _tour_step_dough_colour(context):
+    dough = _dough(context)
+    if dough is None:
+        raise RuntimeError("The dough ring is not there yet - do step 1 first.")
+    _paint(dough, "Buddy Dough", (0.52, 0.30, 0.12, 1.0))
+
+
+_SPRINKLE_COLOURS = [
+    (0.90, 0.10, 0.15, 1.0), (0.95, 0.80, 0.10, 1.0),
+    (0.15, 0.35, 0.95, 1.0), (0.20, 0.80, 0.30, 1.0),
+    (0.96, 0.96, 0.96, 1.0), (0.60, 0.25, 0.90, 1.0),
+]
+
+
+def _tour_step_sprinkles(context):
+    icing = _scene_obj(context, "Icing")
+    if icing is None:
+        raise RuntimeError("Sprinkles need the icing first - it is step 4.")
+    rng = random.Random(11)
+    mats = []
+    for i, rgba in enumerate(_SPRINKLE_COLOURS):
+        name = f"Sprinkle Colour {i + 1}"
+        mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+        mat.diffuse_color = rgba
+        mats.append(mat)
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    made = []
+    big_r, small_r = 1.0, 0.28
+    for i in range(60):
+        a = rng.uniform(0, 2 * math.pi)          # around the ring
+        t = rng.uniform(0.15 * math.pi, 0.85 * math.pi)  # over the top
+        x = (big_r + small_r * math.cos(t)) * math.cos(a)
+        y = (big_r + small_r * math.cos(t)) * math.sin(a)
+        z = small_r * math.sin(t) * 0.8 + 0.07
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            segments=8, ring_count=6, radius=0.028, location=(x, y, z))
+        s = context.object
+        s.scale = (2.0, 0.8, 0.8)
+        s.rotation_euler = (rng.uniform(0, 3.1), rng.uniform(0, 3.1),
+                            rng.uniform(0, 3.1))
+        s.data.materials.append(mats[i % len(mats)])
+        made.append(s)
+    for s in made:
+        s.select_set(True)
+    context.view_layer.objects.active = made[0]
+    bpy.ops.object.join()
+    context.object.name = "Sprinkles"
+
+
+def _tour_step_plate(context):
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=1.7, depth=0.08, location=(0, 0, -0.285))
+    plate = context.object
+    plate.name = "Plate"
+    _paint(plate, "Buddy Plate", (0.93, 0.93, 0.95, 1.0))
+
+
+def _tour_step_picture(context):
+    bpy.ops.buddy.action(action_id="take_picture")
+
+
+def _tour_step_save(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+def _check_dough(context):
+    return _dough(context) is not None
+
+
+def _check_icing(context):
+    return _scene_obj(context, "Icing") is not None
+
+
+def _check_icing_pink(context):
+    c = _first_colour(_scene_obj(context, "Icing"))
+    return bool(c) and c[0] > 0.75 and c[1] < 0.65 and 0.25 < c[2] < 0.85
+
+
+def _check_dough_colour(context):
+    c = _first_colour(_dough(context))
+    return bool(c) and 0.3 < c[0] < 0.75 and c[1] < 0.45 and c[2] < 0.3
+
+
+def _check_sprinkles(context):
+    return _scene_obj(context, "Sprinkles") is not None
+
+
+def _check_plate(context):
+    return _scene_obj(context, "Plate") is not None
+
+
+def _check_picture(context):
+    # A fresh Blender scene already HAS a camera and a light, so their
+    # existence proves nothing. The proof is the picture file itself,
+    # written after this tour started.
+    epoch = getattr(context.scene, "buddy_tour_epoch", 0)
+    if epoch <= 0:
+        return False
+    target = os.path.join(os.path.expanduser("~"), "blender_buddy_picture.png")
+    fp = context.scene.render.filepath
+    if fp and fp.endswith(".png"):
+        target = bpy.path.abspath(fp)
+    return os.path.exists(target) and os.path.getmtime(target) >= epoch - 2
+
+
+def _check_saved(context):
+    return bool(bpy.data.filepath)
+
+
+TOUR_STEPS = [
+    {"title": "Add the dough ring",
+     "how": "Every donut starts as a plain ring of dough. One press "
+            "adds it - and clears Blender's starter cube out of the "
+            "way first, exactly like the famous tutorial does.",
+     "run": _tour_step_dough, "check": _check_dough},
+    {"title": "Make the icing",
+     "how": "The icing is a copy of the ring, a little flatter and sitting "
+            "a touch higher, smoothed round. One press builds it.",
+     "run": _tour_step_icing, "check": _check_icing},
+    {"title": "Colour the icing pink",
+     "how": "Pink is the classic. One press paints the icing.",
+     "run": _tour_step_icing_pink, "check": _check_icing_pink},
+    {"title": "Colour the dough golden",
+     "how": "Under the icing, the ring becomes baked-dough brown.",
+     "run": _tour_step_dough_colour, "check": _check_dough_colour},
+    {"title": "Add the sprinkles",
+     "how": "Sixty little sprinkles, scattered over the icing where "
+            "sprinkles belong - on top.",
+     "run": _tour_step_sprinkles, "check": _check_sprinkles},
+    {"title": "Put it on a plate",
+     "how": "A plain white plate under it all, so it sits like food "
+            "and not like a floating ring.",
+     "run": _tour_step_plate, "check": _check_plate},
+    {"title": "Take the picture",
+     "how": "Adds a camera and a light if your scene has none, then "
+            "makes the picture - the moment it becomes real.",
+     "run": _tour_step_picture, "check": _check_picture},
+    {"title": "Save your work",
+     "how": "Saves the whole scene so you can close Blender and come "
+            "back to your donut any time.",
+     "run": _tour_step_save, "check": _check_saved},
+]
+
+
+def tour_state(context):
+    """(checks, current step index). A step counts as done only when
+    the scene itself proves it."""
+    checks = []
+    for step in TOUR_STEPS:
+        try:
+            checks.append(bool(step["check"](context)))
+        except Exception:
+            checks.append(False)
+    current = checks.index(False) if False in checks else len(checks)
+    return checks, current
+
+
+# ----------------------------------------------------------------------------
 # The one operator behind every button
 # ----------------------------------------------------------------------------
 
@@ -1057,6 +1299,62 @@ class BUDDY_OT_run_any(Operator):
         return {"FINISHED"}
 
 
+class BUDDY_OT_tour_start(Operator):
+    bl_idname = "buddy.tour_start"
+    bl_label = "Start the Donut"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        import time
+        context.scene.buddy_tour_started = True
+        context.scene.buddy_tour_epoch = int(time.time())
+        self.report({"INFO"}, "Donut tour started - step 1 is at the top "
+                              "of the Blender Buddy panel.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_tour_hide(Operator):
+    bl_idname = "buddy.tour_hide"
+    bl_label = "Hide the Donut Tour"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        context.scene.buddy_tour_started = False
+        return {"FINISHED"}
+
+
+class BUDDY_OT_tour_do(Operator):
+    bl_idname = "buddy.tour_do"
+    bl_label = "Do This Step"
+    bl_description = ("Do this donut step now. The step only ticks off "
+                      "when the scene itself proves it happened")
+    bl_options = {"REGISTER", "UNDO"}
+
+    step: IntProperty(options={"HIDDEN"})
+
+    def execute(self, context):
+        if not (0 <= self.step < len(TOUR_STEPS)):
+            return {"CANCELLED"}
+        step = TOUR_STEPS[self.step]
+        try:
+            step["run"](context)
+        except Exception as exc:
+            self.report({"WARNING"}, f"That step didn't finish: {exc}")
+            return {"CANCELLED"}
+        if step["check"](context):
+            nxt = self.step + 1
+            if nxt < len(TOUR_STEPS):
+                self.report({"INFO"}, f"Done - {step['title']}. "
+                                      f"Next: {TOUR_STEPS[nxt]['title']}.")
+            else:
+                self.report({"INFO"}, "Done - you made the donut.")
+        else:
+            self.report({"INFO"}, f"{step['title']} - take a look at the "
+                                  "scene; the step ticks off when it's "
+                                  "really there.")
+        return {"FINISHED"}
+
+
 # ----------------------------------------------------------------------------
 # The panel
 # ----------------------------------------------------------------------------
@@ -1107,6 +1405,42 @@ class VIEW3D_PT_blender_buddy(Panel):
         layout = self.layout
         wm = context.window_manager
         show_real = getattr(wm, "buddy_show_real", True)
+
+        scene = context.scene
+        if not (wm.buddy_query or "").strip():
+            box = layout.box()
+            if not getattr(scene, "buddy_tour_started", False):
+                box.label(text="Day 1: Make a Donut", icon="MESH_TORUS")
+                _wrap(box, "The donut is how millions of people started "
+                           "Blender - the Blender Guru's tutorial made it "
+                           "the famous first project. This is the same "
+                           "donut in plain words: 8 steps, one press each, "
+                           "and a step only ticks off when your scene "
+                           "proves it's done.")
+                box.operator("buddy.tour_start", text="Start the donut")
+            else:
+                checks, current = tour_state(context)
+                done = sum(checks)
+                if current >= len(TOUR_STEPS):
+                    box.label(text="You made the donut", icon="CHECKMARK")
+                    _wrap(box, "Dough, icing, sprinkles, plate, picture, "
+                               "saved - the same first project as the "
+                               "famous tutorial, done in 8 presses. "
+                               "Everything after this is just more tools "
+                               "from the sections below.")
+                    box.operator("buddy.tour_hide", text="Hide this")
+                else:
+                    step = TOUR_STEPS[current]
+                    box.label(text=f"Make a Donut - step {current + 1} of "
+                                   f"{len(TOUR_STEPS)}: {step['title']}",
+                              icon="MESH_TORUS")
+                    _wrap(box, step["how"])
+                    op = box.operator("buddy.tour_do", text="Do this step")
+                    op.step = current
+                    _wrap(box, f"Done so far: {done} of {len(TOUR_STEPS)}. "
+                               "Ticks are earned by the scene, not by "
+                               "pressing.")
+                    box.operator("buddy.tour_hide", text="Not now")
 
         box = layout.box()
         box.label(text="Where you are", icon="INFO")
@@ -1168,7 +1502,8 @@ class VIEW3D_PT_blender_buddy(Panel):
                        "it deserves a plain-words button above.")
 
 
-CLASSES = (BUDDY_OT_action, BUDDY_OT_run_any, VIEW3D_PT_blender_buddy)
+CLASSES = (BUDDY_OT_action, BUDDY_OT_run_any, BUDDY_OT_tour_start,
+           BUDDY_OT_tour_hide, BUDDY_OT_tour_do, VIEW3D_PT_blender_buddy)
 
 
 def register():
@@ -1187,12 +1522,28 @@ def register():
                     "plain-words button, so you learn them as you go",
         default=True,
     )
+    bpy.types.Scene.buddy_tour_started = BoolProperty(
+        name="Donut tour started",
+        description="Whether the Day 1 Donut Tour is showing in the panel",
+        default=False,
+    )
+    bpy.types.Scene.buddy_tour_epoch = IntProperty(
+        name="Donut tour start time",
+        description="When the donut tour was started (whole seconds - "
+                    "a float property cannot hold a time this big "
+                    "exactly), so the picture step can prove the "
+                    "picture was taken during it",
+        default=0,
+    )
 
 
 def unregister():
     for attr in ("buddy_query", "buddy_show_real"):
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
+    for attr in ("buddy_tour_started", "buddy_tour_epoch"):
+        if hasattr(bpy.types.Scene, attr):
+            delattr(bpy.types.Scene, attr)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 

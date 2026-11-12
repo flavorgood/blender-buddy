@@ -31,6 +31,14 @@ changes none of Blender's functions. It makes them visible:
   half-words ("extrud"), US spellings ("color") and plain typos
   ("bevell") all find their tool, ranked best-first. Gibberish still
   finds nothing.
+- **Day 1: the Donut Tour.** At the top of the panel, a guided first
+  project — the donut, the famous one from the Blender Guru's
+  tutorial, rebuilt as 8 plain-words steps with one press each:
+  dough, icing, pink, golden, sprinkles, plate, picture, save. A step
+  only ticks off when your scene *proves* it's done (the object, the
+  colour, the picture file are really there) — pressing alone earns
+  nothing. It starts by clearing Blender's starter cube, exactly
+  like the tutorial does, but only in an untouched starter scene.
 - **One press for multi-step jobs.** "Cut one shape out of another"
   does the whole Boolean setup and applies it. "Give it a colour"
   builds and assigns the material.
@@ -84,14 +92,19 @@ which word stopped you.
 ## What was verified
 
 Headless test suites (`tests/`, Blender 4.2.5 LTS): all checks pass —
-the add-on registers; plain-words search matches everyday phrasing;
-all 28 modifier buttons genuinely add their modifier to a real object;
+the add-on registers; plain-words search matches everyday phrasing,
+and the loose-search suite proves synonyms, half-words, US spellings
+and typos find their tools while gibberish finds nothing; all 28
+modifier buttons genuinely add their modifier to a real object;
 the index holds 2,410 tools and its Run button executes real tools;
 sculpt mode, keyframes, GLB/STL/OBJ exports, render and save all
 produce real results; both install paths (zip package and the single
 `.py` file) install and enable through Blender's own Install button.
-The demo scene in `demo/` (box with rounded edges + smooth red ball
-on a ground sheet) was built using only the add-on's buttons.
+The Donut Tour suite walks all 8 steps through the real panel
+operators and proves each one from the scene state; the donut in
+`demo/` was made by the tour itself. The demo scene in `demo/` (box
+with rounded edges + smooth red ball on a ground sheet) was built
+using only the add-on's buttons.
 
 Not yet verified: the panel's on-screen layout in the live GUI
 (headless test machines can't draw the viewport sidebar). First thing
