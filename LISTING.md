@@ -49,6 +49,8 @@ visible, in plain words:
 Blender's own interface, menus and shortcuts are untouched. Turn
 Buddy off and Blender is exactly as it was.
 
+Free forever — built to impact humanity, not to bill it.
+
 ## Permission justification (network)
 Declared in the manifest. Network is used ONLY when the user asks
 the Buddy Expert something or runs one of its plans, and only to
@@ -56,17 +58,16 @@ the service/program/local AI the user themselves chose in the
 add-on preferences. The question and a short scene summary are
 sent; nothing else, and never in the background.
 
-## License — OWNER DECISION NEEDED
-The GitHub code is MIT. The extension manifest currently declares
-GPL-3.0-or-later, the platform's expected license for add-ons
-(Blender itself is GPL and add-ons build on its Python API).
-Before submitting, the owner must rule: relicense the add-on to
-GPL-3.0-or-later (recommended for the platform), or keep MIT and
-accept the platform may refuse the listing.
+## License — RULED AND DONE (owner, 2026-11-12)
+The owner chose the stay-free license: the whole add-on is now
+GPL-3.0-or-later, in the repo's LICENSE file, the README, and the
+extension manifest alike — one license everywhere, matching what
+the platform expects (Blender itself is GPL and add-ons build on
+its Python API).
 
 ## Submission checklist for the owner (about 5 minutes)
 1. Create a Blender ID at id.blender.org (free).
-2. Rule on the license above.
+2. ~~Rule on the license~~ — done, GPL-3.0-or-later (above).
 3. On extensions.blender.org: Submit → upload
    `blender_buddy_v0.8_extension.zip` → paste the description
    above → answer the network-permission question with the

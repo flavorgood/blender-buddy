@@ -174,4 +174,9 @@ to check on a real machine — reports welcome.
 
 ## License
 
-MIT — see `LICENSE`. Free to use, copy and share.
+GNU General Public License v3.0 or later — see `LICENSE`. Free to
+use, copy, change and share; anyone who passes it on has to keep
+it free and open the same way, so it can never be taken, locked
+up and sold as someone else's closed product. (Switched from MIT
+on the owner's ruling, 2026-11-12 — the stay-free license is also
+the one Blender's official Extensions platform expects.)
