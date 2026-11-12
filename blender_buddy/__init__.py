@@ -1,5 +1,5 @@
 """
-Blender Buddy - Blender in plain words (prototype 0.5)
+Blender Buddy - Blender in plain words (prototype 0.6)
 
 Design rule (the whole point of this add-on):
     A day-1 beginner must be able to use every button without already
@@ -38,7 +38,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (0, 5, 0),
+    "version": (0, 6, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -1634,6 +1634,382 @@ def _expert_system_prompt():
         f"Buttons: {buttons}")
 
 
+_AGENT_OPS_CACHE = None
+
+
+def _agent_ops_list():
+    """The Blender tools the expert may use in a plan: the everyday
+    categories, as 'idname = name' lines. Cached."""
+    global _AGENT_OPS_CACHE
+    if _AGENT_OPS_CACHE is not None:
+        return _AGENT_OPS_CACHE
+    cats = {"mesh", "object", "view3d", "render", "scene", "wm",
+            "transform", "curve", "surface", "armature", "material"}
+    lines = [f"{e['idname']} = {e['label']}"
+             for e in build_index() if e["cat"] in cats]
+    _AGENT_OPS_CACHE = "\n".join(lines)
+    return _AGENT_OPS_CACHE
+
+
+def _expert_agent_prompt():
+    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in ACTIONS)
+    settings = "\n".join(f"STEP: set:{s['desc']}"
+                         for s in SETTINGS.values())
+    styles = "; ".join(f"{k} = {v[0]}" for k, v in STYLES.items())
+    return (
+        "You are the Buddy Expert, the user's own agent inside a "
+        "beginner Blender add-on. The user asks for a result in "
+        "plain words; you reply with a plan the add-on will run, "
+        "step by step, in their Blender. You can press buttons, run "
+        "Blender tools, adjust exact settings (like giving them the "
+        "precise sculpt brush they describe), apply node-tree "
+        "styles, and look up add-ons for them. Format EXACTLY:\n"
+        "SUMMARY: <one plain sentence saying what the plan achieves>\n"
+        "STEP: button:<id>   (an add-on button, preferred)\n"
+        "STEP: tool:<idname>   (a raw Blender tool, when no button fits)\n"
+        "STEP: set:<setting from the settings list>\n"
+        "STEP: style:<style name>   (a node-tree style for the "
+        "picked thing)\n"
+        "STEP: find:<words>   (open an add-on search for these "
+        "words, when a plugin would serve them better)\n"
+        "One STEP per line, in the order they must run. Prefer "
+        "buttons - they are safe and beginner-shaped. Use at most 8 "
+        "steps. Only use ids from the lists below; anything else is "
+        "dropped. No other text.\n"
+        f"Buttons: {buttons}\n"
+        f"Settings you may adjust:\n{settings}\n"
+        f"Styles: {styles}\n"
+        f"Tools:\n{_agent_ops_list()}")
+
+
+def _first_modifier(context, mtype):
+    obj = context.object
+    if obj is None:
+        return None
+    for mod in obj.modifiers:
+        if mod.type == mtype:
+            return mod
+    return None
+
+
+def _sculpt_brush(context):
+    ts = context.tool_settings
+    brush = ts.sculpt.brush if ts.sculpt else None
+    if brush is None:
+        brush = bpy.data.brushes.new("Buddy Brush", mode="SCULPT")
+        if ts.sculpt:
+            ts.sculpt.brush = brush
+    return brush
+
+
+def _need_modifier(context, mtype, plain):
+    mod = _first_modifier(context, mtype)
+    if mod is None:
+        raise RuntimeError(f"the picked thing has no {plain} yet - "
+                           "add one first, then set it")
+    return mod
+
+
+# Settings the agent may adjust directly - the "give me the exact
+# brush" layer. Each has a plain description (which is also what the
+# AI sees), a setter, and a reader so a run step can verify its own
+# work landed.
+SETTINGS = {
+    "brush.size": {
+        "label": "Sculpt brush size",
+        "desc": "brush.size:<pixels 1-500> - the sculpt brush's size",
+        "set": lambda c, v: setattr(_sculpt_brush(c), "size", int(v)),
+        "get": lambda c: _sculpt_brush(c).size,
+    },
+    "brush.strength": {
+        "label": "Sculpt brush strength",
+        "desc": "brush.strength:<0-1> - how hard the sculpt brush pushes",
+        "set": lambda c, v: setattr(_sculpt_brush(c), "strength", float(v)),
+        "get": lambda c: _sculpt_brush(c).strength,
+    },
+    "brush.falloff": {
+        "label": "Sculpt brush falloff",
+        "desc": "brush.falloff:<SMOOTH|SPHERE|SHARP|LIN|CONSTANT> - "
+                "the shape of the sculpt brush's edge",
+        "set": lambda c, v: setattr(_sculpt_brush(c), "curve_preset", str(v)),
+        "get": lambda c: _sculpt_brush(c).curve_preset,
+    },
+    "bevel.width": {
+        "label": "Edge rounding width",
+        "desc": "bevel.width:<0-1> - width of the picked thing's bevel "
+                "(needs a bevel on it first, e.g. from 'Round off a "
+                "sharp edge')",
+        "set": lambda c, v: setattr(
+            _need_modifier(c, "BEVEL", "bevel"), "width", float(v)),
+        "get": lambda c: _need_modifier(c, "BEVEL", "bevel").width,
+    },
+    "bevel.segments": {
+        "label": "Edge rounding smoothness",
+        "desc": "bevel.segments:<1-10> - segments of the bevel",
+        "set": lambda c, v: setattr(
+            _need_modifier(c, "BEVEL", "bevel"), "segments", int(v)),
+        "get": lambda c: _need_modifier(c, "BEVEL", "bevel").segments,
+    },
+    "subdivision.levels": {
+        "label": "Smoothness levels",
+        "desc": "subdivision.levels:<0-6> - the picked thing's "
+                "subdivision (needs one first, e.g. 'Make it smoother "
+                "& rounder')",
+        "set": lambda c, v: setattr(
+            _need_modifier(c, "SUBSURF", "subdivision"), "levels", int(v)),
+        "get": lambda c: _need_modifier(c, "SUBSURF", "subdivision").levels,
+    },
+    "solidify.thickness": {
+        "label": "Shell thickness",
+        "desc": "solidify.thickness:<0-1> - the picked thing's "
+                "solidify thickness (needs one first)",
+        "set": lambda c, v: setattr(
+            _need_modifier(c, "SOLIDIFY", "solidify"), "thickness", float(v)),
+        "get": lambda c: _need_modifier(c, "SOLIDIFY", "solidify").thickness,
+    },
+    "array.count": {
+        "label": "Copies in a row",
+        "desc": "array.count:<1-50> - copies in the picked thing's "
+                "array (needs one first, e.g. 'Make a row of copies')",
+        "set": lambda c, v: setattr(
+            _need_modifier(c, "ARRAY", "array"), "count", int(v)),
+        "get": lambda c: _need_modifier(c, "ARRAY", "array").count,
+    },
+    "render.samples": {
+        "label": "Picture quality (Cycles samples)",
+        "desc": "render.samples:<1-4096> - more samples = a cleaner "
+                "picture that takes longer",
+        "set": lambda c, v: setattr(c.scene.cycles, "samples", int(v)),
+        "get": lambda c: c.scene.cycles.samples,
+    },
+    "light.energy": {
+        "label": "Picked light brightness",
+        "desc": "light.energy:<number> - the picked light's strength "
+                "(the picked thing must be a light)",
+        "set": lambda c, v: setattr(c.object.data, "energy", float(v)),
+        "get": lambda c: c.object.data.energy,
+    },
+    "camera.focal": {
+        "label": "Camera zoom (lens mm)",
+        "desc": "camera.focal:<10-200> - the scene camera's lens",
+        "set": lambda c, v: setattr(c.scene.camera.data, "lens", float(v)),
+        "get": lambda c: c.scene.camera.data.lens,
+    },
+}
+
+
+def _style_material(obj):
+    if obj is None or obj.type not in {"MESH", "CURVE", "FONT"}:
+        raise RuntimeError("pick a shape first - a style needs "
+                           "something to land on")
+    if not obj.data.materials:
+        obj.data.materials.append(bpy.data.materials.new("Buddy Style"))
+    mat = obj.data.materials[0]
+    mat.use_nodes = True
+    return mat
+
+
+def _bsdf(mat):
+    node = mat.node_tree.nodes.get("Principled BSDF")
+    if node is None:
+        raise RuntimeError("the material has no Principled node to style")
+    return node
+
+
+def _style_chrome(obj):
+    bsdf = _bsdf(_style_material(obj))
+    bsdf.inputs["Base Color"].default_value = (0.9, 0.9, 0.92, 1.0)
+    bsdf.inputs["Metallic"].default_value = 1.0
+    bsdf.inputs["Roughness"].default_value = 0.08
+
+
+def _style_brushed_metal(obj):
+    mat = _style_material(obj)
+    bsdf = _bsdf(mat)
+    bsdf.inputs["Base Color"].default_value = (0.75, 0.75, 0.78, 1.0)
+    bsdf.inputs["Metallic"].default_value = 1.0
+    bsdf.inputs["Roughness"].default_value = 0.35
+    tree = mat.node_tree
+    noise = tree.nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 150.0
+    bump = tree.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.15
+    tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+
+def _style_matte_ceramic(obj):
+    bsdf = _bsdf(_style_material(obj))
+    bsdf.inputs["Metallic"].default_value = 0.0
+    bsdf.inputs["Roughness"].default_value = 0.6
+    if "Subsurface Weight" in bsdf.inputs:
+        bsdf.inputs["Subsurface Weight"].default_value = 0.05
+
+
+def _style_glowing(obj):
+    bsdf = _bsdf(_style_material(obj))
+    base = bsdf.inputs["Base Color"].default_value
+    if "Emission Color" in bsdf.inputs:
+        bsdf.inputs["Emission Color"].default_value = base
+    if "Emission Strength" in bsdf.inputs:
+        bsdf.inputs["Emission Strength"].default_value = 3.0
+    bsdf.inputs["Roughness"].default_value = 0.4
+
+
+def _style_glass(obj):
+    bsdf = _bsdf(_style_material(obj))
+    if "Transmission Weight" in bsdf.inputs:
+        bsdf.inputs["Transmission Weight"].default_value = 1.0
+    bsdf.inputs["Roughness"].default_value = 0.05
+    if "IOR" in bsdf.inputs:
+        bsdf.inputs["IOR"].default_value = 1.45
+
+
+def _style_wood(obj):
+    mat = _style_material(obj)
+    bsdf = _bsdf(mat)
+    tree = mat.node_tree
+    noise = tree.nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 3.0
+    noise.inputs["Detail"].default_value = 6.0
+    ramp = tree.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.25, 0.12, 0.04, 1.0)
+    ramp.color_ramp.elements[1].color = (0.55, 0.33, 0.14, 1.0)
+    bump = tree.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.3
+    tree.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
+    tree.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    bsdf.inputs["Roughness"].default_value = 0.55
+
+
+def _style_marble(obj):
+    mat = _style_material(obj)
+    bsdf = _bsdf(mat)
+    tree = mat.node_tree
+    vor = tree.nodes.new("ShaderNodeTexVoronoi")
+    vor.inputs["Scale"].default_value = 4.0
+    ramp = tree.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.85, 0.85, 0.87, 1.0)
+    ramp.color_ramp.elements[1].color = (0.35, 0.35, 0.40, 1.0)
+    tree.links.new(vor.outputs["Distance"], ramp.inputs["Fac"])
+    tree.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    bsdf.inputs["Roughness"].default_value = 0.15
+
+
+# Named node-tree styles the agent can apply - "style the tree for
+# me", one press deep. Each builds a REAL node tree on the material.
+STYLES = {
+    "chrome": ("mirror chrome metal", _style_chrome),
+    "brushed_metal": ("brushed metal with a fine grain", _style_brushed_metal),
+    "matte_ceramic": ("soft matte ceramic", _style_matte_ceramic),
+    "glowing": ("glowing, lit from inside", _style_glowing),
+    "glass": ("clear glass", _style_glass),
+    "wood": ("procedural wood grain (a real node tree)", _style_wood),
+    "marble": ("procedural marble veins (a real node tree)", _style_marble),
+}
+
+
+def _open_url(url):
+    return bpy.ops.wm.url_open(url=url)
+
+
+_SETTING_INT_KEYS = {
+    "brush.size", "bevel.segments", "subdivision.levels", "array.count",
+    "render.samples",
+}
+_SETTING_ENUMS = {
+    "brush.falloff": {"SMOOTH", "SPHERE", "SHARP", "LIN", "CONSTANT"},
+}
+
+
+def _coerce_setting(key, raw):
+    """Turn an agent's text value into the setting's real type, or
+    raise ValueError. A plan step is only kept when this succeeds."""
+    if key in _SETTING_ENUMS:
+        value = str(raw).upper()
+        if value not in _SETTING_ENUMS[key]:
+            raise ValueError(f"{value} is not one of the falloff shapes")
+        return value
+    if key in _SETTING_INT_KEYS:
+        return int(raw)
+    return float(raw)
+
+
+def _parse_plan(text):
+    """(summary, steps, dropped) from an agent reply. Steps are only
+    kept when everything they name is verifiably real: the button
+    exists, the tool exists, the setting is in the registry, the
+    style is in the library."""
+    summary = ""
+    steps = []
+    dropped = 0
+    valid_tools = None
+    for line in (text or "").splitlines():
+        m = re.match(r"\s*SUMMARY:\s*(.+)$", line)
+        if m:
+            summary = m.group(1).strip()
+            continue
+        m = re.match(r"\s*STEP:\s*(button|tool|style|find):\s*(\S.*?)\s*$",
+                     line)
+        if m:
+            kind, ident = m.group(1), m.group(2)
+            if kind == "button" and any(a["id"] == ident for a in ACTIONS):
+                steps.append({"kind": "button", "id": ident})
+            elif kind == "tool":
+                if valid_tools is None:
+                    valid_tools = {e["idname"] for e in build_index()}
+                if ident in valid_tools:
+                    steps.append({"kind": "tool", "id": ident})
+                else:
+                    dropped += 1
+            elif kind == "style" and ident in STYLES:
+                steps.append({"kind": "style", "id": ident})
+            elif kind == "find" and 0 < len(ident) <= 60:
+                steps.append({"kind": "find", "id": ident})
+            else:
+                dropped += 1
+            continue
+        m = re.match(r"\s*STEP:\s*set:\s*([a-z_.]+):\s*(\S+)\s*$", line)
+        if m:
+            key, raw = m.group(1), m.group(2)
+            if key in SETTINGS:
+                try:
+                    value = _coerce_setting(key, raw)
+                except (TypeError, ValueError):
+                    dropped += 1
+                else:
+                    steps.append({"kind": "set", "id": key, "value": value})
+            else:
+                dropped += 1
+    return summary, steps, dropped
+
+
+def _ask_ai(settings, system, user):
+    payload = {"model": settings["model"],
+               "messages": [{"role": "system", "content": system},
+                            {"role": "user", "content": user}]}
+    data = _expert_http(settings["url"], settings["key"], payload)
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def _step_label(step):
+    if step["kind"] == "button":
+        act = next((a for a in ACTIONS if a["id"] == step["id"]), None)
+        return act["plain"] if act else step["id"]
+    if step["kind"] == "set":
+        return f"Set {SETTINGS[step['id']]['label'].lower()} to {step['value']}"
+    if step["kind"] == "style":
+        return f"Style it: {STYLES[step['id']][0]}"
+    if step["kind"] == "find":
+        return f"Find add-ons for: {step['id']}"
+    for e in build_index():
+        if e["idname"] == step["id"]:
+            return f"{e['label']} (Blender tool)"
+    return step["id"]
+
+
 def _expert_http(url, key, payload):
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"), method="POST",
@@ -1675,6 +2051,34 @@ class BUDDY_OT_ask_expert(Operator):
         if not question:
             wm.buddy_answer = "Type a question first - anything, in your own words."
             return {"CANCELLED"}
+        if getattr(wm, "buddy_agent", False):
+            try:
+                text = _ask_ai(
+                    settings, _expert_agent_prompt(),
+                    f"{_scene_summary(context)}\n\nGoal: {question}")
+            except Exception:
+                text = ""
+            if text:
+                summary, steps, dropped = _parse_plan(text)
+                if steps:
+                    wm.buddy_plan = json.dumps(steps)
+                    wm.buddy_plan_summary = summary or question
+                    wm.buddy_plan_retried = ""
+                    wm.buddy_answer = ""
+                    wm.buddy_suggested = ""
+                    note = (f" The expert also suggested {dropped} "
+                            f"step{'s' if dropped > 1 else ''} that "
+                            "couldn't be verified, so those were left out."
+                            if dropped else "")
+                    wm.buddy_plan_report = (
+                        f"Plan ready: {len(steps)} steps.{note} "
+                        "Check them below, then press Run.")
+                    _EXPERT_TIP = f"Plan ready: {len(steps)} steps. Press Run these steps."
+                    self.report({"INFO"}, "The expert made a plan - it's "
+                                          "in the panel, ready to run.")
+                    return {"FINISHED"}
+            # No usable plan came back: fall through and answer as
+            # plain advice instead of failing the user.
         payload = {
             "model": settings["model"],
             "messages": [
@@ -1706,6 +2110,137 @@ class BUDDY_OT_ask_expert(Operator):
         first = wm.buddy_answer.split(". ")[0].strip()
         _EXPERT_TIP = (first[:110] + ("..." if len(first) > 110 else ""))
         self.report({"INFO"}, "The expert answered - it's in the panel.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_run_plan(Operator):
+    bl_idname = "buddy.run_plan"
+    bl_label = "Run These Steps"
+    bl_description = ("Run the expert's plan, step by step, in your "
+                      "Blender. It stops at the first step that can't "
+                      "run and tells you plainly what happened")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        global _EXPERT_TIP
+        wm = context.window_manager
+        try:
+            steps = json.loads(wm.buddy_plan or "[]")
+        except Exception:
+            steps = []
+        if not steps:
+            wm.buddy_plan_report = "There's no plan to run."
+            return {"CANCELLED"}
+        done = 0
+        notes = []
+        fail_at, fail_why = None, ""
+        for i, step in enumerate(steps):
+            try:
+                if step["kind"] == "button":
+                    result = bpy.ops.buddy.action(action_id=step["id"])
+                    ok = bool(result) and "FINISHED" in result
+                elif step["kind"] == "tool":
+                    result = _resolve_op(step["id"])()
+                    ok = bool(result) and "FINISHED" in result
+                elif step["kind"] == "set":
+                    spec = SETTINGS[step["id"]]
+                    spec["set"](context, step["value"])
+                    got = spec["get"](context)
+                    want = step["value"]
+                    try:
+                        ok = abs(float(got) - float(want)) < 1e-6
+                    except (TypeError, ValueError):
+                        ok = str(got) == str(want)
+                    if not ok:
+                        fail_why = (f"the setting reads back as {got}, "
+                                    f"not {want}")
+                elif step["kind"] == "style":
+                    STYLES[step["id"]][1](context.object)
+                    ok = True
+                elif step["kind"] == "find":
+                    import urllib.parse
+                    _open_url("https://extensions.blender.org/search/"
+                              "?q=" + urllib.parse.quote(step["id"]))
+                    notes.append(f"Opened the add-on search for "
+                                 f"'{step['id']}' in your browser - "
+                                 "anything you install there shows up "
+                                 "in Blender like Buddy did.")
+                    ok = True
+                else:
+                    ok = False
+            except Exception as exc:
+                raw = str(exc)
+                if "poll() failed" in raw or "context is incorrect" in raw:
+                    fail_why = ("that step needs a different mode or "
+                                "something different picked first")
+                else:
+                    fail_why = raw[:90]
+                ok = False
+            if not ok:
+                fail_at = i
+                if not fail_why:
+                    fail_why = ("it couldn't run in the scene as it "
+                                "is right now")
+                break
+            done += 1
+        total = len(steps)
+        if fail_at is None:
+            wm.buddy_plan = ""
+            wm.buddy_plan_report = (
+                f"Done - all {total} steps ran. "
+                f"{wm.buddy_plan_summary}"
+                + ((" " + " ".join(notes)) if notes else ""))
+            _EXPERT_TIP = f"Plan finished: {total} steps done."
+            self.report({"INFO"}, wm.buddy_plan_report)
+            return {"FINISHED"}
+        label = _step_label(steps[fail_at])
+        base = (f"Stopped at step {fail_at + 1} of {total} "
+                f"('{label}'): {fail_why}. "
+                f"{done} step{'s' if done != 1 else ''} before it "
+                "did run, and they're kept - nothing was undone.")
+        # One replan: send the failure back and let the expert route
+        # around it. The new plan is SHOWN, never auto-run.
+        settings = _expert_settings()
+        if settings["key"] and not wm.buddy_plan_retried:
+            try:
+                text = _ask_ai(
+                    settings, _expert_agent_prompt(),
+                    f"{_scene_summary(context)}\n\n"
+                    f"Goal: {wm.buddy_ask}\n"
+                    f"Your previous plan stopped at step "
+                    f"{fail_at + 1} ('{label}'): {fail_why}. "
+                    f"Give a revised plan that still reaches the "
+                    f"goal from the scene as it is now.")
+                summary, new_steps, _d = _parse_plan(text)
+                if new_steps:
+                    wm.buddy_plan = json.dumps(new_steps)
+                    wm.buddy_plan_summary = summary or wm.buddy_plan_summary
+                    wm.buddy_plan_retried = "1"
+                    wm.buddy_plan_report = (
+                        base + " The expert replanned around it - "
+                        "check the new plan below and press Run again.")
+                    _EXPERT_TIP = "The plan hit a snag; the expert replanned."
+                    self.report({"WARNING"}, wm.buddy_plan_report)
+                    return {"CANCELLED"}
+            except Exception:
+                pass
+        wm.buddy_plan_report = base
+        _EXPERT_TIP = f"Plan stopped at step {fail_at + 1} of {total}."
+        self.report({"WARNING"}, base)
+        return {"CANCELLED"}
+
+
+class BUDDY_OT_clear_plan(Operator):
+    bl_idname = "buddy.clear_plan"
+    bl_label = "Throw the Plan Away"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        wm = context.window_manager
+        wm.buddy_plan = ""
+        wm.buddy_plan_summary = ""
+        wm.buddy_plan_report = ""
+        wm.buddy_plan_retried = ""
         return {"FINISHED"}
 
 
@@ -1847,6 +2382,12 @@ class VIEW3D_PT_blender_buddy(Panel):
                            "Buddy has one.")
                 box.operator("buddy.open_prefs", text="Set up the expert")
             else:
+                box.prop(wm, "buddy_agent", text="Let the expert do it")
+                _wrap(box, "On: the expert makes a plan you can check "
+                           "and run. It can press tools, set exact "
+                           "values (like the exact sculpt brush you "
+                           "ask for), style node trees, and find "
+                           "add-ons. Off: it only gives advice.")
                 box.prop(wm, "buddy_ask", text="")
                 box.operator("buddy.ask_expert", text="Ask the expert")
                 if (wm.buddy_answer or "").strip():
@@ -1859,6 +2400,26 @@ class VIEW3D_PT_blender_buddy(Panel):
                             "buddy.action",
                             text=f"Do it: {act['plain']}")
                         op.action_id = act["id"]
+                if (wm.buddy_plan_report or "").strip():
+                    _wrap(box, wm.buddy_plan_report, width=48)
+                plan = []
+                try:
+                    plan = json.loads(wm.buddy_plan or "[]")
+                except Exception:
+                    plan = []
+                if plan:
+                    if (wm.buddy_plan_summary or "").strip():
+                        box.label(text="The plan", icon="SEQUENCE")
+                        _wrap(box, wm.buddy_plan_summary, width=48)
+                    for number, step in enumerate(plan, start=1):
+                        try:
+                            label = _step_label(step)
+                        except Exception:
+                            label = str(step.get("id", "Step"))
+                        box.label(text=f"{number}. {label}")
+                    box.operator("buddy.run_plan", text="Run these steps")
+                    box.operator("buddy.clear_plan",
+                                 text="Throw the plan away")
 
         box = layout.box()
         box.label(text="Where you are", icon="INFO")
@@ -1922,8 +2483,8 @@ class VIEW3D_PT_blender_buddy(Panel):
 
 CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_tour_start, BUDDY_OT_tour_hide, BUDDY_OT_tour_do,
-           BUDDY_OT_open_prefs, BUDDY_OT_ask_expert,
-           VIEW3D_PT_blender_buddy)
+           BUDDY_OT_open_prefs, BUDDY_OT_ask_expert, BUDDY_OT_run_plan,
+           BUDDY_OT_clear_plan, VIEW3D_PT_blender_buddy)
 
 
 def register():
@@ -1965,6 +2526,20 @@ def register():
         name="Expert answer", default="")
     bpy.types.WindowManager.buddy_suggested = StringProperty(
         name="Expert suggested button", default="")
+    bpy.types.WindowManager.buddy_agent = BoolProperty(
+        name="Let the expert do it",
+        description="On: the expert answers with a plan of steps you "
+                    "can run, so it does the work in Blender for you. "
+                    "Off: it only advises",
+        default=True)
+    bpy.types.WindowManager.buddy_plan = StringProperty(
+        name="Expert plan", default="")
+    bpy.types.WindowManager.buddy_plan_summary = StringProperty(
+        name="Expert plan summary", default="")
+    bpy.types.WindowManager.buddy_plan_report = StringProperty(
+        name="Expert plan report", default="")
+    bpy.types.WindowManager.buddy_plan_retried = StringProperty(
+        name="Expert plan replanned", default="")
     global _EXPERT_HANDLE
     try:
         _EXPERT_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
@@ -1983,7 +2558,9 @@ def unregister():
             pass
         _EXPERT_HANDLE = None
     for attr in ("buddy_query", "buddy_show_real", "buddy_ask",
-                 "buddy_answer", "buddy_suggested"):
+                 "buddy_answer", "buddy_suggested", "buddy_agent",
+                 "buddy_plan", "buddy_plan_summary", "buddy_plan_report",
+                 "buddy_plan_retried"):
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
     for attr in ("buddy_tour_started", "buddy_tour_epoch"):

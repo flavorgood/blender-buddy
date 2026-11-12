@@ -44,16 +44,25 @@ changes none of Blender's functions. It makes them visible:
   file are really there) — pressing alone earns nothing. It starts
   by clearing Blender's starter cube, exactly like the tutorial
   does, but only in an untouched starter scene.
-- **The Buddy Expert (bring your own AI key).** In the add-on's
+- **Your own Buddy agent (bring your own AI key).** In the add-on's
   preferences, paste your own AI service key (OpenAI-shaped chat
   services; the key never leaves your computer except to the service
-  you chose). An "Ask the expert" box appears in the panel: ask in
-  your own words and it answers in plain words *for your scene* — it
-  is told what's in your scene, what you've picked, and where you
-  are in the donut tour. When a Buddy button does the job, the
-  answer comes with a "Do it" button for it. Its latest tip also
-  floats as a small card over the 3D window (tour steps update it
-  too), and you can turn the floating card off in preferences.
+  you chose). With "Let the expert do it" on, asking in plain words
+  produces a short plan you can read before pressing **Run these
+  steps**. A plan can press Buddy buttons, run Blender's own tools,
+  set exact values — for example the size, strength and falloff of
+  the sculpt brush you describe, a bevel's width, or the picture's
+  sample count — apply real node-tree styles such as procedural
+  wood or marble, and open an add-on search when another plugin is
+  the better tool. Every named button, tool, setting and style is
+  checked against what really exists before a plan is shown;
+  invented steps are dropped. If a step cannot run, the agent stops,
+  says what happened in plain words, and may offer one revised plan
+  — it never runs that revision until you press Run again. Turn
+  agent mode off and it goes back to advice only, with a "Do it"
+  button when one Buddy button fits. Its latest tip also floats as
+  a small card over the 3D window (tour steps update it too), and
+  you can turn the floating card off in preferences.
 - **One press for multi-step jobs.** "Cut one shape out of another"
   does the whole Boolean setup and applies it. "Give it a colour"
   builds and assigns the material.
@@ -120,13 +129,19 @@ operators and proves each one from the scene state (it asserts the
 icing carries a Solidify modifier and a dripped rim, and the dough
 carries its fry-line material); the donut in `demo/` was made by
 the tour itself and rendered through the tour's own camera. The
-expert suite proves the AI plumbing with a stubbed service — no
+expert suite proves the advice plumbing with a stubbed service — no
 key, no call; answers and suggested buttons land in the panel; an
 invented button name is dropped; a dead service becomes a plain
-explanation. Not yet verified: a live conversation with a real AI
-service (needs your own key), and the floating card's on-screen
-look (headless machines can't draw the viewport overlay; its
-registration and removal are tested). The demo scene in `demo/` (box
+explanation. The agent suite uses the same stub to prove the full
+loop without a real service: a goal becomes a checked plan; buttons
+and a raw Blender tool run; brush, bevel and render settings land
+and read back; a procedural-wood node tree is built; an add-on
+search opens; malformed and invented steps are dropped; a failed
+step produces one revised plan that waits for a second Run press.
+Not yet verified: a live conversation with a real AI service (needs
+your own key), and the floating card's on-screen look (headless
+machines can't draw the viewport overlay; its registration and
+removal are tested). The demo scene in `demo/` (box
 with rounded edges + smooth red ball on a ground sheet) was built
 using only the add-on's buttons.
 
