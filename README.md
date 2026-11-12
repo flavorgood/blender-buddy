@@ -49,7 +49,9 @@ changes none of Blender's functions. It makes them visible:
   offer: subscription logins only work inside those companies' own
   apps. So the preferences offer the three honest routes instead.
   **AI key:** paste your own key for an OpenAI-shaped chat service
-  (it never leaves your computer except to that service).
+  (it never leaves your computer except to that service), or pick
+  **Claude key** and paste an Anthropic key — Claude's service
+  speaks a different shape, and Buddy translates.
   **ChatGPT login:** if OpenAI's own Codex program is installed and
   signed in with your ChatGPT account, Buddy asks *through it* —
   your login never touches Buddy, and the asking runs read-only.
@@ -151,8 +153,14 @@ step produces one revised plan that waits for a second Run press.
 The login suite proves the routing with the program and network
 stubbed: readiness differs per route, a missing Codex program
 becomes a plain setup message, a present one carries a full agent
-plan without touching the key/network path, and a local AI answers
-with an empty key. Not yet verified: a live conversation with a
+plan without touching the key/network path, a local AI answers
+with an empty key, and the Claude-key route sends Anthropic's own
+request shape (key header, system as its own field) and reads the
+text blocks back into a runnable plan. An official Extensions
+package (`extension_src/` + Blender's own build tool) validates
+and installs through Blender's extension system — see
+`LISTING.md` for the submission draft and the one license ruling
+it waits on. Not yet verified: a live conversation with a
 real AI service, a real signed-in Codex program, or a real local
 model (each needs the real thing on a real machine), and the
 floating card's on-screen look (headless machines can't draw the

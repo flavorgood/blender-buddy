@@ -1,5 +1,5 @@
 """
-Blender Buddy - Blender in plain words (prototype 0.7)
+Blender Buddy - Blender in plain words (prototype 0.8)
 
 Design rule (the whole point of this add-on):
     A day-1 beginner must be able to use every button without already
@@ -42,7 +42,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (0, 7, 0),
+    "version": (0, 8, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -1553,6 +1553,9 @@ _EXPERT_DEFAULT_URL = "https://api.openai.com/v1/chat/completions"
 _EXPERT_DEFAULT_MODEL = "gpt-4o-mini"
 _EXPERT_LOCAL_URL = "http://localhost:11434/v1/chat/completions"
 _EXPERT_LOCAL_MODEL = "llama3.1"
+_CLAUDE_URL = "https://api.anthropic.com/v1/messages"
+_CLAUDE_MODEL = "claude-sonnet-4-5"
+_CLAUDE_VERSION = "2023-06-01"
 _EXPERT_TIP = ""
 _EXPERT_HANDLE = None
 
@@ -1563,9 +1566,13 @@ def _expert_service_update(self, context):
     if self.expert_service == "LOCAL":
         self.expert_url = _EXPERT_LOCAL_URL
         self.expert_model = _EXPERT_LOCAL_MODEL
+    elif self.expert_service == "CLAUDE":
+        self.expert_url = _CLAUDE_URL
+        self.expert_model = _CLAUDE_MODEL
     elif self.expert_service == "KEY":
-        if (self.expert_url or "").startswith(("http://localhost",
-                                                "http://127.0.0.1")):
+        url = self.expert_url or ""
+        if url.startswith(("http://localhost", "http://127.0.0.1")) \
+                or "anthropic.com" in url:
             self.expert_url = _EXPERT_DEFAULT_URL
             self.expert_model = _EXPERT_DEFAULT_MODEL
 
@@ -1575,7 +1582,8 @@ class BUDDY_Preferences(AddonPreferences):
 
     expert_service: EnumProperty(
         name="How the expert reaches your AI",
-        description="Key: an AI service key you paste below. ChatGPT "
+        description="Key: an AI service key you paste below. Claude "
+                    "key: an Anthropic key you paste below. ChatGPT "
                     "login: through OpenAI's own Codex program on "
                     "this computer, signed in with your ChatGPT "
                     "account - Buddy never sees your login. Local AI: "
@@ -1584,6 +1592,9 @@ class BUDDY_Preferences(AddonPreferences):
         items=[
             ("KEY", "AI key (OpenAI-style service)",
              "Paste a key from an AI service below"),
+            ("CLAUDE", "Claude key (Anthropic)",
+             "Paste an Anthropic key below - Claude's service "
+             "speaks a different shape, and Buddy translates"),
             ("CODEX", "ChatGPT login (through the Codex program)",
              "Uses OpenAI's Codex program on this computer, signed "
              "in with your ChatGPT account"),
@@ -1630,8 +1641,11 @@ class BUDDY_Preferences(AddonPreferences):
                       "touches Buddy. Claude logins can't be used "
                       "this way at all (Anthropic's rule, enforced "
                       "since 2026 - accounts were blocked for it), so "
-                      "Buddy doesn't offer it rather than put your "
-                      "Claude account at risk. Local AI needs "
+                      "Buddy doesn't offer the login rather than put "
+                      "your Claude account at risk. A Claude key is "
+                      "different - that's Anthropic's own route for "
+                      "other apps - so 'Claude key' above works. "
+                      "Local AI needs "
                       "nothing: install a free local AI (for example "
                       "Ollama), pick Local, and everything stays on "
                       "your computer.")
@@ -1684,6 +1698,12 @@ def _expert_setup_message(settings):
         return ("The expert is set to a local AI, but it didn't "
                 "answer. Make sure your local AI (for example "
                 "Ollama) is running, then ask again.")
+    if service == "CLAUDE":
+        return ("The expert is set to Claude, but no Claude key is "
+                "pasted yet. Press 'Set up the expert' and paste "
+                "your Anthropic key - it stays on your computer. "
+                "(A Claude login can't be used in other apps - the "
+                "key is Anthropic's way for this.)")
     return ("The expert isn't set up yet. Press 'Set up the expert' "
             "and either paste your own AI key, choose ChatGPT login "
             "(through OpenAI's Codex program), or choose a local AI "
@@ -2099,9 +2119,37 @@ def _parse_plan(text):
     return summary, steps, dropped
 
 
+def _expert_http_claude(url, key, payload):
+    """Anthropic's service speaks a different shape than the
+    OpenAI-style one: the key rides in its own header, with the
+    service's version header alongside."""
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Content-Type": "application/json",
+                 "x-api-key": key,
+                 "anthropic-version": _CLAUDE_VERSION})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _ask_via_claude(settings, system, user):
+    payload = {"model": settings["model"], "max_tokens": 1024,
+               "system": system,
+               "messages": [{"role": "user", "content": user}]}
+    data = _expert_http_claude(settings["url"], settings["key"], payload)
+    parts = [b.get("text", "") for b in data.get("content", [])
+             if b.get("type") == "text"]
+    text = "\n".join(p for p in parts if p).strip()
+    if not text:
+        raise RuntimeError("Claude answered with nothing readable")
+    return text
+
+
 def _ask_ai(settings, system, user):
     if settings.get("service") == "CODEX":
         return _ask_via_codex(system, user)
+    if settings.get("service") == "CLAUDE":
+        return _ask_via_claude(settings, system, user)
     payload = {"model": settings["model"],
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": user}]}

@@ -100,6 +100,52 @@ assert wm.buddy_suggested == "round_edge"
 wm.buddy_agent = True
 print("LOGIN_PASS local AI answers with no key at all")
 
+# --- Claude key: Anthropic's shape, translated --------------------------------
+assert bb._expert_ready({"service": "CLAUDE", "key": "", "url": bb._CLAUDE_URL}) is False
+assert bb._expert_ready({"service": "CLAUDE", "key": "sk-ant-x",
+                         "url": bb._CLAUDE_URL}) is True
+bb._expert_settings = lambda: {"key": "", "url": bb._CLAUDE_URL,
+                               "model": bb._CLAUDE_MODEL, "float": True,
+                               "service": "CLAUDE"}
+wm.buddy_agent = True
+wm.buddy_ask = "make a ball"
+bpy.ops.buddy.ask_expert()
+assert "no Claude key is pasted yet" in wm.buddy_answer, wm.buddy_answer
+print("LOGIN_PASS Claude with no key -> its own plain setup message")
+
+claude_seen = {}
+
+
+def fake_claude_http(url, key, payload):
+    claude_seen.update(url=url, key=key, payload=payload)
+    return {"content": [
+        {"type": "thinking", "thinking": "ignored"},
+        {"type": "text", "text": "SUMMARY: Make a ball, Claude style.\n"
+                                  "STEP: button:add_ball"}]}
+
+
+bb._expert_http_claude = fake_claude_http
+bb._expert_http = no_http
+bb._expert_settings = lambda: {"key": "sk-ant-x", "url": bb._CLAUDE_URL,
+                               "model": bb._CLAUDE_MODEL, "float": True,
+                               "service": "CLAUDE"}
+before = len(bpy.data.objects)
+bpy.ops.buddy.ask_expert()
+assert claude_seen["url"] == bb._CLAUDE_URL
+assert claude_seen["key"] == "sk-ant-x"
+payload = claude_seen["payload"]
+assert payload["model"] == bb._CLAUDE_MODEL
+assert payload["max_tokens"] == 1024
+assert "Buddy Expert" in payload["system"], "system goes in its own field"
+assert payload["messages"][0]["role"] == "user"
+assert "make a ball" in payload["messages"][0]["content"]
+plan = json.loads(wm.buddy_plan or "[]")
+assert plan == [{"kind": "button", "id": "add_ball"}], plan
+bpy.ops.buddy.run_plan()
+assert len(bpy.data.objects) == before + 1
+assert wm.buddy_plan_report.startswith("Done - all 1 steps ran")
+print("LOGIN_PASS Claude key: Anthropic shape sent, text read back, plan ran")
+
 bb.shutil.which = real_which
 bb.unregister()
 print("ALL LOGIN TESTS PASSED")

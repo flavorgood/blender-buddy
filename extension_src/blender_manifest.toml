@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+id = "blender_buddy"
+version = "0.8.0"
+name = "Blender Buddy - Blender in Plain Words"
+tagline = "Blender in plain words: every tool visible, named by its job"
+maintainer = "flavorgood"
+type = "add-on"
+license = ["SPDX:GPL-3.0-or-later"]
+blender_version_min = "4.2.0"
+website = "https://github.com/flavorgood/blender-buddy"
+tags = ["3D View", "User Interface", "Mesh", "Modeling", "Material", "Sculpt"]
+
+[permissions]
+network = "Ask the Buddy Expert: sends your question to the AI you chose"
