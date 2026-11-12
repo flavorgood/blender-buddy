@@ -44,10 +44,20 @@ changes none of Blender's functions. It makes them visible:
   file are really there) — pressing alone earns nothing. It starts
   by clearing Blender's starter cube, exactly like the tutorial
   does, but only in an untouched starter scene.
-- **Your own Buddy agent (bring your own AI key).** In the add-on's
-  preferences, paste your own AI service key (OpenAI-shaped chat
-  services; the key never leaves your computer except to the service
-  you chose). With "Let the expert do it" on, asking in plain words
+- **Your own Buddy agent — key, ChatGPT login, or local AI.** There
+  is no "log in with ChatGPT/Claude" button an add-on is allowed to
+  offer: subscription logins only work inside those companies' own
+  apps. So the preferences offer the three honest routes instead.
+  **AI key:** paste your own key for an OpenAI-shaped chat service
+  (it never leaves your computer except to that service).
+  **ChatGPT login:** if OpenAI's own Codex program is installed and
+  signed in with your ChatGPT account, Buddy asks *through it* —
+  your login never touches Buddy, and the asking runs read-only.
+  (Claude logins can't be used this way: Anthropic's rule, enforced
+  since 2026 with accounts blocked for it — Buddy won't put your
+  Claude account at risk.) **Local AI:** run a free AI on your own
+  computer (for example Ollama) — no key, no login, nothing leaves
+  the machine. With "Let the expert do it" on, asking in plain words
   produces a short plan you can read before pressing **Run these
   steps**. A plan can press Buddy buttons, run Blender's own tools,
   set exact values — for example the size, strength and falloff of
@@ -138,10 +148,15 @@ and a raw Blender tool run; brush, bevel and render settings land
 and read back; a procedural-wood node tree is built; an add-on
 search opens; malformed and invented steps are dropped; a failed
 step produces one revised plan that waits for a second Run press.
-Not yet verified: a live conversation with a real AI service (needs
-your own key), and the floating card's on-screen look (headless
-machines can't draw the viewport overlay; its registration and
-removal are tested). The demo scene in `demo/` (box
+The login suite proves the routing with the program and network
+stubbed: readiness differs per route, a missing Codex program
+becomes a plain setup message, a present one carries a full agent
+plan without touching the key/network path, and a local AI answers
+with an empty key. Not yet verified: a live conversation with a
+real AI service, a real signed-in Codex program, or a real local
+model (each needs the real thing on a real machine), and the
+floating card's on-screen look (headless machines can't draw the
+viewport overlay; its registration and removal are tested). The demo scene in `demo/` (box
 with rounded edges + smooth red ball on a ground sheet) was built
 using only the add-on's buttons.
 

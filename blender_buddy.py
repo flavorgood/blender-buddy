@@ -1,5 +1,5 @@
 """
-Blender Buddy - Blender in plain words (prototype 0.6)
+Blender Buddy - Blender in plain words (prototype 0.7)
 
 Design rule (the whole point of this add-on):
     A day-1 beginner must be able to use every button without already
@@ -26,19 +26,23 @@ import math
 import os
 import random
 import re
+import shutil
+import subprocess
+import tempfile
 import textwrap
 import urllib.error
 import urllib.request
 from difflib import SequenceMatcher
 
 import bpy
-from bpy.props import BoolProperty, IntProperty, StringProperty
+from bpy.props import (BoolProperty, EnumProperty, IntProperty,
+                       StringProperty)
 from bpy.types import AddonPreferences, Operator, Panel
 
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (0, 6, 0),
+    "version": (0, 7, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -1547,13 +1551,46 @@ class BUDDY_OT_tour_do(Operator):
 
 _EXPERT_DEFAULT_URL = "https://api.openai.com/v1/chat/completions"
 _EXPERT_DEFAULT_MODEL = "gpt-4o-mini"
+_EXPERT_LOCAL_URL = "http://localhost:11434/v1/chat/completions"
+_EXPERT_LOCAL_MODEL = "llama3.1"
 _EXPERT_TIP = ""
 _EXPERT_HANDLE = None
+
+
+def _expert_service_update(self, context):
+    """Picking a way to reach the expert pre-fills the address and
+    model fields for that way; the user can still edit them after."""
+    if self.expert_service == "LOCAL":
+        self.expert_url = _EXPERT_LOCAL_URL
+        self.expert_model = _EXPERT_LOCAL_MODEL
+    elif self.expert_service == "KEY":
+        if (self.expert_url or "").startswith(("http://localhost",
+                                                "http://127.0.0.1")):
+            self.expert_url = _EXPERT_DEFAULT_URL
+            self.expert_model = _EXPERT_DEFAULT_MODEL
 
 
 class BUDDY_Preferences(AddonPreferences):
     bl_idname = __name__
 
+    expert_service: EnumProperty(
+        name="How the expert reaches your AI",
+        description="Key: an AI service key you paste below. ChatGPT "
+                    "login: through OpenAI's own Codex program on "
+                    "this computer, signed in with your ChatGPT "
+                    "account - Buddy never sees your login. Local AI: "
+                    "a free AI running on this computer (like Ollama) "
+                    "- no key, no login, nothing leaves the machine",
+        items=[
+            ("KEY", "AI key (OpenAI-style service)",
+             "Paste a key from an AI service below"),
+            ("CODEX", "ChatGPT login (through the Codex program)",
+             "Uses OpenAI's Codex program on this computer, signed "
+             "in with your ChatGPT account"),
+            ("LOCAL", "Local AI on this computer (no key, no login)",
+             "Talks to a free local AI such as Ollama"),
+        ],
+        default="KEY", update=_expert_service_update)
     expert_key: StringProperty(
         name="AI key",
         description="Your own AI service key (for example an OpenAI key). "
@@ -1577,26 +1614,102 @@ class BUDDY_Preferences(AddonPreferences):
 
     def draw(self, context):
         layout = self.layout
+        layout.prop(self, "expert_service")
         layout.prop(self, "expert_key")
         layout.prop(self, "expert_url")
         layout.prop(self, "expert_model")
         layout.prop(self, "expert_float")
-        _wrap(layout, "Your key stays on your computer, in Blender's "
-                      "own preferences. When you ask a question, Buddy "
-                      "sends the question plus a short description of "
-                      "your scene (what's in it, what you have picked, "
-                      "which mode you're in) to the address above. "
-                      "Nothing else is sent.")
+        _wrap(layout, "Why no plain 'log in with ChatGPT or Muse' "
+                      "button? Those companies don't offer one to "
+                      "other apps: a ChatGPT or Claude subscription "
+                      "login only works inside their own apps. The "
+                      "honest ways around it are above. ChatGPT "
+                      "login: OpenAI's own Codex program on your "
+                      "computer IS signed in with your account, so "
+                      "Buddy asks through it - your login never "
+                      "touches Buddy. Claude logins can't be used "
+                      "this way at all (Anthropic's rule, enforced "
+                      "since 2026 - accounts were blocked for it), so "
+                      "Buddy doesn't offer it rather than put your "
+                      "Claude account at risk. Local AI needs "
+                      "nothing: install a free local AI (for example "
+                      "Ollama), pick Local, and everything stays on "
+                      "your computer.")
+        _wrap(layout, "Whatever way you pick: when you ask, Buddy "
+                      "sends your question plus a short description "
+                      "of your scene (what's in it, what you have "
+                      "picked, which mode you're in). Nothing else "
+                      "is sent. A key stays on your computer, in "
+                      "Blender's own preferences.")
 
 
 def _expert_settings():
     try:
         prefs = bpy.context.preferences.addons[__name__].preferences
         return {"key": prefs.expert_key, "url": prefs.expert_url,
-                "model": prefs.expert_model, "float": prefs.expert_float}
+                "model": prefs.expert_model, "float": prefs.expert_float,
+                "service": prefs.expert_service}
     except Exception:
         return {"key": "", "url": _EXPERT_DEFAULT_URL,
-                "model": _EXPERT_DEFAULT_MODEL, "float": True}
+                "model": _EXPERT_DEFAULT_MODEL, "float": True,
+                "service": "KEY"}
+
+
+def _is_local_url(url):
+    return (url or "").startswith(("http://localhost", "http://127.0.0.1"))
+
+
+def _expert_ready(settings):
+    """Can the expert actually be asked right now? A key for key
+    services, the Codex program for ChatGPT login, nothing at all
+    for a local AI."""
+    service = settings.get("service", "KEY")
+    if service == "CODEX":
+        return shutil.which("codex") is not None
+    if service == "LOCAL":
+        return True
+    return bool(settings.get("key")) or _is_local_url(settings.get("url"))
+
+
+def _expert_setup_message(settings):
+    service = settings.get("service", "KEY")
+    if service == "CODEX":
+        return ("The expert is set to use your ChatGPT login, but "
+                "OpenAI's Codex program isn't on this computer yet. "
+                "Install Codex (it's OpenAI's own program), sign in "
+                "with your ChatGPT account once, then ask again - "
+                "Buddy asks through it, so your login never touches "
+                "Buddy.")
+    if service == "LOCAL":
+        return ("The expert is set to a local AI, but it didn't "
+                "answer. Make sure your local AI (for example "
+                "Ollama) is running, then ask again.")
+    return ("The expert isn't set up yet. Press 'Set up the expert' "
+            "and either paste your own AI key, choose ChatGPT login "
+            "(through OpenAI's Codex program), or choose a local AI "
+            "- the key stays on your computer.")
+
+
+def _run_cli(argv, timeout=120):
+    """Run one of the AI companies' own programs and return what it
+    prints. This is the ONLY way Buddy talks to a subscription
+    login: through the company's own program, never through a
+    copied login."""
+    proc = subprocess.run(argv, capture_output=True, text=True,
+                          timeout=timeout, cwd=tempfile.gettempdir())
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()[-200:]
+        raise RuntimeError(tail or "the AI program didn't answer")
+    return proc.stdout
+
+
+def _ask_via_codex(system, user):
+    out = _run_cli(["codex", "exec", "-s", "read-only",
+                    "--skip-git-repo-check", f"{system}\n\n{user}"])
+    text = (out or "").strip()
+    if not text:
+        raise RuntimeError("the Codex program answered with nothing")
+    return text
 
 
 def _scene_summary(context):
@@ -1987,6 +2100,8 @@ def _parse_plan(text):
 
 
 def _ask_ai(settings, system, user):
+    if settings.get("service") == "CODEX":
+        return _ask_via_codex(system, user)
     payload = {"model": settings["model"],
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": user}]}
@@ -2011,10 +2126,12 @@ def _step_label(step):
 
 
 def _expert_http(url, key, payload):
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"), method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {key}"})
+        headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -2042,10 +2159,8 @@ class BUDDY_OT_ask_expert(Operator):
         wm = context.window_manager
         settings = _expert_settings()
         question = (wm.buddy_ask or "").strip()
-        if not settings["key"]:
-            wm.buddy_answer = ("The expert isn't set up yet. Press 'Set "
-                               "up the expert' and paste your own AI "
-                               "key - it stays on your computer.")
+        if not _expert_ready(settings):
+            wm.buddy_answer = _expert_setup_message(settings)
             wm.buddy_suggested = ""
             return {"CANCELLED"}
         if not question:
@@ -2079,21 +2194,15 @@ class BUDDY_OT_ask_expert(Operator):
                     return {"FINISHED"}
             # No usable plan came back: fall through and answer as
             # plain advice instead of failing the user.
-        payload = {
-            "model": settings["model"],
-            "messages": [
-                {"role": "system", "content": _expert_system_prompt()},
-                {"role": "user", "content":
-                    f"{_scene_summary(context)}\n\nQuestion: {question}"},
-            ],
-        }
         try:
-            data = _expert_http(settings["url"], settings["key"], payload)
-            text = data["choices"][0]["message"]["content"].strip()
+            text = _ask_ai(
+                settings, _expert_system_prompt(),
+                f"{_scene_summary(context)}\n\nQuestion: {question}")
         except Exception:
-            wm.buddy_answer = ("The expert didn't answer. Check the key "
-                               "in the add-on's preferences, and that "
-                               "you're online - then ask again.")
+            wm.buddy_answer = ("The expert didn't answer. Check the "
+                               "setup in the add-on's preferences, "
+                               "and that you're online - then ask "
+                               "again.")
             wm.buddy_suggested = ""
             return {"CANCELLED"}
         suggested = ""
@@ -2201,7 +2310,7 @@ class BUDDY_OT_run_plan(Operator):
         # One replan: send the failure back and let the expert route
         # around it. The new plan is SHOWN, never auto-run.
         settings = _expert_settings()
-        if settings["key"] and not wm.buddy_plan_retried:
+        if _expert_ready(settings) and not wm.buddy_plan_retried:
             try:
                 text = _ask_ai(
                     settings, _expert_agent_prompt(),
@@ -2373,13 +2482,15 @@ class VIEW3D_PT_blender_buddy(Panel):
             box = layout.box()
             box.label(text="Buddy Expert", icon="USER")
             settings = _expert_settings()
-            if not settings["key"]:
-                _wrap(box, "Plug in your own AI key and a small expert "
-                           "lives here - and floats over the 3D window. "
-                           "Ask in your own words ('how do I make this "
-                           "look like chrome?') and it answers for YOUR "
-                           "scene, pointing at the exact button when "
-                           "Buddy has one.")
+            if not _expert_ready(settings):
+                _wrap(box, "Set up your expert and a small expert "
+                           "lives here - and floats over the 3D "
+                           "window. Three ways: your own AI key, your "
+                           "ChatGPT login (through OpenAI's Codex "
+                           "program), or a free local AI with no key "
+                           "and no login at all. Ask in your own "
+                           "words ('how do I make this look like "
+                           "chrome?') and it answers for YOUR scene.")
                 box.operator("buddy.open_prefs", text="Set up the expert")
             else:
                 box.prop(wm, "buddy_agent", text="Let the expert do it")
