@@ -33,12 +33,27 @@ changes none of Blender's functions. It makes them visible:
   finds nothing.
 - **Day 1: the Donut Tour.** At the top of the panel, a guided first
   project — the donut, the famous one from the Blender Guru's
-  tutorial, rebuilt as 8 plain-words steps with one press each:
-  dough, icing, pink, golden, sprinkles, plate, picture, save. A step
-  only ticks off when your scene *proves* it's done (the object, the
-  colour, the picture file are really there) — pressing alone earns
-  nothing. It starts by clearing Blender's starter cube, exactly
-  like the tutorial does, but only in an untouched starter scene.
+  tutorial, rebuilt as 8 plain-words steps with one press each, and
+  built the way he builds it: a plump dough ring with its pale fry
+  line; the icing as the *top of the dough itself*, thickened, its
+  edge pulled down into uneven drips; glossy pink; ~130 long thin
+  sprinkles lying flat (plus a few on the plate); the whole scene
+  staged like his final shot — white plate, dark table, mug of
+  coffee, warm side light in a dark room. A step only ticks off when
+  your scene *proves* it's done (the object, the colour, the picture
+  file are really there) — pressing alone earns nothing. It starts
+  by clearing Blender's starter cube, exactly like the tutorial
+  does, but only in an untouched starter scene.
+- **The Buddy Expert (bring your own AI key).** In the add-on's
+  preferences, paste your own AI service key (OpenAI-shaped chat
+  services; the key never leaves your computer except to the service
+  you chose). An "Ask the expert" box appears in the panel: ask in
+  your own words and it answers in plain words *for your scene* — it
+  is told what's in your scene, what you've picked, and where you
+  are in the donut tour. When a Buddy button does the job, the
+  answer comes with a "Do it" button for it. Its latest tip also
+  floats as a small card over the 3D window (tour steps update it
+  too), and you can turn the floating card off in preferences.
 - **One press for multi-step jobs.** "Cut one shape out of another"
   does the whole Boolean setup and applies it. "Give it a colour"
   builds and assigns the material.
@@ -101,8 +116,17 @@ sculpt mode, keyframes, GLB/STL/OBJ exports, render and save all
 produce real results; both install paths (zip package and the single
 `.py` file) install and enable through Blender's own Install button.
 The Donut Tour suite walks all 8 steps through the real panel
-operators and proves each one from the scene state; the donut in
-`demo/` was made by the tour itself. The demo scene in `demo/` (box
+operators and proves each one from the scene state (it asserts the
+icing carries a Solidify modifier and a dripped rim, and the dough
+carries its fry-line material); the donut in `demo/` was made by
+the tour itself and rendered through the tour's own camera. The
+expert suite proves the AI plumbing with a stubbed service — no
+key, no call; answers and suggested buttons land in the panel; an
+invented button name is dropped; a dead service becomes a plain
+explanation. Not yet verified: a live conversation with a real AI
+service (needs your own key), and the floating card's on-screen
+look (headless machines can't draw the viewport overlay; its
+registration and removal are tested). The demo scene in `demo/` (box
 with rounded edges + smooth red ball on a ground sheet) was built
 using only the add-on's buttons.
 

@@ -56,21 +56,26 @@ print("TOUR_PASS all 8 steps proven by the scene")
 
 scene = ctx.scene
 names = {o.name for o in scene.objects}
-assert {"Dough", "Icing", "Sprinkles", "Plate"} <= names, names
+assert {"Dough", "Icing", "Sprinkles", "Plate", "Table", "Mug"} <= names, names
 assert "Cube" not in names, "the starter cube should be gone - the donut is the scene"
 print("TOUR_PASS starter cube cleared, like the tutorial does")
 sprinkles = scene.objects["Sprinkles"]
-assert len(sprinkles.data.vertices) > 1000, len(sprinkles.data.vertices)
+assert len(sprinkles.data.vertices) > 4000, len(sprinkles.data.vertices)
 icing = scene.objects["Icing"]
-assert any(m.type == "SUBSURF" for m in icing.modifiers)
-print("TOUR_PASS donut objects, sprinkles and smooth icing are real")
+assert any(m.type == "SOLIDIFY" for m in icing.modifiers), \
+    "icing must be the tutorial's method: top of the dough, thickened"
+drip = min(v.co.z for v in icing.data.vertices)
+assert -0.30 < drip < -0.03, f"icing rim must drip down the side, min z {drip}"
+dough = scene.objects["Dough"]
+assert len(dough.data.materials) == 2, "dough needs its pale fry line"
+assert any(p.material_index == 1 for p in dough.data.polygons)
+print("TOUR_PASS solidify icing with drips, fry-line dough, scene set")
 
-# Frame the donut nicely and render the keepsake picture.
-cam = next(o for o in scene.objects if o.type == "CAMERA")
-cam.location = (2.6, -3.2, 2.0)
-cam.rotation_euler = (math.radians(63), 0, math.radians(39))
+# Render the keepsake picture through the TOUR's own camera and
+# lighting - the framing the beginner actually gets.
+assert scene.camera is not None
 scene.render.engine = "CYCLES"
-scene.cycles.samples = 32
+scene.cycles.samples = 48
 scene.render.resolution_x = 640
 scene.render.resolution_y = 480
 out = os.path.join(ROOT, "demo", "buddy_donut.png")

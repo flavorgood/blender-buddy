@@ -1,5 +1,5 @@
 """
-Blender Buddy - Blender in plain words (prototype 0.4)
+Blender Buddy - Blender in plain words (prototype 0.5)
 
 Design rule (the whole point of this add-on):
     A day-1 beginner must be able to use every button without already
@@ -21,21 +21,24 @@ Nothing is removed or replaced: every button simply runs Blender's
 own tool underneath, and Blender's normal interface stays untouched.
 """
 
+import json
 import math
 import os
 import random
 import re
 import textwrap
+import urllib.error
+import urllib.request
 from difflib import SequenceMatcher
 
 import bpy
 from bpy.props import BoolProperty, IntProperty, StringProperty
-from bpy.types import Operator, Panel
+from bpy.types import AddonPreferences, Operator, Panel
 
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (0, 4, 0),
+    "version": (0, 5, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -985,11 +988,25 @@ def _first_colour(obj):
     return mat.diffuse_color if mat else None
 
 
-def _paint(obj, mat_name, rgba):
+def _principled(mat, rgba, roughness, subsurface=0.0):
+    """Set a material up the way the tutorial does: a real Principled
+    material with a base colour, a roughness, and a touch of
+    subsurface glow for food."""
+    mat.diffuse_color = rgba
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf is not None:
+        bsdf.inputs["Base Color"].default_value = rgba
+        bsdf.inputs["Roughness"].default_value = roughness
+        if "Subsurface Weight" in bsdf.inputs:
+            bsdf.inputs["Subsurface Weight"].default_value = subsurface
+
+
+def _paint(obj, mat_name, rgba, roughness=0.55, subsurface=0.0):
     mat = bpy.data.materials.get(mat_name)
     if mat is None:
         mat = bpy.data.materials.new(mat_name)
-    mat.diffuse_color = rgba
+    _principled(mat, rgba, roughness, subsurface)
     obj.data.materials.clear()
     obj.data.materials.append(mat)
 
@@ -1003,27 +1020,67 @@ def _tour_step_dough(context):
     if {o.name for o in objs} <= {"Cube", "Camera", "Light"}:
         bpy.ops.object.select_all(action="SELECT")
         bpy.ops.object.delete()
-    bpy.ops.buddy.action(action_id="add_ring")
+    # His dough is PLUMP: a fat tube, squashed a little, smoothed and
+    # subdivided - not the thin default ring.
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=1.0, minor_radius=0.42,
+        major_segments=64, minor_segments=24)
     obj = context.object
-    if obj is not None:
-        obj.name = "Dough"
+    obj.name = "Dough"
+    obj.scale = (1.0, 1.0, 0.82)
+    for poly in obj.data.polygons:
+        poly.use_smooth = True
+    mod = obj.modifiers.new("Smoother", "SUBSURF")
+    mod.levels = 2
 
 
 def _tour_step_icing(context):
+    import bmesh
     dough = _dough(context)
     if dough is None:
         raise RuntimeError("The dough ring is not there yet - do step 1 first.")
+    # The tutorial's real method: the icing is the TOP of the dough
+    # itself, separated off and given thickness - never a second ring.
     icing = dough.copy()
     icing.data = dough.data.copy()
     context.scene.collection.objects.link(icing)
     icing.name = "Icing"
     icing.data.name = "Icing"
-    icing.scale = (0.99, 0.99, 0.8)
-    icing.location.z = dough.location.z + 0.06
+    bm = bmesh.new()
+    bm.from_mesh(icing.data)
+    bm.faces.ensure_lookup_table()
+    under = [f for f in bm.faces if f.calc_center_median().z < -0.02]
+    bmesh.ops.delete(bm, geom=under, context="FACES")
+    # Drips: the rim verts are pulled down the dough's side by an
+    # uneven amount - long drips in places, short in others - the
+    # wavy edge that makes it read as icing and not a shell.
+    rng = random.Random(4)
+    p1, p2, p3 = (rng.uniform(0, 6.28), rng.uniform(0, 6.28),
+                  rng.uniform(0, 6.28))
+    bm.verts.ensure_lookup_table()
+    for v in bm.verts:
+        if abs(v.co.z) < 0.09:
+            a = math.atan2(v.co.y, v.co.x)
+            wave = (math.sin(a * 3 + p1) * 0.5
+                    + math.sin(a * 7 + p2) * 0.3
+                    + math.sin(a * 13 + p3) * 0.2)
+            drip = (max(0.0, wave) ** 1.5) * 0.34
+            v.co.z -= drip
+    bm.to_mesh(icing.data)
+    bm.free()
     for poly in icing.data.polygons:
         poly.use_smooth = True
-    mod = icing.modifiers.new("Smoother", "SUBSURF")
-    mod.levels = 2
+    # Stack order matters (learned from a bad render): thickness
+    # FIRST, smoothing second - and a breath of outward lift - so the
+    # icing sits ON the dough. Smoothing an open shell first shrinks
+    # it under the dough's surface and the dough swallows it.
+    for mod in list(icing.modifiers):
+        icing.modifiers.remove(mod)
+    thick = icing.modifiers.new("Icing Thickness", "SOLIDIFY")
+    thick.thickness = 0.05
+    sub = icing.modifiers.new("Smoother", "SUBSURF")
+    sub.levels = 2
+    icing.scale = (1.015, 1.015, 0.835)
     bpy.ops.object.select_all(action="DESELECT")
     icing.select_set(True)
     context.view_layer.objects.active = icing
@@ -1033,53 +1090,112 @@ def _tour_step_icing_pink(context):
     icing = _scene_obj(context, "Icing")
     if icing is None:
         raise RuntimeError("There is no icing yet - do the icing step first.")
-    _paint(icing, "Buddy Pink", (0.96, 0.45, 0.62, 1.0))
+    # Glossy, like his: low roughness, a whisper of subsurface.
+    _paint(icing, "Buddy Pink", (0.80, 0.30, 0.47, 1.0),
+           roughness=0.18, subsurface=0.05)
 
 
 def _tour_step_dough_colour(context):
     dough = _dough(context)
     if dough is None:
         raise RuntimeError("The dough ring is not there yet - do step 1 first.")
-    _paint(dough, "Buddy Dough", (0.52, 0.30, 0.12, 1.0))
+    # Golden baked dough WITH the pale fry line around its middle -
+    # the band where the donut floated in the oil. Faces around the
+    # outside equator get the paler material.
+    golden = bpy.data.materials.get("Buddy Dough") or \
+        bpy.data.materials.new("Buddy Dough")
+    _principled(golden, (0.52, 0.28, 0.09, 1.0),
+                roughness=0.5, subsurface=0.3)
+    pale = bpy.data.materials.get("Buddy Fry Line") or \
+        bpy.data.materials.new("Buddy Fry Line")
+    _principled(pale, (0.78, 0.55, 0.28, 1.0),
+                roughness=0.55, subsurface=0.3)
+    dough.data.materials.clear()
+    dough.data.materials.append(golden)
+    dough.data.materials.append(pale)
+    for poly in dough.data.polygons:
+        c = poly.center
+        radial = math.hypot(c.x, c.y)
+        if radial > 1.0 and abs(c.z) < 0.055:
+            poly.material_index = 1
 
 
 _SPRINKLE_COLOURS = [
-    (0.90, 0.10, 0.15, 1.0), (0.95, 0.80, 0.10, 1.0),
-    (0.15, 0.35, 0.95, 1.0), (0.20, 0.80, 0.30, 1.0),
-    (0.96, 0.96, 0.96, 1.0), (0.60, 0.25, 0.90, 1.0),
+    (0.35, 0.75, 0.70, 1.0),   # teal
+    (0.62, 0.52, 0.85, 1.0),   # lavender
+    (0.95, 0.90, 0.70, 1.0),   # cream
+    (0.95, 0.62, 0.72, 1.0),   # pale pink
+    (0.96, 0.96, 0.96, 1.0),   # white
+    (0.55, 0.75, 0.95, 1.0),   # sky
 ]
 
 
 def _tour_step_sprinkles(context):
+    from mathutils import Matrix, Quaternion
     icing = _scene_obj(context, "Icing")
     if icing is None:
-        raise RuntimeError("Sprinkles need the icing first - it is step 4.")
+        raise RuntimeError("Sprinkles need the icing first - it is step 5.")
     rng = random.Random(11)
     mats = []
     for i, rgba in enumerate(_SPRINKLE_COLOURS):
         name = f"Sprinkle Colour {i + 1}"
         mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
-        mat.diffuse_color = rgba
+        _principled(mat, rgba, roughness=0.35)
         mats.append(mat)
     if context.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
-    bpy.ops.object.select_all(action="DESELECT")
+    # One long thin sprinkle shape, reused for every instance.
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=12, ring_count=8,
+                                         radius=1.0)
+    template = context.object
+    template.data.transform(
+        Matrix.Diagonal((0.083, 0.016, 0.016, 1.0)))
+    template_mesh = template.data
+    # Sample the icing's REAL surface (evaluated, drips and all) and
+    # lay each sprinkle flat on it, spun a random way - the way his
+    # sprinkles actually sit.
+    dg = context.evaluated_depsgraph_get()
+    eval_obj = icing.evaluated_get(dg)
+    eval_mesh = eval_obj.to_mesh()
+    mw = icing.matrix_world
+    faces = []
+    for poly in eval_mesh.polygons:
+        cw = mw @ poly.center
+        nw = (mw.to_3x3() @ poly.normal).normalized()
+        if cw.z > 0.08 and nw.z > 0.2:
+            faces.append((cw, nw))
+    eval_obj.to_mesh_clear()
+    if not faces:
+        raise RuntimeError("Could not find the top of the icing.")
     made = []
-    big_r, small_r = 1.0, 0.28
-    for i in range(60):
-        a = rng.uniform(0, 2 * math.pi)          # around the ring
-        t = rng.uniform(0.15 * math.pi, 0.85 * math.pi)  # over the top
-        x = (big_r + small_r * math.cos(t)) * math.cos(a)
-        y = (big_r + small_r * math.cos(t)) * math.sin(a)
-        z = small_r * math.sin(t) * 0.8 + 0.07
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            segments=8, ring_count=6, radius=0.028, location=(x, y, z))
-        s = context.object
-        s.scale = (2.0, 0.8, 0.8)
-        s.rotation_euler = (rng.uniform(0, 3.1), rng.uniform(0, 3.1),
-                            rng.uniform(0, 3.1))
-        s.data.materials.append(mats[i % len(mats)])
-        made.append(s)
+    count = 130
+    for i in range(count):
+        cw, nw = faces[rng.randrange(len(faces))]
+        spin = Quaternion(nw, rng.uniform(0, 2 * math.pi))
+        align = nw.to_track_quat("Z", "Y")
+        mat4 = (Matrix.Translation(cw + nw * 0.012)
+                @ (spin @ align).to_matrix().to_4x4())
+        mesh = template_mesh.copy()
+        mesh.transform(mat4)
+        mesh.materials.append(mats[i % len(mats)])
+        obj = bpy.data.objects.new("Sprinkle", mesh)
+        context.scene.collection.objects.link(obj)
+        made.append(obj)
+    # A few that fell on the plate, like his final shot.
+    for i in range(6):
+        a = rng.uniform(0, 2 * math.pi)
+        r = rng.uniform(1.2, 1.45)
+        pos = (r * math.cos(a), r * math.sin(a), -0.335)
+        yaw = Quaternion((0, 0, 1), rng.uniform(0, 2 * math.pi))
+        mesh = template_mesh.copy()
+        mesh.transform(Matrix.Translation(pos)
+                       @ yaw.to_matrix().to_4x4())
+        mesh.materials.append(mats[(count + i) % len(mats)])
+        obj = bpy.data.objects.new("Sprinkle", mesh)
+        context.scene.collection.objects.link(obj)
+        made.append(obj)
+    bpy.data.objects.remove(template, do_unlink=True)
+    bpy.ops.object.select_all(action="DESELECT")
     for s in made:
         s.select_set(True)
     context.view_layer.objects.active = made[0]
@@ -1088,14 +1204,69 @@ def _tour_step_sprinkles(context):
 
 
 def _tour_step_plate(context):
+    # His final shot, staged: white plate, dark table, mug of coffee.
     bpy.ops.mesh.primitive_cylinder_add(
-        radius=1.7, depth=0.08, location=(0, 0, -0.285))
+        radius=1.55, depth=0.06, location=(0, 0, -0.38))
     plate = context.object
     plate.name = "Plate"
-    _paint(plate, "Buddy Plate", (0.93, 0.93, 0.95, 1.0))
+    _paint(plate, "Buddy Plate", (0.93, 0.93, 0.95, 1.0), roughness=0.35)
+    bpy.ops.mesh.primitive_circle_add(
+        vertices=48, radius=7.0, fill_type="NGON", location=(0, 0, -0.415))
+    table = context.object
+    table.name = "Table"
+    _paint(table, "Buddy Table", (0.16, 0.14, 0.13, 1.0), roughness=0.9)
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=0.34, depth=0.5, location=(1.95, 0.6, -0.165))
+    mug = context.object
+    mug.name = "Mug"
+    _paint(mug, "Buddy Mug", (0.36, 0.21, 0.13, 1.0), roughness=0.4)
+    bpy.ops.mesh.primitive_circle_add(
+        vertices=32, radius=0.29, fill_type="NGON", location=(1.95, 0.6, 0.07))
+    coffee = context.object
+    coffee.name = "Mug Coffee"
+    _paint(coffee, "Buddy Coffee", (0.05, 0.03, 0.02, 1.0), roughness=0.25)
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=0.15, minor_radius=0.032,
+        major_segments=32, minor_segments=10,
+        location=(2.30, 0.6, -0.15), rotation=(0, math.pi / 2, 0))
+    handle = context.object
+    handle.name = "Mug Handle"
+    mug_mat = bpy.data.materials.get("Buddy Mug")
+    if mug_mat:
+        handle.data.materials.append(mug_mat)
 
 
 def _tour_step_picture(context):
+    from mathutils import Vector
+    scene = context.scene
+    # The mood of his final shot: a near-black room and warm light
+    # raking in from the side.
+    if scene.world is None:
+        scene.world = bpy.data.worlds.new("World")
+    scene.world.use_nodes = True
+    bg = scene.world.node_tree.nodes.get("Background")
+    if bg is not None:
+        bg.inputs[0].default_value = (0.012, 0.012, 0.016, 1.0)
+        bg.inputs[1].default_value = 0.6
+    if scene.camera is None:
+        bpy.ops.object.camera_add(location=(3.3, -4.4, 1.9))
+        cam = context.object
+        cam.data.lens = 42
+        # Aimed a touch right of centre so the mug is in the shot,
+        # like his final frame.
+        direction = Vector((0.35, 0.1, -0.05)) - cam.location
+        cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+        scene.camera = cam
+    if not any(o.type == "LIGHT" for o in scene.objects):
+        bpy.ops.object.light_add(type="SUN", location=(-3.0, -2.0, 3.0),
+                                 rotation=(0.9, 0.25, -0.65))
+        sun = context.object
+        sun.data.energy = 2.4
+        sun.data.color = (1.0, 0.80, 0.62)
+        bpy.ops.object.light_add(type="POINT", location=(2.5, 2.0, 1.2))
+        fill = context.object
+        fill.data.energy = 12.0
+        fill.data.color = (0.7, 0.8, 1.0)
     bpy.ops.buddy.action(action_id="take_picture")
 
 
@@ -1108,7 +1279,9 @@ def _check_dough(context):
 
 
 def _check_icing(context):
-    return _scene_obj(context, "Icing") is not None
+    icing = _scene_obj(context, "Icing")
+    return icing is not None and any(
+        m.type == "SOLIDIFY" for m in icing.modifiers)
 
 
 def _check_icing_pink(context):
@@ -1154,26 +1327,28 @@ TOUR_STEPS = [
             "way first, exactly like the famous tutorial does.",
      "run": _tour_step_dough, "check": _check_dough},
     {"title": "Make the icing",
-     "how": "The icing is a copy of the ring, a little flatter and sitting "
-            "a touch higher, smoothed round. One press builds it.",
+     "how": "His real method: the icing is the top of the dough itself, "
+            "lifted off and given thickness, with its edge pulled down "
+            "the sides into uneven drips. One press does all of it.",
      "run": _tour_step_icing, "check": _check_icing},
     {"title": "Colour the icing pink",
-     "how": "Pink is the classic. One press paints the icing.",
+     "how": "Pink and glossy, like his. One press paints the icing.",
      "run": _tour_step_icing_pink, "check": _check_icing_pink},
     {"title": "Colour the dough golden",
-     "how": "Under the icing, the ring becomes baked-dough brown.",
+     "how": "Baked golden, with the pale fry line around its middle - "
+            "the band where the donut floated in the oil.",
      "run": _tour_step_dough_colour, "check": _check_dough_colour},
     {"title": "Add the sprinkles",
-     "how": "Sixty little sprinkles, scattered over the icing where "
-            "sprinkles belong - on top.",
+     "how": "Long thin sprinkles lying flat on the icing - about 130, "
+            "in his pastel colours, plus a few that fell on the plate.",
      "run": _tour_step_sprinkles, "check": _check_sprinkles},
-    {"title": "Put it on a plate",
-     "how": "A plain white plate under it all, so it sits like food "
-            "and not like a floating ring.",
+    {"title": "Set the scene",
+     "how": "His final shot, staged: the donut on a white plate, on a "
+            "dark table, with a mug of coffee beside it.",
      "run": _tour_step_plate, "check": _check_plate},
     {"title": "Take the picture",
-     "how": "Adds a camera and a light if your scene has none, then "
-            "makes the picture - the moment it becomes real.",
+     "how": "A dark room and warm light raking in from the side - the "
+            "mood of his final shot - then the picture itself.",
      "run": _tour_step_picture, "check": _check_picture},
     {"title": "Save your work",
      "how": "Saves the whole scene so you can close Blender and come "
@@ -1306,8 +1481,10 @@ class BUDDY_OT_tour_start(Operator):
 
     def execute(self, context):
         import time
+        global _EXPERT_TIP
         context.scene.buddy_tour_started = True
         context.scene.buddy_tour_epoch = int(time.time())
+        _EXPERT_TIP = "Donut tour, step 1: Add the dough ring."
         self.report({"INFO"}, "Donut tour started - step 1 is at the top "
                               "of the Blender Buddy panel.")
         return {"FINISHED"}
@@ -1333,6 +1510,7 @@ class BUDDY_OT_tour_do(Operator):
     step: IntProperty(options={"HIDDEN"})
 
     def execute(self, context):
+        global _EXPERT_TIP
         if not (0 <= self.step < len(TOUR_STEPS)):
             return {"CANCELLED"}
         step = TOUR_STEPS[self.step]
@@ -1344,15 +1522,229 @@ class BUDDY_OT_tour_do(Operator):
         if step["check"](context):
             nxt = self.step + 1
             if nxt < len(TOUR_STEPS):
+                _EXPERT_TIP = (f"Donut tour, step {nxt + 1}: "
+                               f"{TOUR_STEPS[nxt]['title']}.")
                 self.report({"INFO"}, f"Done - {step['title']}. "
                                       f"Next: {TOUR_STEPS[nxt]['title']}.")
             else:
+                _EXPERT_TIP = "You made the donut. Ask me anything."
                 self.report({"INFO"}, "Done - you made the donut.")
         else:
             self.report({"INFO"}, f"{step['title']} - take a look at the "
                                   "scene; the step ticks off when it's "
                                   "really there.")
         return {"FINISHED"}
+
+
+# ----------------------------------------------------------------------------
+# The Buddy Expert: plug in your own AI key and a small expert lives in
+# the panel - and floats over the 3D window - answering in plain words
+# about YOUR scene. It can also point at the exact Buddy button for
+# the job, with a Do-it button right there. The key is the user's own,
+# stored in Blender's preferences on their own computer; Buddy brings
+# no key and charges nothing.
+# ----------------------------------------------------------------------------
+
+_EXPERT_DEFAULT_URL = "https://api.openai.com/v1/chat/completions"
+_EXPERT_DEFAULT_MODEL = "gpt-4o-mini"
+_EXPERT_TIP = ""
+_EXPERT_HANDLE = None
+
+
+class BUDDY_Preferences(AddonPreferences):
+    bl_idname = __name__
+
+    expert_key: StringProperty(
+        name="AI key",
+        description="Your own AI service key (for example an OpenAI key). "
+                    "It stays in Blender's preferences on your computer",
+        default="", subtype="PASSWORD")
+    expert_url: StringProperty(
+        name="AI service address",
+        description="The chat address of your AI service. The default "
+                    "is OpenAI's; any service with the same chat shape "
+                    "works",
+        default=_EXPERT_DEFAULT_URL)
+    expert_model: StringProperty(
+        name="AI model",
+        description="Which model answers you",
+        default=_EXPERT_DEFAULT_MODEL)
+    expert_float: BoolProperty(
+        name="Float the expert over the 3D window",
+        description="Show the expert's latest tip as a small floating "
+                    "card over the big 3D window",
+        default=True)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "expert_key")
+        layout.prop(self, "expert_url")
+        layout.prop(self, "expert_model")
+        layout.prop(self, "expert_float")
+        _wrap(layout, "Your key stays on your computer, in Blender's "
+                      "own preferences. When you ask a question, Buddy "
+                      "sends the question plus a short description of "
+                      "your scene (what's in it, what you have picked, "
+                      "which mode you're in) to the address above. "
+                      "Nothing else is sent.")
+
+
+def _expert_settings():
+    try:
+        prefs = bpy.context.preferences.addons[__name__].preferences
+        return {"key": prefs.expert_key, "url": prefs.expert_url,
+                "model": prefs.expert_model, "float": prefs.expert_float}
+    except Exception:
+        return {"key": "", "url": _EXPERT_DEFAULT_URL,
+                "model": _EXPERT_DEFAULT_MODEL, "float": True}
+
+
+def _scene_summary(context):
+    counts = {}
+    for o in context.scene.objects:
+        counts[o.type] = counts.get(o.type, 0) + 1
+    parts = [f"{n} {t.lower()}{'s' if n > 1 else ''}"
+             for t, n in sorted(counts.items())]
+    obj = context.object
+    picked = (f"Picked: {obj.name} ({obj.type.lower()})."
+              if obj else "Nothing picked.")
+    checks, current = (tour_state(context)
+                       if getattr(context.scene, "buddy_tour_started", False)
+                       else (None, None))
+    tour = ""
+    if checks is not None:
+        tour = (f" Donut tour: {sum(checks)} of {len(checks)} steps done"
+                + (f", current step: {TOUR_STEPS[current]['title']}."
+                   if current < len(checks) else " - finished."))
+    return (f"Scene has: {', '.join(parts) or 'nothing'}. {picked} "
+            f"Mode: {context.mode}.{tour} "
+            f"Saved file: {'yes' if bpy.data.filepath else 'not yet'}.")
+
+
+def _expert_system_prompt():
+    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in ACTIONS)
+    return (
+        "You are the Buddy Expert, a patient Blender teacher inside a "
+        "beginner add-on called Blender Buddy. Rules: answer in plain "
+        "everyday words, no jargon without explaining it, at most 60 "
+        "words. Teach for the user's actual scene, which is described "
+        "in their message. If one of the add-on's buttons below does "
+        "the job, end your answer with one extra line exactly like "
+        "this: BUTTON: <id> (only when a button truly fits).\n"
+        f"Buttons: {buttons}")
+
+
+def _expert_http(url, key, payload):
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {key}"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+class BUDDY_OT_open_prefs(Operator):
+    bl_idname = "buddy.open_prefs"
+    bl_label = "Set Up the Expert"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        bpy.ops.preferences.addon_show(module=__name__)
+        return {"FINISHED"}
+
+
+class BUDDY_OT_ask_expert(Operator):
+    bl_idname = "buddy.ask_expert"
+    bl_label = "Ask the Expert"
+    bl_description = ("Ask the AI expert about your scene, in your own "
+                      "words. It answers in plain words and points at "
+                      "the right button when Buddy has one")
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        global _EXPERT_TIP
+        wm = context.window_manager
+        settings = _expert_settings()
+        question = (wm.buddy_ask or "").strip()
+        if not settings["key"]:
+            wm.buddy_answer = ("The expert isn't set up yet. Press 'Set "
+                               "up the expert' and paste your own AI "
+                               "key - it stays on your computer.")
+            wm.buddy_suggested = ""
+            return {"CANCELLED"}
+        if not question:
+            wm.buddy_answer = "Type a question first - anything, in your own words."
+            return {"CANCELLED"}
+        payload = {
+            "model": settings["model"],
+            "messages": [
+                {"role": "system", "content": _expert_system_prompt()},
+                {"role": "user", "content":
+                    f"{_scene_summary(context)}\n\nQuestion: {question}"},
+            ],
+        }
+        try:
+            data = _expert_http(settings["url"], settings["key"], payload)
+            text = data["choices"][0]["message"]["content"].strip()
+        except Exception:
+            wm.buddy_answer = ("The expert didn't answer. Check the key "
+                               "in the add-on's preferences, and that "
+                               "you're online - then ask again.")
+            wm.buddy_suggested = ""
+            return {"CANCELLED"}
+        suggested = ""
+        lines = text.splitlines()
+        kept = []
+        for line in lines:
+            m = re.match(r"\s*BUTTON:\s*([a-z0-9_]+)\s*$", line)
+            if m and any(a["id"] == m.group(1) for a in ACTIONS):
+                suggested = m.group(1)
+            elif not line.strip().upper().startswith("BUTTON:"):
+                kept.append(line)
+        wm.buddy_answer = "\n".join(kept).strip()
+        wm.buddy_suggested = suggested
+        first = wm.buddy_answer.split(". ")[0].strip()
+        _EXPERT_TIP = (first[:110] + ("..." if len(first) > 110 else ""))
+        self.report({"INFO"}, "The expert answered - it's in the panel.")
+        return {"FINISHED"}
+
+
+def _draw_expert_overlay():
+    """The floating expert: a small card over the 3D window with the
+    latest tip. Drawn by Blender itself; must never raise."""
+    try:
+        if not _EXPERT_TIP or not _expert_settings()["float"]:
+            return
+        import blf
+        import gpu
+        from gpu_extras.batch import batch_for_shader
+        region = bpy.context.region
+        if region is None:
+            return
+        lines = ["Buddy Expert"] + textwrap.wrap(_EXPERT_TIP, width=46)[:3]
+        width, height = 380, 26 + 16 * len(lines)
+        x, y = 14, region.height - height - 14
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        batch = batch_for_shader(
+            shader, "TRI_FAN",
+            {"pos": [(x, y), (x + width, y), (x + width, y + height),
+                     (x, y + height)]})
+        gpu.state.blend_set("ALPHA")
+        shader.bind()
+        shader.uniform_float("color", (0.05, 0.05, 0.07, 0.85))
+        batch.draw(shader)
+        font = 0
+        blf.size(font, 12)
+        ty = y + height - 18
+        for i, line in enumerate(lines):
+            blf.color(font, 1.0, 0.85, 0.4, 1.0) if i == 0 else \
+                blf.color(font, 0.95, 0.95, 0.95, 1.0)
+            blf.position(font, x + 10, ty, 0)
+            blf.draw(font, line)
+            ty -= 16
+        gpu.state.blend_set("NONE")
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------------------
@@ -1442,6 +1834,32 @@ class VIEW3D_PT_blender_buddy(Panel):
                                "pressing.")
                     box.operator("buddy.tour_hide", text="Not now")
 
+        if not (wm.buddy_query or "").strip():
+            box = layout.box()
+            box.label(text="Buddy Expert", icon="USER")
+            settings = _expert_settings()
+            if not settings["key"]:
+                _wrap(box, "Plug in your own AI key and a small expert "
+                           "lives here - and floats over the 3D window. "
+                           "Ask in your own words ('how do I make this "
+                           "look like chrome?') and it answers for YOUR "
+                           "scene, pointing at the exact button when "
+                           "Buddy has one.")
+                box.operator("buddy.open_prefs", text="Set up the expert")
+            else:
+                box.prop(wm, "buddy_ask", text="")
+                box.operator("buddy.ask_expert", text="Ask the expert")
+                if (wm.buddy_answer or "").strip():
+                    _wrap(box, wm.buddy_answer, width=48)
+                if wm.buddy_suggested:
+                    act = next((a for a in ACTIONS
+                                if a["id"] == wm.buddy_suggested), None)
+                    if act:
+                        op = box.operator(
+                            "buddy.action",
+                            text=f"Do it: {act['plain']}")
+                        op.action_id = act["id"]
+
         box = layout.box()
         box.label(text="Where you are", icon="INFO")
         _wrap(box, _hint(context))
@@ -1502,8 +1920,10 @@ class VIEW3D_PT_blender_buddy(Panel):
                        "it deserves a plain-words button above.")
 
 
-CLASSES = (BUDDY_OT_action, BUDDY_OT_run_any, BUDDY_OT_tour_start,
-           BUDDY_OT_tour_hide, BUDDY_OT_tour_do, VIEW3D_PT_blender_buddy)
+CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
+           BUDDY_OT_tour_start, BUDDY_OT_tour_hide, BUDDY_OT_tour_do,
+           BUDDY_OT_open_prefs, BUDDY_OT_ask_expert,
+           VIEW3D_PT_blender_buddy)
 
 
 def register():
@@ -1535,10 +1955,35 @@ def register():
                     "picture was taken during it",
         default=0,
     )
+    bpy.types.WindowManager.buddy_ask = StringProperty(
+        name="Ask the expert",
+        description="Ask the AI expert anything about your scene, in "
+                    "your own words",
+        default="",
+    )
+    bpy.types.WindowManager.buddy_answer = StringProperty(
+        name="Expert answer", default="")
+    bpy.types.WindowManager.buddy_suggested = StringProperty(
+        name="Expert suggested button", default="")
+    global _EXPERT_HANDLE
+    try:
+        _EXPERT_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
+            _draw_expert_overlay, (), "WINDOW", "POST_PIXEL")
+    except Exception:
+        _EXPERT_HANDLE = None
 
 
 def unregister():
-    for attr in ("buddy_query", "buddy_show_real"):
+    global _EXPERT_HANDLE
+    if _EXPERT_HANDLE is not None:
+        try:
+            bpy.types.SpaceView3D.draw_handler_remove(
+                _EXPERT_HANDLE, "WINDOW")
+        except Exception:
+            pass
+        _EXPERT_HANDLE = None
+    for attr in ("buddy_query", "buddy_show_real", "buddy_ask",
+                 "buddy_answer", "buddy_suggested"):
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
     for attr in ("buddy_tour_started", "buddy_tour_epoch"):
