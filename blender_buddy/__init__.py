@@ -42,7 +42,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (0, 8, 0),
+    "version": (0, 9, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -1481,6 +1481,8 @@ class BUDDY_OT_run_any(Operator):
 class BUDDY_OT_tour_start(Operator):
     bl_idname = "buddy.tour_start"
     bl_label = "Start the Donut"
+    bl_description = ("Start the day-1 donut project: 8 steps, one "
+                      "press each, at the top of the panel")
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -1497,6 +1499,7 @@ class BUDDY_OT_tour_start(Operator):
 class BUDDY_OT_tour_hide(Operator):
     bl_idname = "buddy.tour_hide"
     bl_label = "Hide the Donut Tour"
+    bl_description = "Hide the donut project box for now"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -1581,7 +1584,7 @@ class BUDDY_Preferences(AddonPreferences):
     bl_idname = __name__
 
     expert_service: EnumProperty(
-        name="How the expert reaches your AI",
+        name="Expert connects by",
         description="Key: an AI service key you paste below. Claude "
                     "key: an Anthropic key you paste below. ChatGPT "
                     "login: through OpenAI's own Codex program on "
@@ -1624,6 +1627,8 @@ class BUDDY_Preferences(AddonPreferences):
         default=True)
 
     def draw(self, context):
+        global _WRAP_CAP
+        _WRAP_CAP = _fit_width(context)
         layout = self.layout
         layout.prop(self, "expert_service")
         layout.prop(self, "expert_key")
@@ -2187,6 +2192,9 @@ def _expert_http(url, key, payload):
 class BUDDY_OT_open_prefs(Operator):
     bl_idname = "buddy.open_prefs"
     bl_label = "Set Up the Expert"
+    bl_description = ("Open the Buddy Expert settings: pick how your "
+                      "expert connects (your key, your ChatGPT login "
+                      "through Codex, a Claude key, or a local AI)")
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -2390,6 +2398,7 @@ class BUDDY_OT_run_plan(Operator):
 class BUDDY_OT_clear_plan(Operator):
     bl_idname = "buddy.clear_plan"
     bl_label = "Throw the Plan Away"
+    bl_description = "Throw away the expert's plan without running it"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -2415,7 +2424,14 @@ def _draw_expert_overlay():
             return
         lines = ["Buddy Expert"] + textwrap.wrap(_EXPERT_TIP, width=46)[:3]
         width, height = 380, 26 + 16 * len(lines)
-        x, y = 14, region.height - height - 14
+        # Placement, from real screenshots (v0.9): x=72 clears the
+        # editor's left toolbar (at x=14 the toolbar icons were
+        # drawn over the card's left edge and its first words);
+        # top margin 96 clears the editor's header strip (at 14
+        # the title row sat half behind it) AND both lines of the
+        # view's own corner text, which is drawn after this card
+        # and struck through it at smaller margins.
+        x, y = 72, region.height - height - 96
         shader = gpu.shader.from_builtin("UNIFORM_COLOR")
         batch = batch_for_shader(
             shader, "TRI_FAN",
@@ -2423,7 +2439,9 @@ def _draw_expert_overlay():
                      (x, y + height)]})
         gpu.state.blend_set("ALPHA")
         shader.bind()
-        shader.uniform_float("color", (0.05, 0.05, 0.07, 0.85))
+        # Nearly opaque on purpose: at 0.85 the view's own corner
+        # text ghosted through the card (seen in screenshots, v0.9).
+        shader.uniform_float("color", (0.05, 0.05, 0.07, 0.97))
         batch.draw(shader)
         font = 0
         blf.size(font, 12)
@@ -2443,7 +2461,26 @@ def _draw_expert_overlay():
 # The panel
 # ----------------------------------------------------------------------------
 
+_WRAP_CAP = 64
+
+
+def _fit_width(context):
+    """How many characters actually fit across the panel right now.
+    Blender cuts off (with '...') any label longer than the panel,
+    so wrapping has to aim at the real width, not a guess. That was
+    learned from actual screenshots of this panel (v0.9): at the
+    default sidebar width the old fixed guesses clipped words."""
+    try:
+        w = context.region.width
+    except Exception:
+        return 44
+    if not w:
+        return 44
+    return max(26, min(64, int((w - 48) / 6.2)))
+
+
 def _wrap(layout, text, width=44):
+    width = max(20, min(width, _WRAP_CAP))
     for line in textwrap.wrap(text, width=width) or [""]:
         layout.label(text=line)
 
@@ -2486,6 +2523,8 @@ class VIEW3D_PT_blender_buddy(Panel):
     bl_category = "Blender Buddy"
 
     def draw(self, context):
+        global _WRAP_CAP
+        _WRAP_CAP = _fit_width(context)
         layout = self.layout
         wm = context.window_manager
         show_real = getattr(wm, "buddy_show_real", True)
@@ -2516,8 +2555,9 @@ class VIEW3D_PT_blender_buddy(Panel):
                 else:
                     step = TOUR_STEPS[current]
                     box.label(text=f"Make a Donut - step {current + 1} of "
-                                   f"{len(TOUR_STEPS)}: {step['title']}",
+                                   f"{len(TOUR_STEPS)}",
                               icon="MESH_TORUS")
+                    _wrap(box, step["title"])
                     _wrap(box, step["how"])
                     op = box.operator("buddy.tour_do", text="Do this step")
                     op.step = current
@@ -2597,7 +2637,7 @@ class VIEW3D_PT_blender_buddy(Panel):
                 _wrap(box, "No match. Try everyday words: round, copy, hole, "
                            "smooth, move, thicker, colour, delete.")
         box.prop(wm, "buddy_show_real",
-                 text="Also show Blender's real names (learn them as you go)")
+                 text="Also show Blender's real names")
 
         for section in SECTIONS:
             box = layout.box()

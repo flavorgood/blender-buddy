@@ -159,18 +159,29 @@ request shape (key header, system as its own field) and reads the
 text blocks back into a runnable plan. An official Extensions
 package (`extension_src/` + Blender's own build tool) validates
 and installs through Blender's extension system — see
-`LISTING.md` for the submission draft and the one license ruling
-it waits on. Not yet verified: a live conversation with a
-real AI service, a real signed-in Codex program, or a real local
-model (each needs the real thing on a real machine), and the
-floating card's on-screen look (headless machines can't draw the
-viewport overlay; its registration and removal are tested). The demo scene in `demo/` (box
+`LISTING.md` for the submission draft (the license question it
+waited on is settled: GPL, the stay-free license, ruled by the
+owner on 2026-11-12). The demo scene in `demo/` (box
 with rounded edges + smooth red ball on a ground sheet) was built
 using only the add-on's buttons.
 
-Not yet verified: the panel's on-screen layout in the live GUI
-(headless test machines can't draw the viewport sidebar). First thing
-to check on a real machine — reports welcome.
+Seen with our own eyes (v0.9): the panel, the floating expert
+card and the preferences were photographed inside a real running
+Blender window (a virtual display on the test machine, real GUI,
+real mouse clicks; the before-and-after screenshots are kept in
+the project's `demo/checks/` folder). The first
+photos caught real flaws: text lines Blender cut off with '...'
+wherever the add-on guessed the panel width instead of measuring
+it, a tour heading too long for its line, four buttons whose
+hover help said '(undocumented operator)', and the floating card
+sitting half under the window's header strip, struck through by
+the view's own corner text. v0.9 fixes all of them — text now
+wraps to the width that actually fits, every button explains
+itself, and the card sits clear in its corner. Still not verified: a
+live conversation with a real AI service, a real signed-in Codex
+program, or a real local model (each needs the real thing on a
+real machine), and how the panel looks on a physical monitor at
+other window sizes and UI scales.
 
 ## License
 
