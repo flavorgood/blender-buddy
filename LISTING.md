@@ -1,7 +1,7 @@
 # Blender Buddy — store listing draft (for extensions.blender.org)
 
 Status: the extension package is BUILT and validated by Blender's
-own tooling (`blender_buddy_v1.2_extension.zip`, built from
+own tooling (`blender_buddy_v1.2.1_extension.zip`, built from
 `extension_src/`), and it installs + enables through Blender's
 extension system in a fresh profile. What remains is human-side:
 a Blender ID account, the maintainer's license ruling (below), and
@@ -11,18 +11,39 @@ the submit button on the platform. Nothing here is live yet.
 Blender Buddy - Blender in Plain Words
 
 ## Tagline (max 64 chars, as validated)
-Blender in plain words: every tool visible, named by its job
+AAA-level 3D creation, usable by anyone
 
 ## Tags (platform list)
 3D View · User Interface · Mesh · Modeling · Material · Sculpt
 
-## Description (draft)
-Blender is powerful and famously hard to start. Its tools hide
-behind shortcuts and names you have to already know — so most
-beginners quit in the first hour.
+## Description (official — owner-approved pitch, 2026-11-12)
+Blender is the free professional studio behind films, video
+games, product designs, architecture and 3D printing — the same
+class of tool the big studios pay thousands per seat for, except
+Blender costs nothing. It has exactly one flaw, and it's fatal:
+it is famously unusable by normal people. Its thousands of tools
+are hidden behind keyboard shortcuts and insider jargon, so most
+people who open it — people with real ideas — quit within the
+first hour. The power was never the problem. The door is locked.
 
-Blender Buddy changes none of Blender's functions. It makes them
-visible, in plain words:
+Blender Buddy doesn't translate Blender. It redesigns how
+Blender is used — putting AAA-level modeling usability in the
+hands of normal people with great ideas:
+
+• Tools organised by the job you're trying to do, everything
+  visible on screen instead of hidden behind shortcuts.
+• Search in your own everyday words — typos and all — and be
+  handed the right tool.
+• Learn by doing real projects, starting with the famous Donut,
+  while Buddy watches your work and moves you forward as each
+  step lands.
+• Your own AI expert inside Blender: it knows your scene,
+  answers in plain language, and can operate the tools with you.
+• Nothing removed, nothing dumbed down — and Buddy re-checks
+  itself against each new version of Blender, so it never goes
+  stale as the software evolves.
+
+The details:
 
 • Every button is named by the JOB — "Round off a sharp edge",
   "Cut one shape out of another" — with one plain sentence saying
@@ -70,16 +91,17 @@ its Python API).
 1. Create a Blender ID at id.blender.org (free).
 2. ~~Rule on the license~~ — done, GPL-3.0-or-later (above).
 3. On extensions.blender.org: Submit → upload
-   `blender_buddy_v1.2_extension.zip` → paste the description
+   `blender_buddy_v1.2.1_extension.zip` → paste the description
    above → answer the network-permission question with the
    justification above.
 4. Review by the platform team follows; fixes, if any, come back
    as review notes.
 
-## GitHub About (set 2026-11-12)
-Description: "Blender in plain words — a free add-on that makes
-every Blender tool visible, named by the job and searchable in
-your own words, with a Donut first project and your own AI agent.
-Beginner-proof: if a day-1 beginner can't use it, we aren't done."
+## GitHub About (set 2026-11-12, wording updated 2026-11-12)
+Description: "Blender Buddy redesigns how Blender is used:
+AAA-level 3D creation in the hands of normal people with great
+ideas. Tools organised by the job, search in your own words,
+learn-by-doing projects, your own AI expert — nothing removed.
+Free forever (GPL)."
 Topics: blender, blender-addon, blender-extension, beginners,
 3d-modeling, blender-tutorial, plain-language, ai-agent

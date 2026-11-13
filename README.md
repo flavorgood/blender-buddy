@@ -1,7 +1,30 @@
-# Blender Buddy — Blender in plain words
+# Blender Buddy — AAA-level 3D creation, usable by anyone
 
-A free add-on that puts a plain-words layer over Blender 4.2, built on
-one rule:
+Blender is the free professional studio behind films, video games,
+product designs, architecture and 3D printing — the same class of
+tool the big studios pay thousands per seat for, except Blender
+costs nothing. It has exactly one flaw, and it's fatal: it is
+famously unusable by normal people. Its thousands of tools are
+hidden behind keyboard shortcuts and insider jargon, so most
+people who open it — people with real ideas — quit within the
+first hour. The power was never the problem. The door is locked.
+
+Blender Buddy doesn't translate Blender. **It redesigns how
+Blender is used.** Tools are organised by the job you're trying
+to do, everything is visible instead of hidden behind shortcuts,
+you can search in your own everyday words — typos and all — and
+learn by doing real projects (starting with the famous Donut)
+while Buddy checks your work as you go. Your own AI expert lives
+in the panel: it knows your scene, answers in plain language,
+and can operate the tools with you. Nothing is removed and
+nothing is dumbed down — every professional tool stays, and
+Buddy re-checks itself against each new Blender version so it
+never goes stale.
+
+Blender made world-class creation free for everyone. **Blender
+Buddy makes it usable by anyone.**
+
+Built on one rule:
 
 > **If a day-1 beginner can't use it, we aren't done.**
 
@@ -125,13 +148,13 @@ though nothing is wrong. You install Buddy **from a file**, one
 of these three ways (same plugin in all three):
 
 **Way 1 — the extension zip (Blender 4.2+):** grab
-`blender_buddy_v1.2_extension.zip` from the
+`blender_buddy_v1.2.1_extension.zip` from the
 [latest release](https://github.com/flavorgood/blender-buddy/releases/latest).
 In Blender: **Edit → Preferences → Get Extensions**, click the
 small dropdown arrow at the top right of that window →
 **Install from Disk…** → pick the zip. It switches on by itself.
 
-**Way 2 — the add-on zip:** grab `blender_buddy_v1.2.zip` from
+**Way 2 — the add-on zip:** grab `blender_buddy_v1.2.1.zip` from
 the same release. **Edit → Preferences → Add-ons → Install…** →
 pick the zip → then **tick the checkbox** next to "Blender
 Buddy" in the list. Until you tick it, nothing appears — Blender

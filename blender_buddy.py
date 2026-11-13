@@ -42,11 +42,13 @@ from bpy.types import AddonPreferences, Operator, Panel
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (1, 2, 0),
+    "version": (1, 2, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
-    "description": "Every common Blender tool, labelled by the job it does, "
-                   "explained in plain words, searchable in your own words.",
+    "description": "AAA-level 3D creation, usable by anyone: Blender "
+                   "redesigned around the job you're doing - every tool "
+                   "visible, searchable in your own words, taught by "
+                   "doing real projects, with your own AI expert.",
     "category": "3D View",
 }
 
