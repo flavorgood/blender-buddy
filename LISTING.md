@@ -1,7 +1,7 @@
 # Blender Buddy — store listing draft (for extensions.blender.org)
 
 Status: the extension package is BUILT and validated by Blender's
-own tooling (`blender_buddy_v0.9_extension.zip`, built from
+own tooling (`blender_buddy_v1.0_extension.zip`, built from
 `extension_src/`), and it installs + enables through Blender's
 extension system in a fresh profile. What remains is human-side:
 a Blender ID account, the maintainer's license ruling (below), and
@@ -34,9 +34,10 @@ visible, in plain words:
 • Nothing is lost: the 93 everyday tools sit on plain-words
   buttons, and ALL of Blender's tools (2,410 on Blender 4.2.5)
   are in the searchable index in the same panel, each runnable.
-• Day 1 is the Donut: the famous first project as 8 one-press
-  steps, built the way the original tutorial builds it, and a
-  step only ticks off when your scene proves it's done.
+• Day 1 is the Donut: the famous first project as 8 taught
+  steps — you do each one with your own hands, guided in plain
+  words, and a step only ticks off when your scene proves
+  it's done.
 • Your own AI agent (optional, bring your own access): ask in
   plain words and it answers for YOUR scene — or, with agent mode
   on, writes a short plan you check and run: pressing tools,
@@ -69,7 +70,7 @@ its Python API).
 1. Create a Blender ID at id.blender.org (free).
 2. ~~Rule on the license~~ — done, GPL-3.0-or-later (above).
 3. On extensions.blender.org: Submit → upload
-   `blender_buddy_v0.9_extension.zip` → paste the description
+   `blender_buddy_v1.0_extension.zip` → paste the description
    above → answer the network-permission question with the
    justification above.
 4. Review by the platform team follows; fixes, if any, come back

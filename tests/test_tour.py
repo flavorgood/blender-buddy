@@ -1,12 +1,18 @@
-"""Blender Buddy Day-1 Donut Tour proof (v0.4).
+"""Blender Buddy guided-project proof (the Donut package).
 
 Run with:
   blender -b --factory-startup --python tests/test_tour.py
 
-Walks the whole tour through the real panel operators and asserts,
-after each press, that the SCENE proves the step (objects, colours,
-camera, saved file) - the same checks the panel itself uses to tick
-steps off. Finishes by rendering the donut as the demo picture.
+The projects TEACH: every step carries plain-words instructions
+for doing it by hand in real Blender, names the skill it teaches,
+and says what the scene is still missing. There is no "do this
+step" button in the panel - the learner does the work. This suite
+proves the other half: that each step's scene check (the same
+checks the panel ticks from) is satisfied by the step's reference
+build, that the checks also accept the taught by-hand routes
+(particle sprinkles), and that every step actually carries its
+teaching content. Finishes by rendering the donut as the demo
+picture.
 """
 import math
 import os
@@ -26,13 +32,39 @@ assert hasattr(bpy.ops.buddy, "tour_start")
 assert hasattr(bpy.ops.buddy, "tour_do")
 print("TOUR_PASS operators present")
 
+# The teaching contract: every step of every package explains how
+# to do it by hand, names the skill, and says what is missing.
+for pkg in bb.PACKAGES:
+    assert pkg["steps"], pkg["id"]
+    for step in pkg["steps"]:
+        assert len(step["teach"]) >= 2, step["title"]
+        assert all(isinstance(l, str) and l.strip() for l in step["teach"])
+        assert step["skill"].strip() and step["missing"].strip()
+print("TOUR_PASS every step teaches, names its skill, names what's missing")
+
+# The panel must not offer to do the step - teaching is the point.
+src = open(os.path.join(ROOT, "blender_buddy", "__init__.py")).read()
+assert 'text="Do this step"' not in src
+print("TOUR_PASS no do-it-for-you button in the panel")
+
+# The taught sprinkles route counts: a particle system on the icing.
+bpy.ops.mesh.primitive_torus_add(major_segments=32, minor_segments=12)
+probe = ctx.object
+probe.name = "Icing"
+probe.modifiers.new("Scatter", "PARTICLE_SYSTEM")
+assert bb._check_sprinkles(ctx), "particle sprinkles must tick the step"
+print("TOUR_PASS sprinkles by particles (the taught way) prove the step")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+
 # fresh scene state: nothing proven yet
 checks, current = bb.tour_state(ctx)
 assert checks == [False] * 8 and current == 0, checks
 print("TOUR_PASS empty scene proves nothing")
 
-bpy.ops.buddy.tour_start()
+bpy.ops.buddy.tour_start(package="donut")
 assert ctx.scene.buddy_tour_started is True
+assert ctx.scene.buddy_tour_package == "donut"
 
 # Test-box accommodation only: this GPU-less machine cannot run the
 # EEVEE engine at all (it aborts), so the tour's picture step renders

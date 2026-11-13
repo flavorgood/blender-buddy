@@ -31,19 +31,24 @@ changes none of Blender's functions. It makes them visible:
   half-words ("extrud"), US spellings ("color") and plain typos
   ("bevell") all find their tool, ranked best-first. Gibberish still
   finds nothing.
-- **Day 1: the Donut Tour.** At the top of the panel, a guided first
-  project — the donut, the famous one from the Blender Guru's
-  tutorial, rebuilt as 8 plain-words steps with one press each, and
-  built the way he builds it: a plump dough ring with its pale fry
-  line; the icing as the *top of the dough itself*, thickened, its
-  edge pulled down into uneven drips; glossy pink; ~130 long thin
-  sprinkles lying flat (plus a few on the plate); the whole scene
-  staged like his final shot — white plate, dark table, mug of
-  coffee, warm side light in a dark room. A step only ticks off when
-  your scene *proves* it's done (the object, the colour, the picture
-  file are really there) — pressing alone earns nothing. It starts
-  by clearing Blender's starter cube, exactly like the tutorial
-  does, but only in an untouched starter scene.
+- **Guided projects — Day 1 is the Donut.** At the top of the
+  panel sits a shelf of guided projects. The first is the donut,
+  the famous one from the Blender Guru's tutorial — picked because
+  one small project touches almost every core skill. It *teaches*:
+  each of the 8 steps is a card telling you what to do with your
+  own hands in real Blender (menus and keys named, in plain words),
+  naming the skill it teaches — adding shapes, Edit Mode,
+  modifiers, materials, scattering, staging a scene, camera and
+  light, saving. There is no "do this step" button; a step ticks
+  off only when your scene *proves* you did it (the object, the
+  colour, the render are really there), and the card tells you in
+  plain words what it's still waiting for. The method is his: a
+  plump dough ring with its pale fry line; the icing as the *top
+  of the dough itself*, thickened, its edge pulled down into
+  uneven drips; glossy pink; sprinkles scattered over the top; the
+  scene staged like his final shot — white plate, dark table, mug
+  of coffee, warm side light in a dark room. More projects can be
+  added to the shelf the same way.
 - **Your own Buddy agent — key, ChatGPT login, or local AI.** There
   is no "log in with ChatGPT/Claude" button an add-on is allowed to
   offer: subscription logins only work inside those companies' own
@@ -82,7 +87,8 @@ changes none of Blender's functions. It makes them visible:
 ## Nothing is lost
 
 Blender 4.2.5 exposes **2,410 tools**. Blender Buddy puts **93** of
-the everyday ones on plain-words buttons in 13 job-ordered sections —
+the everyday ones on plain-words buttons in 13 job-ordered
+section drawers (one open at a time, the rest a single line each) —
 and **all 2,410** are in the searchable "Everything else Blender can
 do" index at the bottom of the same panel, each with Blender's own
 one-line explanation and a Run button. The index is built live from
@@ -136,11 +142,16 @@ the index holds 2,410 tools and its Run button executes real tools;
 sculpt mode, keyframes, GLB/STL/OBJ exports, render and save all
 produce real results; both install paths (zip package and the single
 `.py` file) install and enable through Blender's own Install button.
-The Donut Tour suite walks all 8 steps through the real panel
-operators and proves each one from the scene state (it asserts the
-icing carries a Solidify modifier and a dripped rim, and the dough
-carries its fry-line material); the donut in `demo/` was made by
-the tour itself and rendered through the tour's own camera. The
+The guided-project suite proves the teaching contract — every
+step carries by-hand instructions, a named skill and a
+what's-still-missing line, and no "do this step" button exists in
+the panel — and proves each step's scene check against the step's
+reference build (it asserts the icing carries a Solidify modifier
+and a dripped rim, and the dough carries its fry-line material),
+including the taught by-hand routes (sprinkles scattered by a
+particle system tick the step). The donut in `demo/` was built by
+that reference machinery and rendered through the project's own
+camera. The
 expert suite proves the advice plumbing with a stubbed service — no
 key, no call; answers and suggested buttons land in the panel; an
 invented button name is dropped; a dead service becomes a plain
@@ -177,7 +188,13 @@ hover help said '(undocumented operator)', and the floating card
 sitting half under the window's header strip, struck through by
 the view's own corner text. v0.9 fixes all of them — text now
 wraps to the width that actually fits, every button explains
-itself, and the card sits clear in its corner. Still not verified: a
+itself, and the card sits clear in its corner. Seen again for
+v1.0: the section drawers, the guided-projects shelf, a live step
+card advancing on scene proof, and the card redrawn with rounded
+corners — the first v1.0 photo caught those corners folded into a
+wedge, so the card is now built from explicit triangles with its
+geometry pinned by a test, and the re-shot card is clean. Still
+not verified: a
 live conversation with a real AI service, a real signed-in Codex
 program, or a real local model (each needs the real thing on a
 real machine), and how the panel looks on a physical monitor at

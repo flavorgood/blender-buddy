@@ -42,7 +42,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (0, 9, 0),
+    "version": (1, 0, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -963,11 +963,16 @@ def search_index(query, limit=15):
 
 
 # ----------------------------------------------------------------------------
-# Day 1: the Donut Tour. The donut is the famous first Blender project -
-# the Blender Guru's tutorial made it the rite of passage. This is the
-# same donut in plain words: 8 steps, one press each, and a step only
-# ticks off when the SCENE proves it happened (the object, the colour,
-# the camera are really there) - never just because a button was pressed.
+# Guided projects. The donut is the famous first Blender project -
+# the Blender Guru's tutorial made it the rite of passage, because
+# one small project touches almost every core skill. These packages
+# TEACH it: each step tells the learner what to do, in plain words
+# and real Blender controls, and ticks off only when the SCENE
+# proves they did it (the object, the colour, the render are really
+# there). Nothing here does the steps for them - a tour that does
+# the work teaches nothing. (Each step still carries a reference
+# build, "run", which the test suites use to prove the checks, and
+# which generated the demo donut.)
 # ----------------------------------------------------------------------------
 
 def _scene_obj(context, name):
@@ -1290,7 +1295,7 @@ def _check_icing(context):
 
 def _check_icing_pink(context):
     c = _first_colour(_scene_obj(context, "Icing"))
-    return bool(c) and c[0] > 0.75 and c[1] < 0.65 and 0.25 < c[2] < 0.85
+    return bool(c) and c[0] > 0.75 and c[1] < 0.72 and 0.2 < c[2] < 0.9
 
 
 def _check_dough_colour(context):
@@ -1299,7 +1304,12 @@ def _check_dough_colour(context):
 
 
 def _check_sprinkles(context):
-    return _scene_obj(context, "Sprinkles") is not None
+    if _scene_obj(context, "Sprinkles") is not None:
+        return True
+    # The taught way: a particle system scattering them over the
+    # icing (what the famous tutorial does) proves it too.
+    icing = _scene_obj(context, "Icing")
+    return icing is not None and len(icing.particle_systems) > 0
 
 
 def _check_plate(context):
@@ -1317,7 +1327,16 @@ def _check_picture(context):
     fp = context.scene.render.filepath
     if fp and fp.endswith(".png"):
         target = bpy.path.abspath(fp)
-    return os.path.exists(target) and os.path.getmtime(target) >= epoch - 2
+    if os.path.exists(target) and os.path.getmtime(target) >= epoch - 2:
+        return True
+    # The taught way: the learner renders with F12 and their picture
+    # is sitting in the render window, saved or not. A Render Result
+    # with real pixels in it only exists because someone rendered.
+    img = bpy.data.images.get("Render Result")
+    try:
+        return bool(img) and img.size[0] > 0 and img.has_data
+    except Exception:
+        return False
 
 
 def _check_saved(context):
@@ -1326,53 +1345,210 @@ def _check_saved(context):
 
 TOUR_STEPS = [
     {"title": "Add the dough ring",
-     "how": "Every donut starts as a plain ring of dough. One press "
-            "adds it - and clears Blender's starter cube out of the "
-            "way first, exactly like the famous tutorial does.",
+     "skill": "Adding a shape and changing its settings",
+     "how": "Every donut starts as a plain ring of dough - the "
+            "famous tutorial's first move, and yours.",
+     "teach": [
+         "1. Get rid of the starter cube: click it, press X, then "
+         "choose Delete. (Keep the camera and the light - you will "
+         "want them later.)",
+         "2. Press Shift+A, go to Mesh, click Torus. A ring appears - "
+         "that is the dough's shape.",
+         "3. Look at the bottom-left corner: a small settings box "
+         "appeared for the ring you just added. Set Major Segments "
+         "to 64 and Minor Segments to 24 (smoother), and Minor "
+         "Radius to 0.42 (plumper).",
+         "4. Flatten it a little, like real dough: press S, then Z, "
+         "move the mouse down a touch, and click.",
+         "5. Right-click the ring and choose Shade Smooth.",
+         "6. Open the wrench tab on the right (Modifier Properties), "
+         "click Add Modifier, choose Subdivision Surface, and set "
+         "Levels Viewport to 2."],
+     "missing": "No dough yet - this step is done when a ring "
+                "(a torus) is sitting in your scene.",
      "run": _tour_step_dough, "check": _check_dough},
     {"title": "Make the icing",
-     "how": "His real method: the icing is the top of the dough itself, "
-            "lifted off and given thickness, with its edge pulled down "
-            "the sides into uneven drips. One press does all of it.",
+     "skill": "Edit Mode: changing part of a shape - and modifiers "
+              "that give it thickness",
+     "how": "His real method: the icing is the top of the dough "
+            "itself, lifted off and given thickness, with its edge "
+            "pulled down the sides into uneven drips.",
+     "teach": [
+         "1. Click the dough, press Shift+D, then Enter - an exact "
+         "copy, in exactly the same place.",
+         "2. With the copy picked, press Tab. You are in Edit Mode "
+         "now: working on its skin, not the whole thing. Press 3 "
+         "(above the letters) to select by faces.",
+         "3. Turn your view by holding the middle mouse button and "
+         "dragging. Drag a box over the BOTTOM half of the copy to "
+         "select those faces, then press X and choose Faces. The "
+         "copy is now just the top shell.",
+         "4. Press Tab to leave Edit Mode. In the list of things at "
+         "the top-right (the Outliner), double-click the copy's name "
+         "and rename it to Icing.",
+         "5. With Icing picked, open the wrench tab, click Add "
+         "Modifier, choose Solidify, and set Thickness to 0.05 - "
+         "that gives the icing real thickness.",
+         "6. The drips: Tab back into Edit Mode on the Icing, select "
+         "the faces along its lower edge, press O (nearby points now "
+         "move together), then G, then Z, and pull some spots down "
+         "further than others. Press Tab when it looks drippy."],
+     "missing": "This step is done when a piece named Icing exists "
+                "with a Solidify modifier on it - the top of the "
+                "dough, lifted off and thickened.",
      "run": _tour_step_icing, "check": _check_icing},
     {"title": "Colour the icing pink",
-     "how": "Pink and glossy, like his. One press paints the icing.",
+     "skill": "Materials: giving something a colour and a shine",
+     "how": "Pink and glossy, like his.",
+     "teach": [
+         "1. Click the Icing (if the dough is in the way, pick it in "
+         "the Outliner list at the top-right).",
+         "2. On the right, open the Material tab - the red-and-white "
+         "checker ball.",
+         "3. Click New - the icing gets its own material.",
+         "4. Click the white strip next to Base Color and pick a "
+         "pink: strong on the red, a middling amount of blue, not "
+         "much green. Slide it around until it looks like strawberry "
+         "icing.",
+         "5. Drag Roughness down to about 0.2. Low roughness is what "
+         "makes it glossy, like wet icing."],
+     "missing": "The icing is not pink yet: it needs its own "
+                "material, with a pink Base Color.",
      "run": _tour_step_icing_pink, "check": _check_icing_pink},
     {"title": "Colour the dough golden",
-     "how": "Baked golden, with the pale fry line around its middle - "
-            "the band where the donut floated in the oil.",
+     "skill": "One object, two materials: the fry line",
+     "how": "Baked golden, with the pale fry line around its "
+            "middle - the band where the donut floated in the oil.",
+     "teach": [
+         "1. Click the Dough.",
+         "2. In the Material tab, click New, and set Base Color to a "
+         "baked golden brown - think toast.",
+         "3. The fry line: in the Material tab, click the + at the "
+         "right of the material list to add a second slot, click "
+         "New in it, and make this one a pale tan.",
+         "4. Press Tab for Edit Mode, press 3, and select a band of "
+         "faces around the dough's outside middle.",
+         "5. Back in the Material tab, click the pale material in "
+         "the list, then click Assign - the band turns pale. Press "
+         "Tab to finish."],
+     "missing": "The dough is not golden yet: its first material "
+                "needs a baked golden-brown Base Color.",
      "run": _tour_step_dough_colour, "check": _check_dough_colour},
     {"title": "Add the sprinkles",
-     "how": "Long thin sprinkles lying flat on the icing - about 130, "
-            "in his pastel colours, plus a few that fell on the plate.",
+     "skill": "Scattering: make one sprinkle, get a hundred copies",
+     "how": "Long thin sprinkles lying flat on the icing, in "
+            "pastel colours - scattered by Blender itself, not "
+            "placed one by one.",
+     "teach": [
+         "1. Press Shift+A, Mesh, Ico Sphere - a small ball. Shrink "
+         "it with S, then stretch it into a little rod: press S, "
+         "then Y, drag a little, click.",
+         "2. In the Outliner, rename it Sprinkle. Give it a colour: "
+         "Material tab, New, any bright colour you like.",
+         "3. Click the Icing. Open the Particles tab on the right "
+         "(the icon with dots flying off it) and click the + to add "
+         "a particle system.",
+         "4. Change its Type from Emitter to Hair.",
+         "5. In that same tab, find the Render section: set Render "
+         "As to Object, and in Instance Object choose Sprinkle.",
+         "6. Set Amount to about 130. If they stand on end, look in "
+         "the Rotation section and raise Random - real sprinkles "
+         "lie messily."],
+     "missing": "No sprinkles yet: this step is done when a "
+                "particle system is scattering sprinkles over the "
+                "icing (or an object called Sprinkles exists).",
      "run": _tour_step_sprinkles, "check": _check_sprinkles},
     {"title": "Set the scene",
-     "how": "His final shot, staged: the donut on a white plate, on a "
-            "dark table, with a mug of coffee beside it.",
+     "skill": "Staging a scene: plates, tables and props",
+     "how": "His final shot, staged: the donut on a white plate, "
+            "on a dark table, with a mug of coffee beside it.",
+     "teach": [
+         "1. The plate: Shift+A, Mesh, Cylinder. Flatten it - S, "
+         "then Z, drag down - and widen it with S. Rename it Plate "
+         "in the Outliner, and give it a white material.",
+         "2. If the plate cuts through the donut, lift the donut "
+         "onto it: click the Dough, Shift-click the Icing, then G, "
+         "then Z, and raise them until the dough rests on the plate.",
+         "3. The table: Shift+A, Mesh, Plane. Make it big with S, "
+         "and slip it just under the plate with G, then Z. Give it "
+         "a dark grey-brown material.",
+         "4. The mug: Shift+A, Mesh, Cylinder - smaller, beside the "
+         "plate. Its handle: Shift+A, Mesh, Torus - shrink it, "
+         "press R then X to stand it on edge, and park it against "
+         "the mug's side."],
+     "missing": "This step is done when an object named Plate is "
+                "in the scene, with the donut resting on it.",
      "run": _tour_step_plate, "check": _check_plate},
     {"title": "Take the picture",
-     "how": "A dark room and warm light raking in from the side - the "
-            "mood of his final shot - then the picture itself.",
+     "skill": "Camera, light, and the render",
+     "how": "A dark room and warm light raking in from the side - "
+            "the mood of his final shot - then the picture itself.",
+     "teach": [
+         "1. The mood first: on the right, open the World tab (the "
+         "globe) and set its colour almost black.",
+         "2. Click the light in the scene (or add one: Shift+A, "
+         "Light, Sun). In its tab set Strength to about 2.5 and its "
+         "colour warm, like late sun. Press R and tilt it so the "
+         "light rakes in from the side.",
+         "3. Frame the shot: turn your view with the middle mouse "
+         "until the donut, plate and mug look their best. Then open "
+         "the View menu at the top of the big window: Align View, "
+         "Align Active Camera to View. The camera jumps to where "
+         "you are looking.",
+         "4. Press F12. Blender renders - that is your picture.",
+         "5. In the picture window, choose Image, then Save As, and "
+         "save it somewhere you will find it."],
+     "missing": "No picture yet: frame the donut and press F12 to "
+                "render it.",
      "run": _tour_step_picture, "check": _check_picture},
     {"title": "Save your work",
-     "how": "Saves the whole scene so you can close Blender and come "
-            "back to your donut any time.",
+     "skill": "Files: keeping your work",
+     "how": "Save the whole scene, so you can close Blender and "
+            "come back to your donut any time.",
+     "teach": [
+         "1. Press Ctrl+S.",
+         "2. Choose a folder you will remember, name the file "
+         "My Donut, and click Save Blender File.",
+         "3. From now on, File, Open brings this exact scene back - "
+         "dough, icing and all."],
+     "missing": "Not saved yet: press Ctrl+S and save the file.",
      "run": _tour_step_save, "check": _check_saved},
 ]
 
 
+PACKAGES = [
+    {"id": "donut",
+     "name": "Make a Donut",
+     "byline": "The Blender Guru's famous first project - the one "
+               "millions of people started with.",
+     "intro": "One small project that touches almost everything in "
+              "Blender: shapes, Edit Mode, modifiers, colour, "
+              "scattering, staging a scene, light and camera - and "
+              "saving. You do every step with your own hands, in "
+              "real Blender. This card guides you and ticks each "
+              "step off only when your scene proves you did it.",
+     "steps": TOUR_STEPS},
+]
+
+PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
+
+
+def _active_package(context):
+    pid = getattr(context.scene, "buddy_tour_package", "donut")
+    return PACKAGES_BY_ID.get(pid or "donut", PACKAGES[0])
+
+
 def tour_state(context):
-    """(checks, current step index). A step counts as done only when
-    the scene itself proves it."""
+    """(checks, current step index) for the active guided project.
+    A step counts as done only when the scene itself proves it."""
     checks = []
-    for step in TOUR_STEPS:
+    for step in _active_package(context)["steps"]:
         try:
             checks.append(bool(step["check"](context)))
         except Exception:
             checks.append(False)
     current = checks.index(False) if False in checks else len(checks)
     return checks, current
-
 
 # ----------------------------------------------------------------------------
 # The one operator behind every button
@@ -1480,26 +1656,34 @@ class BUDDY_OT_run_any(Operator):
 
 class BUDDY_OT_tour_start(Operator):
     bl_idname = "buddy.tour_start"
-    bl_label = "Start the Donut"
-    bl_description = ("Start the day-1 donut project: 8 steps, one "
-                      "press each, at the top of the panel")
+    bl_label = "Start a Guided Project"
+    bl_description = ("Start a guided project: it teaches you each "
+                      "step and ticks it off when your scene proves "
+                      "you did it - it never does the steps for you")
     bl_options = {"REGISTER"}
+
+    package: StringProperty(options={"HIDDEN"}, default="donut")
 
     def execute(self, context):
         import time
-        global _EXPERT_TIP
+        global _EXPERT_TIP, _TOUR_TIP_STEP
+        pkg = PACKAGES_BY_ID.get(self.package or "donut", PACKAGES[0])
+        context.scene.buddy_tour_package = pkg["id"]
         context.scene.buddy_tour_started = True
         context.scene.buddy_tour_epoch = int(time.time())
-        _EXPERT_TIP = "Donut tour, step 1: Add the dough ring."
-        self.report({"INFO"}, "Donut tour started - step 1 is at the top "
-                              "of the Blender Buddy panel.")
+        _TOUR_TIP_STEP = 0
+        _EXPERT_TIP = (f"{pkg['name']}, step 1: "
+                       f"{pkg['steps'][0]['title']}.")
+        self.report({"INFO"}, f"{pkg['name']} started - step 1 is at "
+                              "the top of the Blender Buddy panel. "
+                              "You do it; the card ticks it off.")
         return {"FINISHED"}
 
 
 class BUDDY_OT_tour_hide(Operator):
     bl_idname = "buddy.tour_hide"
-    bl_label = "Hide the Donut Tour"
-    bl_description = "Hide the donut project box for now"
+    bl_label = "Hide the Guided Project"
+    bl_description = "Hide the guided project card for now"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -1508,19 +1692,25 @@ class BUDDY_OT_tour_hide(Operator):
 
 
 class BUDDY_OT_tour_do(Operator):
+    """The reference build of a step - kept for the test suites and
+    for generating the demo donut. The guided projects themselves
+    never offer it: they teach, the learner does."""
     bl_idname = "buddy.tour_do"
-    bl_label = "Do This Step"
-    bl_description = ("Do this donut step now. The step only ticks off "
-                      "when the scene itself proves it happened")
+    bl_label = "Build This Step (Reference)"
+    bl_description = ("Build this step the reference way - the "
+                      "machinery the tests use to prove each step's "
+                      "scene check. The guided project in the panel "
+                      "teaches you to do it yourself instead")
     bl_options = {"REGISTER", "UNDO"}
 
     step: IntProperty(options={"HIDDEN"})
 
     def execute(self, context):
         global _EXPERT_TIP
-        if not (0 <= self.step < len(TOUR_STEPS)):
+        steps = _active_package(context)["steps"]
+        if not (0 <= self.step < len(steps)):
             return {"CANCELLED"}
-        step = TOUR_STEPS[self.step]
+        step = steps[self.step]
         try:
             step["run"](context)
         except Exception as exc:
@@ -1528,14 +1718,13 @@ class BUDDY_OT_tour_do(Operator):
             return {"CANCELLED"}
         if step["check"](context):
             nxt = self.step + 1
-            if nxt < len(TOUR_STEPS):
-                _EXPERT_TIP = (f"Donut tour, step {nxt + 1}: "
-                               f"{TOUR_STEPS[nxt]['title']}.")
+            if nxt < len(steps):
+                _EXPERT_TIP = (f"Step {nxt + 1}: {steps[nxt]['title']}.")
                 self.report({"INFO"}, f"Done - {step['title']}. "
-                                      f"Next: {TOUR_STEPS[nxt]['title']}.")
+                                      f"Next: {steps[nxt]['title']}.")
             else:
-                _EXPERT_TIP = "You made the donut. Ask me anything."
-                self.report({"INFO"}, "Done - you made the donut.")
+                _EXPERT_TIP = "Project finished. Ask me anything."
+                self.report({"INFO"}, "Done - project finished.")
         else:
             self.report({"INFO"}, f"{step['title']} - take a look at the "
                                   "scene; the step ticks off when it's "
@@ -1560,6 +1749,9 @@ _CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 _CLAUDE_MODEL = "claude-sonnet-4-5"
 _CLAUDE_VERSION = "2023-06-01"
 _EXPERT_TIP = ""
+# The tour step the floating card was last told about, so the panel
+# only updates the card when the step actually changes.
+_TOUR_TIP_STEP = -1
 _EXPERT_HANDLE = None
 
 
@@ -2410,6 +2602,33 @@ class BUDDY_OT_clear_plan(Operator):
         return {"FINISHED"}
 
 
+def _rounded_rect_points(x0, y0, x1, y1, r, seg=5):
+    """The outline of a rounded rectangle, walked counter-clockwise
+    corner arc by corner arc. Pure geometry - tested headless,
+    because the first fan drawn from it folded into a wedge on
+    screen (TRI_FAN is not honoured the way it is documented, so
+    the overlay below builds explicit triangles from these)."""
+    import math
+    pts = []
+    for cx, cy, a0 in ((x1 - r, y1 - r, 0), (x0 + r, y1 - r, 90),
+                       (x0 + r, y0 + r, 180), (x1 - r, y0 + r, 270)):
+        for i in range(seg + 1):
+            a = math.radians(a0 + 90 * i / seg)
+            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return pts
+
+
+def _fan_tris(cx, cy, pts):
+    """A fan around (cx, cy) through pts, as explicit triangles -
+    the only primitive form that drew as drawn (v1.0 lesson)."""
+    tris = []
+    for i in range(len(pts)):
+        tris.append((cx, cy))
+        tris.append(pts[i])
+        tris.append(pts[(i + 1) % len(pts)])
+    return tris
+
+
 def _draw_expert_overlay():
     """The floating expert: a small card over the 3D window with the
     latest tip. Drawn by Blender itself; must never raise."""
@@ -2432,24 +2651,37 @@ def _draw_expert_overlay():
         # view's own corner text, which is drawn after this card
         # and struck through it at smaller margins.
         x, y = 72, region.height - height - 96
+
         shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-        batch = batch_for_shader(
-            shader, "TRI_FAN",
-            {"pos": [(x, y), (x + width, y), (x + width, y + height),
-                     (x, y + height)]})
         gpu.state.blend_set("ALPHA")
         shader.bind()
+        # The card itself: a rounded rectangle (v1.0 - the sharp
+        # rectangle read as a debug overlay, not a designed card),
+        # built as explicit triangles from the tested outline.
         # Nearly opaque on purpose: at 0.85 the view's own corner
         # text ghosted through the card (seen in screenshots, v0.9).
+        batch = batch_for_shader(
+            shader, "TRIS",
+            {"pos": _fan_tris(x + width / 2, y + height / 2,
+                              _rounded_rect_points(x, y, x + width,
+                                                   y + height, 10))})
         shader.uniform_float("color", (0.05, 0.05, 0.07, 0.97))
         batch.draw(shader)
+        # A gold stripe down its left edge, in the straight section.
+        sx0, sy0, sx1, sy1 = x, y + 10, x + 5, y + height - 10
+        stripe = batch_for_shader(
+            shader, "TRIS",
+            {"pos": [(sx0, sy0), (sx1, sy0), (sx1, sy1),
+                     (sx0, sy0), (sx1, sy1), (sx0, sy1)]})
+        shader.uniform_float("color", (1.0, 0.75, 0.25, 0.95))
+        stripe.draw(shader)
         font = 0
         blf.size(font, 12)
         ty = y + height - 18
         for i, line in enumerate(lines):
             blf.color(font, 1.0, 0.85, 0.4, 1.0) if i == 0 else \
                 blf.color(font, 0.95, 0.95, 0.95, 1.0)
-            blf.position(font, x + 10, ty, 0)
+            blf.position(font, x + 16, ty, 0)
             blf.draw(font, line)
             ty -= 16
         gpu.state.blend_set("NONE")
@@ -2497,7 +2729,7 @@ def _draw_action(layout, act, show_real):
     _wrap(col, act["does"])
     if show_real:
         _wrap(col, f"Blender calls this: {act['real']}   Key: {act['key']}", width=52)
-    layout.separator(factor=0.6)
+    layout.separator(factor=0.35)
 
 
 def _hint(context):
@@ -2533,52 +2765,68 @@ class VIEW3D_PT_blender_buddy(Panel):
         if not (wm.buddy_query or "").strip():
             box = layout.box()
             if not getattr(scene, "buddy_tour_started", False):
-                box.label(text="Day 1: Make a Donut", icon="MESH_TORUS")
-                _wrap(box, "The donut is how millions of people started "
-                           "Blender - the Blender Guru's tutorial made it "
-                           "the famous first project. This is the same "
-                           "donut in plain words: 8 steps, one press each, "
-                           "and a step only ticks off when your scene "
-                           "proves it's done.")
-                box.operator("buddy.tour_start", text="Start the donut")
+                box.label(text="Learn by doing: guided projects",
+                          icon="INFO")
+                for pkg in PACKAGES:
+                    _wrap(box, f"{pkg['name']} - {pkg['byline']}")
+                    _wrap(box, pkg["intro"])
+                    op = box.operator("buddy.tour_start",
+                                      text=f"Start: {pkg['name']}",
+                                      icon="MESH_TORUS")
+                    op.package = pkg["id"]
             else:
+                global _TOUR_TIP_STEP, _EXPERT_TIP
+                pkg = _active_package(context)
+                steps = pkg["steps"]
                 checks, current = tour_state(context)
                 done = sum(checks)
-                if current >= len(TOUR_STEPS):
-                    box.label(text="You made the donut", icon="CHECKMARK")
-                    _wrap(box, "Dough, icing, sprinkles, plate, picture, "
-                               "saved - the same first project as the "
-                               "famous tutorial, done in 8 presses. "
-                               "Everything after this is just more tools "
-                               "from the sections below.")
+                if current != _TOUR_TIP_STEP:
+                    _TOUR_TIP_STEP = current
+                    if current >= len(steps):
+                        _EXPERT_TIP = "You finished it. Ask me anything."
+                    else:
+                        _EXPERT_TIP = (f"{pkg['name']}, step "
+                                       f"{current + 1}: "
+                                       f"{steps[current]['title']}.")
+                if current >= len(steps):
+                    box.label(text=f"You finished: {pkg['name']}",
+                              icon="CHECKMARK")
+                    skills = "; ".join(s["skill"].split(":")[0]
+                                       for s in steps)
+                    _wrap(box, "You did every step yourself, in real "
+                               "Blender. Skills this project touched: "
+                               f"{skills}. Everything after this is "
+                               "just more tools, in the drawers below.")
                     box.operator("buddy.tour_hide", text="Hide this")
                 else:
-                    step = TOUR_STEPS[current]
-                    box.label(text=f"Make a Donut - step {current + 1} of "
-                                   f"{len(TOUR_STEPS)}",
+                    step = steps[current]
+                    box.label(text=f"{pkg['name']} - step "
+                                   f"{current + 1} of {len(steps)}",
                               icon="MESH_TORUS")
                     _wrap(box, step["title"])
                     _wrap(box, step["how"])
-                    op = box.operator("buddy.tour_do", text="Do this step")
-                    op.step = current
-                    _wrap(box, f"Done so far: {done} of {len(TOUR_STEPS)}. "
-                               "Ticks are earned by the scene, not by "
-                               "pressing.")
-                    box.operator("buddy.tour_hide", text="Not now")
+                    _wrap(box, f"The skill: {step['skill']}.")
+                    for line in step["teach"]:
+                        _wrap(box, line)
+                    if not checks[current]:
+                        _wrap(box, f"Not yet: {step['missing']}")
+                    _wrap(box, f"Done so far: {done} of {len(steps)}. "
+                               "Do the step up there in Blender - "
+                               "this card watches your scene and "
+                               "moves on by itself when it's done.")
+                    box.operator("buddy.tour_hide", text="Hide for now")
 
         if not (wm.buddy_query or "").strip():
             box = layout.box()
             box.label(text="Buddy Expert", icon="USER")
             settings = _expert_settings()
             if not _expert_ready(settings):
-                _wrap(box, "Set up your expert and a small expert "
-                           "lives here - and floats over the 3D "
-                           "window. Three ways: your own AI key, your "
-                           "ChatGPT login (through OpenAI's Codex "
-                           "program), or a free local AI with no key "
-                           "and no login at all. Ask in your own "
-                           "words ('how do I make this look like "
-                           "chrome?') and it answers for YOUR scene.")
+                _wrap(box, "Your own AI expert lives here - and "
+                           "floats over the 3D window. Connect it with "
+                           "your key, your ChatGPT login (through "
+                           "Codex), a Claude key, or a free local AI. "
+                           "Ask in your own words and it answers for "
+                           "YOUR scene.")
                 box.operator("buddy.open_prefs", text="Set up the expert")
             else:
                 box.prop(wm, "buddy_agent", text="Let the expert do it")
@@ -2639,12 +2887,9 @@ class VIEW3D_PT_blender_buddy(Panel):
         box.prop(wm, "buddy_show_real",
                  text="Also show Blender's real names")
 
-        for section in SECTIONS:
-            box = layout.box()
-            box.label(text=section)
-            for act in ACTIONS:
-                if act["section"] == section:
-                    _draw_action(box, act, show_real)
+        # The tool sections live in their own collapsible panels
+        # below this one (SECTION_PANELS) - a tidy list of drawers,
+        # not one endless scrolling page.
 
         # The complete index: everything else Blender can do, searchable.
         box = layout.box()
@@ -2680,10 +2925,43 @@ class VIEW3D_PT_blender_buddy(Panel):
                        "it deserves a plain-words button above.")
 
 
+def _make_section_panel(index, section):
+    """One collapsible drawer per tool section, under the main
+    panel. Until v1.0 every section was drawn as a box in one long
+    panel - a scrolling document. Drawers make it an app: a short
+    list of named sections, each opening only when wanted."""
+    def draw(self, context):
+        global _WRAP_CAP
+        _WRAP_CAP = _fit_width(context)
+        wm = context.window_manager
+        show_real = getattr(wm, "buddy_show_real", True)
+        for act in ACTIONS:
+            if act["section"] == section:
+                _draw_action(self.layout, act, show_real)
+
+    attrs = {
+        "bl_idname": f"VIEW3D_PT_buddy_sec_{index}",
+        "bl_label": section,
+        "bl_space_type": "VIEW_3D",
+        "bl_region_type": "UI",
+        "bl_category": "Blender Buddy",
+        "bl_parent_id": "VIEW3D_PT_blender_buddy",
+        "bl_order": index,
+        "draw": draw,
+    }
+    if index > 0:
+        attrs["bl_options"] = {"DEFAULT_CLOSED"}
+    return type(f"VIEW3D_PT_buddy_sec_{index}", (Panel,), attrs)
+
+
+SECTION_PANELS = tuple(
+    _make_section_panel(i, s) for i, s in enumerate(SECTIONS))
+
+
 CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_tour_start, BUDDY_OT_tour_hide, BUDDY_OT_tour_do,
            BUDDY_OT_open_prefs, BUDDY_OT_ask_expert, BUDDY_OT_run_plan,
-           BUDDY_OT_clear_plan, VIEW3D_PT_blender_buddy)
+           BUDDY_OT_clear_plan, VIEW3D_PT_blender_buddy) + SECTION_PANELS
 
 
 def register():
@@ -2702,9 +2980,14 @@ def register():
                     "plain-words button, so you learn them as you go",
         default=True,
     )
+    bpy.types.Scene.buddy_tour_package = StringProperty(
+        name="Guided project",
+        description="Which guided project is active in the panel",
+        default="donut",
+    )
     bpy.types.Scene.buddy_tour_started = BoolProperty(
-        name="Donut tour started",
-        description="Whether the Day 1 Donut Tour is showing in the panel",
+        name="Guided project started",
+        description="Whether a guided project is showing in the panel",
         default=False,
     )
     bpy.types.Scene.buddy_tour_epoch = IntProperty(
@@ -2762,7 +3045,8 @@ def unregister():
                  "buddy_plan_retried"):
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
-    for attr in ("buddy_tour_started", "buddy_tour_epoch"):
+    for attr in ("buddy_tour_started", "buddy_tour_epoch",
+                 "buddy_tour_package"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
     for cls in reversed(CLASSES):

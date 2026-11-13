@@ -80,6 +80,27 @@ for cls in ops:
     check(f"tooltip for {cls.bl_idname}",
           bool(getattr(cls, "bl_description", "").strip()))
 
+# The floating card's shape. A real screenshot (v1.0 draft) caught
+# the rounded rectangle folded into a wedge: the outline was fine,
+# the fan primitive was not. The card is now explicit triangles
+# built from the outline; pin the geometry: every point inside the
+# rectangle, and the triangles' total area matching a rounded
+# rectangle's true area (w*h minus the four corner squares' waste).
+import math
+
+pts = bb._rounded_rect_points(0, 0, 380, 58, 10)
+check("card outline stays inside the rectangle",
+      all(0 <= px <= 380 and 0 <= py <= 58 for px, py in pts))
+tris = bb._fan_tris(190, 29, pts)
+check("card fan is explicit triangles", len(tris) == 3 * len(pts))
+area = 0.0
+for i in range(0, len(tris), 3):
+    (ax, ay), (bx, by), (cx, cy) = tris[i:i + 3]
+    area += abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2
+want = 380 * 58 - (4 - math.pi) * 10 ** 2
+check("card triangles cover the rounded rectangle",
+      abs(area - want) < want * 0.02, f"{area:.0f} vs {want:.0f}")
+
 bb.unregister()
 print("FAILURES:", fails if fails else "none")
 print("ALL VISUAL TESTS PASSED" if not fails else "VISUAL TESTS FAILED")
