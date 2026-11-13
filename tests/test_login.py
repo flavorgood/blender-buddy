@@ -62,7 +62,7 @@ bb.shutil.which = lambda name: "/usr/bin/codex" if name == "codex" else None
 
 def fake_cli(argv, timeout=120):
     cli_calls.append(argv)
-    assert argv[0] == "codex" and argv[1] == "exec"
+    assert argv[0].endswith("codex") and argv[1] == "exec"
     assert "read-only" in argv, "the expert must not write files via Codex"
     return ("SUMMARY: Make a ball.\n"
             "STEP: button:add_ball")

@@ -42,7 +42,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (1, 2, 1),
+    "version": (2, 0, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "AAA-level 3D creation, usable by anyone: Blender "
@@ -808,7 +808,7 @@ def _query_tokens(query):
     return q, tokens
 
 
-def search_actions(query):
+def search_actions(query, available_only=False, context=None):
     """Loose search over the plain-words buttons. People describe the job
     their own way - synonyms, half-words, typos and all - and get ranked
     best matches instead of an all-or-nothing gate. Gibberish still
@@ -820,6 +820,9 @@ def search_actions(query):
     stale = _stale_map()
     for pos, a in enumerate(ACTIONS):
         if a["id"] in stale:
+            continue
+        if available_only and not _action_available(
+                a, context or bpy.context):
             continue
         hay_text = " ".join([a["plain"], a["does"], a["real"],
                              a.get("words", "")]).lower()
@@ -1685,6 +1688,639 @@ TOUR_STEPS = [
 ]
 
 
+
+# ----------------------------------------------------------------------------
+# Job flows: the community's ways of working, as packages.
+# The step ORDER and the methods come from the gathered
+# community patterns (redesign/COMMUNITY_PATTERNS.md): blockout
+# before detail, transforms locked before bevels and exports,
+# modifiers live and in stack order, check in the view that
+# reveals the problem, export a copy and keep the source.
+# Like the projects, a flow TEACHES: the user does each step;
+# the scene proves it. Checks are gates - a gate the scene
+# already satisfies (size already locked, camera already
+# there) simply reads as done, which is how a flow can meet
+# you in the middle of a job.
+# ----------------------------------------------------------------------------
+
+def _flow_meshes(context):
+    return [o for o in context.scene.objects if o.type == "MESH"]
+
+
+def _flow_main(context):
+    obj = context.object
+    if obj is not None and obj.type == "MESH":
+        return obj
+    meshes = _flow_meshes(context)
+    if not meshes:
+        return None
+    return max(meshes, key=lambda o: len(o.data.vertices))
+
+
+def _flow_pick_main(context):
+    main = _flow_main(context)
+    if main is None:
+        return None
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    main.select_set(True)
+    context.view_layer.objects.active = main
+    return main
+
+
+def _flow_locked(obj):
+    if obj is None:
+        return False
+    return (all(abs(s - 1.0) < 0.001 for s in obj.scale)
+            and all(abs(r) < 0.001 for r in obj.rotation_euler))
+
+
+def _flow_run_lock(context):
+    if _flow_pick_main(context) is not None:
+        bpy.ops.buddy.action(action_id="lock_size")
+
+
+def _flow_run_subdivide(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        bpy.ops.mesh.primitive_cube_add()
+        main = context.object
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.subdivide(number_cuts=1)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+# -- hard-surface flow -------------------------------------------------
+
+def _check_flow_reference(context):
+    return any(o.type == "EMPTY"
+               and getattr(o, "empty_display_type", "") == "IMAGE"
+               for o in context.scene.objects)
+
+
+def _flow_run_reference(context):
+    bpy.ops.object.empty_add(type="IMAGE")
+
+
+def _check_flow_blockout(context):
+    return any(len(o.data.vertices) >= 4 for o in _flow_meshes(context))
+
+
+def _flow_run_blockout(context):
+    if not _flow_meshes(context):
+        bpy.ops.mesh.primitive_cube_add()
+
+
+def _check_flow_locked(context):
+    return _flow_locked(_flow_main(context))
+
+
+def _check_flow_forms(context):
+    main = _flow_main(context)
+    return main is not None and len(main.data.vertices) > 8
+
+
+def _check_flow_detail(context):
+    return any(m.type in ("BOOLEAN", "ARRAY")
+               for o in _flow_meshes(context) for m in o.modifiers)
+
+
+def _flow_run_detail(context):
+    if _flow_pick_main(context) is not None:
+        bpy.ops.buddy.action(action_id="row_of_them")
+
+
+def _check_flow_thickness(context):
+    return any(m.type in ("SOLIDIFY", "SUBSURF")
+               for o in _flow_meshes(context) for m in o.modifiers)
+
+
+def _flow_run_thickness(context):
+    if _flow_pick_main(context) is not None:
+        bpy.ops.buddy.action(action_id="give_thickness")
+
+
+def _check_flow_edges(context):
+    return any(m.type == "BEVEL"
+               for o in _flow_meshes(context) for m in o.modifiers)
+
+
+def _flow_run_edges(context):
+    if _flow_pick_main(context) is not None:
+        bpy.ops.buddy.action(action_id="round_all_edges")
+
+
+def _check_flow_hard_finish(context):
+    return (any(m.type == "WEIGHTED_NORMAL"
+                for o in _flow_meshes(context) for m in o.modifiers)
+            and _check_saved(context))
+
+
+def _flow_run_hard_finish(context):
+    if _flow_pick_main(context) is not None:
+        bpy.ops.buddy.action(action_id="fix_hard_shading")
+        bpy.ops.buddy.action(action_id="save_work")
+
+
+HARD_SURFACE_STEPS = [
+    {"title": "Set the size and bring in a reference",
+     "skill": "Working from something real: size and a picture to "
+              "check against",
+     "how": "How the community starts every hard-surface job: "
+            "never a blank window. Real size first - light, "
+            "bevels and printing all depend on it - and a "
+            "reference picture pinned where you can see it.",
+     "teach": [
+         "1. Decide how big the real thing is. In the sidebar "
+         "(press N) under Item, your picked thing shows its "
+         "Dimensions - size it with S until they read right.",
+         "2. Bring the reference in: drag a photo of the thing "
+         "straight into the big 3D window, or press Shift+A, "
+         "choose Image, then Reference.",
+         "3. Park the picture behind or beside your work area "
+         "with G, and turn back to it whenever you check the "
+         "outline."],
+     "missing": "No reference picture in the scene yet - drag "
+                "one into the 3D window.",
+     "tools": ["tool_move", "tool_size"],
+     "run": _flow_run_reference, "check": _check_flow_reference},
+    {"title": "Block out the big shapes",
+     "skill": "Blockout: silhouette and proportions before any "
+              "detail",
+     "how": "One plain shape per big part - a box for the body, "
+            "a tube for the handle. No detail at all yet: if the "
+            "outline doesn't read at this stage, no detail will "
+            "save it.",
+     "teach": [
+         "1. Add the big masses with the Add buttons above - one "
+         "shape per part of the real thing.",
+         "2. Move, turn and size them until the outline matches "
+         "your reference from the front, the side and the top "
+         "(the Move around drawer has the one-press views).",
+         "3. If it's the same on both sides, use Mirror on it "
+         "instead of building the other half by hand."],
+     "missing": "No blockout shape yet - add a box or a tube to "
+                "start the silhouette.",
+     "tools": ["add_cube", "add_tube", "tool_move", "tool_size",
+               "tool_turn", "mirror_it"],
+     "run": _flow_run_blockout, "check": _check_flow_blockout},
+    {"title": "Lock the size before you shape",
+     "skill": "Apply transforms: the invisible setting that "
+              "breaks bevels when it's wrong",
+     "how": "Every guide names this gate: once the blockout is "
+            "sized, lock it in (Blender calls it Apply Scale and "
+            "Rotation). Skip it and bevels come out uneven and "
+            "nobody tells you why.",
+     "teach": [
+         "1. Click the blocked-out thing.",
+         "2. Press the Lock the size in button below - it bakes "
+         "the size and turn into the shape itself.",
+         "3. Do it for every part you sized, before any real "
+         "shaping starts."],
+     "missing": "The main shape's size isn't locked in yet - "
+                "click it and use Lock the size in.",
+     "tools": ["lock_size", "handle_middle"],
+     "run": _flow_run_lock, "check": _check_flow_locked},
+    {"title": "Build the main forms",
+     "skill": "Box modelling: loop cuts, insets and pulling "
+              "faces - the heart of hard-surface work",
+     "how": "Now the shaping, in Edit Mode: cuts to place the "
+            "structure, insets for panels, pulling faces out or "
+            "in for the raised and recessed parts.",
+     "teach": [
+         "1. Press Start shaping (or Tab) to work on the skin of "
+         "the thing.",
+         "2. Cut a line around it where a panel edge or a bend "
+         "belongs (Cut a line around it), select the face inside "
+         "it, and sink it a little (Sink a face inwards).",
+         "3. Pull faces out for raised parts (Pull a face out). "
+         "Work big forms first; small detail comes later."],
+     "missing": "The main shape is still a plain block - it "
+                "needs cuts and shaped faces (more points than "
+                "the 8 it started with).",
+     "tools": ["start_shaping", "pull_face", "inset_face",
+               "loop_cut", "knife", "split_faces"],
+     "run": _flow_run_subdivide, "check": _check_flow_forms},
+    {"title": "Add openings and repeats - without wrecking "
+              "the original",
+     "skill": "Non-destructive detail: live cutters and arrays",
+     "how": "Holes, ports, vents, bolts: the community way "
+            "keeps them LIVE - a cutter you can still move, a "
+            "row you can still recount - instead of carving the "
+            "shape itself to pieces.",
+     "teach": [
+         "1. For a hole: add a shape where the hole belongs, "
+         "pick the main thing first and the cutter last, then "
+         "Cut a hole through it.",
+         "2. For repeats - bolts, vents, ridges - use Make a "
+         "row of copies and set the count in the wrench tab.",
+         "3. Leave them live until the design is settled. "
+         "Making them permanent is a finishing step, not a "
+         "modelling step."],
+     "missing": "No live detail yet: the shape needs a Boolean "
+                "cut or an Array row on it.",
+     "tools": ["cut_hole", "row_of_them", "mirror_it"],
+     "run": _flow_run_detail, "check": _check_flow_detail},
+    {"title": "Give it thickness or hold its shape",
+     "skill": "Solidify and Subdivision: walls, and smoothing "
+              "that keeps its edges",
+     "how": "Thin shells become real walls with Solidify. If "
+            "you smooth the shape instead (Subdivision), the "
+            "order matters: edge control comes before the "
+            "smoother in the stack, or the edges melt.",
+     "teach": [
+         "1. Pick the shape and give it thickness (Give it "
+         "thickness) if it's a shell - a mug wall, a casing.",
+         "2. Or smooth it (Make it smoother & rounder) and add "
+         "extra cuts near edges that must stay crisp.",
+         "3. Check the stack in the wrench tab: things apply "
+         "top to bottom, so read it like a recipe."],
+     "missing": "No thickness or smoothing on the shape yet.",
+     "tools": ["give_thickness", "make_smoother"],
+     "run": _flow_run_thickness, "check": _check_flow_thickness},
+    {"title": "Control the edges",
+     "skill": "Bevels: real edges catch the light",
+     "how": "Nothing manufactured has a perfectly sharp edge. "
+            "A small bevel is what makes a model read as a real "
+            "object in the light - the community step that "
+            "separates 'CG block' from 'thing'.",
+     "teach": [
+         "1. Pick the shape and press Round off all the edges.",
+         "2. In the wrench tab, keep the width small - just "
+         "enough to catch a highlight.",
+         "3. For one local edge instead: shape it, select the "
+         "edge, and use Round off a sharp edge."],
+     "missing": "No bevel on the shape yet - its edges are "
+                "still knife-sharp.",
+     "tools": ["round_all_edges", "round_edge"],
+     "run": _flow_run_edges, "check": _check_flow_edges},
+    {"title": "Fix the shading, then save the source",
+     "skill": "Weighted normals, and keeping the live source "
+              "file",
+     "how": "Last in the stack: Weighted Normal smooths out "
+            "the shading smears that cuts and bevels leave "
+            "behind. Then save - the file keeps everything "
+            "live and editable; exports are copies of it, "
+            "never replacements.",
+     "teach": [
+         "1. Press Keep hard shading crisp (the Weighted "
+         "Normal) and turn the view around: flat faces should "
+         "shade flat and clean, with no smears or black "
+         "patches.",
+         "2. If a face shades inside-out, shape it, select "
+         "all, and use Point the faces the right way.",
+         "3. Save the file (Ctrl+S). This is the source - "
+         "everything else gets made from it."],
+     "missing": "Not finished: the shape needs its shading "
+                "fixed (Weighted Normal) and the file saved.",
+     "tools": ["fix_hard_shading", "look_smooth", "save_work"],
+     "run": _flow_run_hard_finish, "check": _check_flow_hard_finish},
+]
+
+
+# -- look-real flow ------------------------------------------------------
+
+def _check_flow_model_ready(context):
+    main = _flow_main(context)
+    return main is not None and (len(main.data.vertices) > 8
+                                 or len(main.modifiers) > 0)
+
+
+def _check_flow_camera(context):
+    return context.scene.camera is not None
+
+
+def _flow_run_camera(context):
+    if context.scene.camera is None:
+        bpy.ops.buddy.action(action_id="add_camera")
+        cam = context.object
+        if cam is not None and cam.type == "CAMERA":
+            context.scene.camera = cam
+
+
+def _check_flow_lit(context):
+    scene = context.scene
+    if sum(1 for o in scene.objects if o.type == "LIGHT") >= 3:
+        return True
+    world = scene.world
+    if world is not None and world.use_nodes and world.node_tree:
+        return any(n.type == "TEX_ENVIRONMENT"
+                   and getattr(n, "image", None)
+                   for n in world.node_tree.nodes)
+    return False
+
+
+def _flow_run_light(context):
+    while sum(1 for o in context.scene.objects
+              if o.type == "LIGHT") < 3:
+        bpy.ops.buddy.action(action_id="add_sun")
+        if sum(1 for o in context.scene.objects
+               if o.type == "LIGHT") < 3:
+            bpy.ops.buddy.action(action_id="add_lamp")
+
+
+def _check_flow_material(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    for mat in main.data.materials:
+        if mat is not None and mat.use_nodes and mat.node_tree:
+            if any(n.type == "BSDF_PRINCIPLED"
+                   for n in mat.node_tree.nodes):
+                return True
+    return False
+
+
+def _flow_run_material(context):
+    if _flow_pick_main(context) is not None:
+        bpy.ops.buddy.action(action_id="give_colour")
+
+
+def _flow_run_picture(context):
+    bpy.ops.buddy.action(action_id="take_picture")
+
+
+def _flow_run_save(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+LOOK_REAL_STEPS = [
+    {"title": "Start from a sound model",
+     "skill": "The model comes first - looks are judged on a "
+              "finished shape",
+     "how": "Both community guides are blunt about the order: "
+            "a sound, finished model first. Detail and looks "
+            "can't rescue a shape that isn't there yet.",
+     "teach": [
+         "1. Finish the modelling first - silhouette and main "
+         "forms settled (the hard-surface way of working walks "
+         "through exactly that).",
+         "2. If the thing is still a plain block, this flow "
+         "will wait here until it isn't."],
+     "missing": "The model isn't shaped yet - it's still a "
+                "plain block with nothing done to it.",
+     "tools": ["start_shaping", "split_faces"],
+     "run": _flow_run_subdivide, "check": _check_flow_model_ready},
+    {"title": "Check its real size",
+     "skill": "Real-world scale: light and cameras behave "
+              "differently at the wrong size",
+     "how": "Light falls off and camera lenses act like the "
+            "real world - a model at the wrong scale will fight "
+            "every later step. Lock its size in now.",
+     "teach": [
+         "1. Click the model and read its Dimensions in the "
+         "sidebar (N key, Item tab) - do they match the real "
+         "thing?",
+         "2. Press Lock the size in so the size is baked into "
+         "the shape."],
+     "missing": "The model's size isn't locked in yet.",
+     "tools": ["lock_size", "handle_middle", "centre_world"],
+     "run": _flow_run_lock, "check": _check_flow_locked},
+    {"title": "Frame the shot",
+     "skill": "Composition before materials: decide what the "
+              "picture is",
+     "how": "The guides decide the shot BEFORE the materials, "
+            "because materials are judged in the frame and "
+            "light they'll actually live in.",
+     "teach": [
+         "1. If there's no camera, add one (Add a camera).",
+         "2. Turn your view until the model sits well, then "
+         "use Move the camera to what I'm looking at - the "
+         "camera takes the shot you just composed.",
+         "3. Look through it (Look through the camera) and "
+         "nudge until the framing is the picture you want."],
+     "missing": "No camera in the scene yet.",
+     "tools": ["add_camera", "camera_here", "look_camera"],
+     "run": _flow_run_camera, "check": _check_flow_camera},
+    {"title": "Light it - first pass",
+     "skill": "Three-point lighting and environment light",
+     "how": "The studio pattern: a key light to shape it, a "
+            "fill so the shadows aren't dead, a rim from "
+            "behind to lift it off the background - or an "
+            "environment (HDRI) doing the same job. Judge "
+            "shapes now, colours later.",
+     "teach": [
+         "1. Add sunlight for the key and a lamp or two for "
+         "fill and rim; move each one like any other thing.",
+         "2. Switch the big window's shading to Rendered (the "
+         "last of the four balls at its top-right) so you see "
+         "the real light.",
+         "3. Or: in the World tab, give the world an "
+         "environment picture (HDRI) - instant believable "
+         "reflections and light."],
+     "missing": "The scene needs a lighting setup: three "
+                "lights, or an environment picture in the World.",
+     "tools": ["add_sun", "add_lamp"],
+     "run": _flow_run_light, "check": _check_flow_lit},
+    {"title": "Give it real surfaces",
+     "skill": "Principled materials: one honest material per "
+              "surface",
+     "how": "Realism comes from the Principled material plus "
+            "variation - roughness that isn't perfectly even, "
+            "a normal map for surface detail - not from exotic "
+            "shaders. One warning from production order: "
+            "picture-based materials need UVs first; a model "
+            "with no UV map routes to unwrapping before "
+            "textures will sit right.",
+     "teach": [
+         "1. Click the model and give it a colour to start - "
+         "that lays down a real Principled material.",
+         "2. In the Material tab, set Roughness per surface: "
+         "polished things low, rough things high. Nothing "
+         "real is perfectly even.",
+         "3. Add picture textures (Base Color, Roughness, "
+         "Normal) in the Shader editor when you're ready - "
+         "that's where real surfaces come from."],
+     "missing": "The model has no real (Principled) material "
+                "yet.",
+     "tools": ["give_colour"],
+     "run": _flow_run_material, "check": _check_flow_material},
+    {"title": "Polish the light, then take the picture",
+     "skill": "Second lighting pass, camera settings, and "
+              "the render",
+     "how": "With real surfaces on, judge the light again: "
+            "colour, strength, ratios. Set the camera's lens, "
+            "choose the engine (Cycles for realism, Eevee for "
+            "speed), set the picture size - then render.",
+     "teach": [
+         "1. In Rendered view, tune each light's strength and "
+         "colour against the real materials.",
+         "2. Click the camera and set its Focal Length in the "
+         "camera tab - 50 is neutral, wider feels dramatic.",
+         "3. In the Render tab pick Cycles for the realistic "
+         "engine and your picture size, then Take the "
+         "picture."],
+     "missing": "No picture taken yet in this flow - frame, "
+                "light, and render it.",
+     "tools": ["take_picture"],
+     "run": _flow_run_picture, "check": _check_picture},
+    {"title": "Save it before you lose it",
+     "skill": "A render you didn't save is a picture you "
+              "don't have",
+     "how": "The classic lost-work moment: the render sits "
+            "in the picture window, unsaved, and one click "
+            "closes it forever. Save the picture AND the file.",
+     "teach": [
+         "1. In the picture window: Image, Save As - save "
+         "the render somewhere you'll find it.",
+         "2. Save the Blender file too (Save your work) - "
+         "the scene is the source of the picture."],
+     "missing": "The file isn't saved yet.",
+     "tools": ["save_work", "send_web"],
+     "run": _flow_run_save, "check": _check_saved},
+]
+
+
+# -- 3D printing flow ----------------------------------------------------
+
+def _check_flow_mm(context):
+    units = context.scene.unit_settings
+    return (units.length_unit == "MILLIMETERS"
+            and abs(units.scale_length - 0.001) < 1e-6)
+
+
+def _flow_run_mm(context):
+    units = context.scene.unit_settings
+    units.system = "METRIC"
+    units.length_unit = "MILLIMETERS"
+    units.scale_length = 0.001
+
+
+def _check_flow_solid(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    counts = {}
+    for poly in main.data.polygons:
+        for key in poly.edge_keys:
+            counts[key] = counts.get(key, 0) + 1
+    if not counts or any(v != 2 for v in counts.values()):
+        return False
+    verts = [tuple(v.co) for v in main.data.vertices]
+    return len(set(verts)) == len(verts)
+
+
+def _flow_run_solid(context):
+    main = _flow_pick_main(context)
+    if main is None or _check_flow_solid(context):
+        return
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    try:
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
+    except Exception:
+        pass
+    try:
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+    except Exception:
+        pass
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _check_flow_stl(context):
+    epoch = getattr(context.scene, "buddy_tour_epoch", 0)
+    if epoch <= 0:
+        return False
+    path = _home("blender_buddy_model.stl")
+    return (os.path.exists(path)
+            and os.path.getmtime(path) >= epoch - 2)
+
+
+def _flow_run_stl(context):
+    if _flow_pick_main(context) is not None:
+        bpy.ops.buddy.action(action_id="send_print")
+
+
+PRINT_STEPS = [
+    {"title": "Set millimetres first",
+     "skill": "Print units: the slicer reads everything as "
+              "millimetres",
+     "how": "The printing guides set units at the START, not "
+            "at export: print files carry bare numbers that "
+            "slicers read as millimetres, so a model built at "
+            "the wrong scale prints at the wrong size.",
+     "teach": [
+         "1. Open the Scene tab on the right (the one with "
+         "the little scene icon).",
+         "2. Under Units: Length = Millimeters, and Unit "
+         "Scale = 0.001.",
+         "3. Check your thing's Dimensions (sidebar, Item) "
+         "read as the real millimetres you want to hold."],
+     "missing": "The scene isn't set to millimetres yet.",
+     "tools": [],
+     "run": _flow_run_mm, "check": _check_flow_mm},
+    {"title": "Finish it and lock the size",
+     "skill": "Transforms locked before checks mean anything",
+     "how": "Same gate as everywhere: rotation and scale "
+            "baked in, or every check and the export itself "
+            "measures a lie.",
+     "teach": [
+         "1. Finish the modelling - printing prep starts "
+         "from a finished thing.",
+         "2. Click it and press Lock the size in."],
+     "missing": "The thing's size and rotation aren't locked "
+                "in yet.",
+     "tools": ["lock_size", "centre_world"],
+     "run": _flow_run_lock, "check": _check_flow_locked},
+    {"title": "Make it one solid thing - and prove it",
+     "skill": "Watertight: one closed solid, outward faces, "
+              "no doubled points",
+     "how": "A printer needs ONE closed solid. The official "
+            "checker (3D Print Toolbox, in Get Extensions) "
+            "runs Check All for the full report - Buddy ticks "
+            "this step when the core truth holds: every edge "
+            "belongs to exactly two faces, and no two points "
+            "sit in the same place. Thickness and overhang "
+            "are reviewed in the slicer - they're support "
+            "questions, not always mesh errors.",
+     "teach": [
+         "1. Shape the thing, select all of it, and merge "
+         "points that sit on top of each other (Join points "
+         "that are on top of each other).",
+         "2. Point the faces outward (Point the faces the "
+         "right way).",
+         "3. Holes in the shell: select the open ring of "
+         "edges and Fill in a missing face, until the shell "
+         "closes."],
+     "missing": "Not one solid yet: the shell has openings, "
+                "or points doubled up on each other.",
+     "tools": ["start_shaping", "join_close_points", "fix_faces",
+               "fill_face"],
+     "run": _flow_run_solid, "check": _check_flow_solid},
+    {"title": "Send it to the slicer",
+     "skill": "Export a copy; the slicer has the last word "
+              "on size",
+     "how": "Export the print file (STL) from the finished, "
+            "checked thing - then confirm the size and "
+            "direction in your slicer. Buddy's job ends at a "
+            "verified export; the slicer check happens "
+            "outside Blender and nothing in here replaces it.",
+     "teach": [
+         "1. Click the finished thing.",
+         "2. Press Send it out for 3D printing - the file "
+         "lands in your home folder as blender_buddy_model.stl.",
+         "3. Open it in your slicer and confirm the size in "
+         "millimetres is the size in your hand will be."],
+     "missing": "No print file exported yet in this flow.",
+     "tools": ["send_print"],
+     "run": _flow_run_stl, "check": _check_flow_stl},
+    {"title": "Keep the source",
+     "skill": "The .blend is the master; the print file is "
+              "a copy of it",
+     "how": "Save the Blender file with everything live. "
+            "Next change starts from the source, never from "
+            "the exported print file.",
+     "teach": [
+         "1. Press Save your work (Ctrl+S).",
+         "2. Exports are copies: the next change always starts "
+         "from this file, never from the print file."],
+     "missing": "The source file isn't saved yet.",
+     "tools": ["save_work"],
+     "run": _flow_run_save, "check": _check_saved},
+]
+
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -1697,6 +2333,45 @@ PACKAGES = [
               "real Blender. This card guides you and ticks each "
               "step off only when your scene proves you did it.",
      "steps": TOUR_STEPS},
+    {"id": "hard_surface",
+     "kind": "flow",
+     "name": "Make a hard-surface thing",
+     "byline": "The community's order for mugs, crates, tools "
+               "and props: blockout, locked size, forms, live "
+               "detail, edges, shading.",
+     "intro": "Not a lesson about a specific object - a way of "
+              "working, in the order experienced modellers "
+              "actually do it, gathered from the community's "
+              "own guides. Start it beside your own project: "
+              "each step names the method, shows the few tools "
+              "that matter for it, and ticks off only when your "
+              "scene proves the step is true.",
+     "steps": HARD_SURFACE_STEPS},
+    {"id": "look_real",
+     "kind": "flow",
+     "name": "Make it look real",
+     "byline": "The rendering order from the community's "
+               "workflow guides: shot first, light, surfaces, "
+               "light again, picture, save.",
+     "intro": "The discipline both full workflow guides "
+              "teach: composition and lighting are decided "
+              "before material detail, because materials are "
+              "judged under the light they'll live in. Start "
+              "it with a finished model and work the steps "
+              "against your own scene.",
+     "steps": LOOK_REAL_STEPS},
+    {"id": "print_ready",
+     "kind": "flow",
+     "name": "Get it ready for 3D printing",
+     "byline": "The print checklist as a gate sequence: "
+               "millimetres, locked size, one solid, export, "
+               "verify in the slicer.",
+     "intro": "The most checklist-like job in Blender, run "
+              "as gates in the community's order - no step is "
+              "optional in the sources. Each gate ticks only "
+              "when the scene proves it, and the last check "
+              "still happens in your slicer, where it belongs.",
+     "steps": PRINT_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -1993,8 +2668,9 @@ class BUDDY_Preferences(AddonPreferences):
     expert_float: BoolProperty(
         name="Float the expert over the 3D window",
         description="Show the expert's latest tip as a small floating "
-                    "card over the big 3D window",
-        default=True)
+                    "card over the big 3D window. Off by default - "
+                    "the card got in the way more than it helped",
+        default=False)
 
     def draw(self, context):
         global _WRAP_CAP
@@ -2005,6 +2681,24 @@ class BUDDY_Preferences(AddonPreferences):
         layout.prop(self, "expert_url")
         layout.prop(self, "expert_model")
         layout.prop(self, "expert_float")
+        layout.operator("buddy.test_expert",
+                        text="Test this connection")
+        try:
+            status = context.window_manager.buddy_expert_status
+        except Exception:
+            status = ""
+        if (status or "").strip():
+            _wrap(layout, status)
+        if self.expert_service == "CODEX":
+            found = _find_codex()
+            if found:
+                _wrap(layout, f"Codex program: found ({found}).")
+            else:
+                _wrap(layout, "Codex program: not found on this "
+                              "computer yet. Install OpenAI's Codex "
+                              "program, open it once and sign in "
+                              "with your ChatGPT account, then press "
+                              "Test this connection.")
         _wrap(layout, "Why no plain 'log in with ChatGPT or Muse' "
                       "button? Those companies don't offer one to "
                       "other apps: a ChatGPT or Claude subscription "
@@ -2040,7 +2734,7 @@ def _expert_settings():
                 "service": prefs.expert_service}
     except Exception:
         return {"key": "", "url": _EXPERT_DEFAULT_URL,
-                "model": _EXPERT_DEFAULT_MODEL, "float": True,
+                "model": _EXPERT_DEFAULT_MODEL, "float": False,
                 "service": "KEY"}
 
 
@@ -2054,7 +2748,7 @@ def _expert_ready(settings):
     for a local AI."""
     service = settings.get("service", "KEY")
     if service == "CODEX":
-        return shutil.which("codex") is not None
+        return _find_codex() is not None
     if service == "LOCAL":
         return True
     return bool(settings.get("key")) or _is_local_url(settings.get("url"))
@@ -2090,6 +2784,12 @@ def _run_cli(argv, timeout=120):
     prints. This is the ONLY way Buddy talks to a subscription
     login: through the company's own program, never through a
     copied login."""
+    if os.name == "nt" and str(argv[0]).lower().endswith((".cmd", ".bat")):
+        # Windows cannot run a .cmd/.bat file directly - it has to
+        # go through the command shell. The npm-installed Codex is
+        # a .cmd, which is exactly why "setting up Codex doesn't
+        # work" on Windows when a program is launched naively.
+        argv = ["cmd", "/c"] + list(argv)
     proc = subprocess.run(argv, capture_output=True, text=True,
                           timeout=timeout, cwd=tempfile.gettempdir())
     if proc.returncode != 0:
@@ -2098,8 +2798,47 @@ def _run_cli(argv, timeout=120):
     return proc.stdout
 
 
+def _find_codex():
+    """Find OpenAI's Codex program wherever it actually landed on
+    this computer. The PATH lookup alone misses the normal Windows
+    installs (the desktop app and the npm shim don't always
+    register a plain 'codex' command), which made the ChatGPT
+    route look broken. Returns the full path, or None."""
+    for name in ("codex", "codex.cmd", "codex.exe", "codex.bat"):
+        found = shutil.which(name)
+        if found:
+            return found
+    if os.name == "nt":
+        guesses = []
+        appdata = os.environ.get("APPDATA")
+        local = os.environ.get("LOCALAPPDATA")
+        if appdata:
+            guesses += [os.path.join(appdata, "npm", "codex.cmd"),
+                        os.path.join(appdata, "npm", "codex.bat")]
+        if local:
+            guesses += [os.path.join(local, "Programs", "Codex",
+                                     "codex.exe"),
+                        os.path.join(local, "Programs", "OpenAI Codex",
+                                     "codex.exe"),
+                        os.path.join(local, "Microsoft", "WindowsApps",
+                                     "codex.exe")]
+        home = os.path.expanduser("~")
+        guesses += [os.path.join(home, ".local", "bin", "codex.exe"),
+                    os.path.join(home, ".codex", "bin", "codex.exe")]
+        for guess in guesses:
+            if os.path.isfile(guess):
+                return guess
+    return None
+
+
 def _ask_via_codex(system, user):
-    out = _run_cli(["codex", "exec", "-s", "read-only",
+    path = _find_codex()
+    if not path:
+        raise RuntimeError(
+            "the Codex program isn't on this computer yet - install "
+            "OpenAI's Codex program, open it once and sign in with "
+            "your ChatGPT account, then ask again")
+    out = _run_cli([path, "exec", "-s", "read-only",
                     "--skip-git-repo-check", f"{system}\n\n{user}"])
     text = (out or "").strip()
     if not text:
@@ -2650,6 +3389,47 @@ class BUDDY_OT_ask_expert(Operator):
         return {"FINISHED"}
 
 
+class BUDDY_OT_test_expert(Operator):
+    """Send one tiny test question through the expert route the
+    user picked, and say plainly whether it answered. The Codex
+    setup failed silently before this existed (owner, 2026-11-12:
+    "setting up codex doesnt work") - now there is proof either
+    way, in words."""
+    bl_idname = "buddy.test_expert"
+    bl_label = "Test the Expert Connection"
+    bl_description = ("Send one tiny test question through the "
+                      "expert route you picked above and show, in "
+                      "plain words, whether it answered")
+
+    def execute(self, context):
+        settings = _expert_settings()
+        service = settings.get("service", "KEY")
+        try:
+            if service == "CODEX" and _find_codex() is None:
+                raise RuntimeError(
+                    "the Codex program isn't on this computer yet. "
+                    "Install OpenAI's Codex program, open it once "
+                    "and sign in with your ChatGPT account, then "
+                    "press Test again")
+            reply = _ask_ai(settings, "You are a connection test.",
+                            "Reply with exactly: BUDDY OK")
+            if "BUDDY OK" in (reply or ""):
+                msg = ("It works - your expert answered the test "
+                       "question. Ask it anything in the panel.")
+            else:
+                msg = ("Something answered, but not cleanly: "
+                       + (reply or "")[:90])
+        except Exception as exc:
+            msg = f"Not working yet: {exc}"
+        try:
+            context.window_manager.buddy_expert_status = msg
+        except Exception:
+            pass
+        self.report({"INFO"} if msg.startswith("It works")
+                    else {"WARNING"}, msg[:240])
+        return {"FINISHED"}
+
+
 class BUDDY_OT_run_plan(Operator):
     bl_idname = "buddy.run_plan"
     bl_label = "Run These Steps"
@@ -2943,18 +3723,8 @@ class VIEW3D_PT_blender_buddy(Panel):
 
         scene = context.scene
         if not (wm.buddy_query or "").strip():
-            box = layout.box()
-            if not getattr(scene, "buddy_tour_started", False):
-                box.label(text="Learn by doing: guided projects",
-                          icon="INFO")
-                for pkg in PACKAGES:
-                    _wrap(box, f"{pkg['name']} - {pkg['byline']}")
-                    _wrap(box, pkg["intro"])
-                    op = box.operator("buddy.tour_start",
-                                      text=f"Start: {pkg['name']}",
-                                      icon="MESH_TORUS")
-                    op.package = pkg["id"]
-            else:
+            if getattr(scene, "buddy_tour_started", False):
+                box = layout.box()
                 global _TOUR_TIP_STEP, _EXPERT_TIP
                 pkg = _active_package(context)
                 steps = pkg["steps"]
@@ -2988,6 +3758,16 @@ class VIEW3D_PT_blender_buddy(Panel):
                     _wrap(box, f"The skill: {step['skill']}.")
                     for line in step["teach"]:
                         _wrap(box, line)
+                    shown = []
+                    for tid in step.get("tools") or []:
+                        act = ACTIONS_BY_ID.get(tid)
+                        if act and _action_available(act, context):
+                            shown.append(act)
+                    if shown:
+                        box.label(text="Tools for this step",
+                                  icon="TOOL_SETTINGS")
+                        for act in shown:
+                            _draw_action(box, act, show_real)
                     if not checks[current]:
                         _wrap(box, f"Not yet: {step['missing']}")
                     _wrap(box, f"Done so far: {done} of {len(steps)}. "
@@ -2998,15 +3778,31 @@ class VIEW3D_PT_blender_buddy(Panel):
 
         if not (wm.buddy_query or "").strip():
             box = layout.box()
+            box.label(text="For right now", icon="INFO")
+            _wrap(box, _hint(context))
+            facts = _scene_facts(context)
+            for act in _now_deck(context, facts=facts):
+                _draw_action(box, act, show_real)
+            _wrap(box, f"Buddy is showing the "
+                       f"{len(_available_actions(context, facts))} "
+                       f"tools (of {len(ACTIONS)}) that can be used "
+                       f"right now. The rest appear the moment "
+                       f"they're usable - pick something, switch "
+                       f"mode, and this panel keeps up. Everything "
+                       f"Blender has is always in the index at the "
+                       f"bottom.")
+
+
+        if not (wm.buddy_query or "").strip():
+            box = layout.box()
             box.label(text="Buddy Expert", icon="USER")
             settings = _expert_settings()
             if not _expert_ready(settings):
-                _wrap(box, "Your own AI expert lives here - and "
-                           "floats over the 3D window. Connect it with "
-                           "your key, your ChatGPT login (through "
-                           "Codex), a Claude key, or a free local AI. "
-                           "Ask in your own words and it answers for "
-                           "YOUR scene.")
+                _wrap(box, "Your own AI expert lives here. Connect "
+                           "it with your key, your ChatGPT login "
+                           "(through Codex), a Claude key, or a free "
+                           "local AI. Ask in your own words and it "
+                           "answers for YOUR scene.")
                 box.operator("buddy.open_prefs", text="Set up the expert")
             else:
                 box.prop(wm, "buddy_agent", text="Let the expert do it")
@@ -3048,10 +3844,6 @@ class VIEW3D_PT_blender_buddy(Panel):
                     box.operator("buddy.clear_plan",
                                  text="Throw the plan away")
 
-        box = layout.box()
-        box.label(text="Where you are", icon="INFO")
-        _wrap(box, _hint(context))
-
         stale = _stale_map()
         if stale:
             box = layout.box()
@@ -3071,13 +3863,17 @@ class VIEW3D_PT_blender_buddy(Panel):
         box.prop(wm, "buddy_query", text="")
         query = getattr(wm, "buddy_query", "")
         if query.strip():
-            hits = search_actions(query)
+            hits = search_actions(query, available_only=True,
+                                  context=context)
             if hits:
                 for act in hits[:10]:
                     _draw_action(box, act, show_real)
             else:
-                _wrap(box, "No match. Try everyday words: round, copy, hole, "
-                           "smooth, move, thicker, colour, delete.")
+                _wrap(box, "Nothing you can use right now matches "
+                           "that. It may need a picked thing or a "
+                           "different mode first - or try everyday "
+                           "words: round, copy, hole, smooth, move, "
+                           "thicker, colour, delete.")
         box.prop(wm, "buddy_show_real",
                  text="Also show Blender's real names")
 
@@ -3119,6 +3915,164 @@ class VIEW3D_PT_blender_buddy(Panel):
                        "it deserves a plain-words button above.")
 
 
+
+# ------------------------------------------------------------
+# What can be used RIGHT NOW. The redesign rule (owner,
+# 2026-11-12): "no need for tools that are not needed or not
+# usable at the moment". Every drawer, the search and the
+# "For right now" deck filter through _action_available: a
+# tool appears only when the current scene, mode and picked
+# thing can actually use it. A tool that can't run yet is not
+# shown greyed or dead - it is simply not there, and it
+# appears the moment it becomes usable (pick a thing, enter
+# the mode, add a modifier). Nothing is lost: the complete
+# index still holds every operator this Blender has, and a
+# plan the expert makes may still use steps that become
+# usable as the plan runs.
+
+_MODIFIER_TYPES = {"MESH", "CURVE", "SURFACE", "FONT", "LATTICE"}
+_MATERIAL_TYPES = {"MESH", "CURVE", "SURFACE", "FONT", "META",
+                   "VOLUME", "GPENCIL", "GREASE_PENCIL"}
+_MODE_TARGETS = {
+    "EDIT": {"MESH", "CURVE", "SURFACE", "FONT", "ARMATURE",
+             "LATTICE", "META"},
+    "SCULPT": {"MESH"},
+    "VERTEX_PAINT": {"MESH"},
+    "TEXTURE_PAINT": {"MESH"},
+}
+_ADD_OPS = {"object.text_add", "object.light_add",
+            "object.camera_add", "object.empty_add"}
+
+
+def _scene_facts(context):
+    """A small, defensive snapshot of where the user is."""
+    obj = getattr(context, "object", None)
+    scene = getattr(context, "scene", None)
+    facts = {"mode": getattr(context, "mode", "OBJECT") or "OBJECT",
+             "obj": obj,
+             "type": getattr(obj, "type", None),
+             "selected": 0,
+             "modifiers": 0,
+             "has_camera": bool(
+                 scene is not None
+                 and getattr(scene, "camera", None))}
+    try:
+        facts["selected"] = len(context.selected_objects or [])
+    except Exception:
+        facts["selected"] = 1 if obj else 0
+    if obj is not None:
+        try:
+            facts["modifiers"] = len(obj.modifiers)
+        except Exception:
+            facts["modifiers"] = 0
+    return facts
+
+
+def _action_available(act, context, facts=None):
+    """True when this tool can actually be used in this moment."""
+    if act["id"] in _stale_map():
+        return False
+    f = facts or _scene_facts(context)
+    mode, obj, otype = f["mode"], f["obj"], f["type"]
+    needs = act.get("needs")
+    if needs == "object" and obj is None:
+        return False
+    if needs == "two" and f["selected"] < 2:
+        return False
+    if needs == "edit" and mode != "EDIT_MESH":
+        return False
+    kind, target = act["kind"], act["target"]
+    if kind == "modifier":
+        return (otype in _MODIFIER_TYPES
+                and mode in ("OBJECT", "EDIT_MESH"))
+    if kind == "mode":
+        return otype in _MODE_TARGETS.get(target, set())
+    if kind == "tool":
+        if target in ("builtin.loop_cut", "builtin.knife"):
+            return mode == "EDIT_MESH"
+        if target == "builtin.select_box":
+            return True
+        return (obj is not None and "SCULPT" not in mode
+                and "PAINT" not in mode)
+    if kind == "op":
+        if (target.startswith(("mesh.primitive_",
+                               "curve.primitive_"))
+                or target in _ADD_OPS):
+            return mode == "OBJECT"
+        if target == "object.join":
+            return f["selected"] >= 2
+        if target in ("object.shade_smooth", "object.shade_flat"):
+            return otype in ("MESH", "CURVE", "SURFACE")
+        if target == "view3d.view_camera":
+            return f["has_camera"]
+        return True
+    if kind == "custom":
+        if target == "apply_modifiers":
+            return f["modifiers"] > 0 and mode == "OBJECT"
+        if target == "colour":
+            return otype in _MATERIAL_TYPES
+        if target in ("apply_transforms", "origin_middle",
+                      "centre_world"):
+            return obj is not None and mode == "OBJECT"
+        return True
+    return True
+
+
+def _available_actions(context, facts=None):
+    f = facts or _scene_facts(context)
+    return [a for a in ACTIONS if _action_available(a, context, f)]
+
+
+def _section_actions(section, context, facts=None):
+    f = facts or _scene_facts(context)
+    return [a for a in ACTIONS
+            if a["section"] == section
+            and _action_available(a, context, f)]
+
+
+_NOW_ORDER = {
+    "empty": ["add_cube", "add_ball", "add_tube", "add_ring",
+              "add_words", "see_everything", "find_everything",
+              "add_camera", "add_sun"],
+    "object": ["tool_move", "tool_size", "tool_turn",
+               "start_shaping", "copy_it", "give_colour",
+               "round_all_edges", "make_smoother",
+               "give_thickness", "remember_pose", "take_picture"],
+    "edit": ["pull_face", "inset_face", "round_edge", "loop_cut",
+             "knife", "split_faces", "fill_face", "fix_faces",
+             "start_shaping"],
+    "sculpt": ["paint_it", "start_shaping", "take_picture"],
+    "busy": ["tool_move", "start_shaping", "take_picture"],
+}
+
+
+def _now_deck(context, limit=8, facts=None):
+    """The 'For right now' deck: the few tools this moment calls
+    for, in the order a person reaches for them, filled out with
+    whatever else is usable right now."""
+    f = facts or _scene_facts(context)
+    if f["obj"] is None:
+        key = "empty"
+    elif f["mode"] == "EDIT_MESH":
+        key = "edit"
+    elif f["mode"] == "SCULPT":
+        key = "sculpt"
+    elif f["mode"] == "OBJECT":
+        key = "object"
+    else:
+        key = "busy"
+    avail = {a["id"]: a for a in _available_actions(context, f)}
+    deck = [avail[i] for i in _NOW_ORDER[key] if i in avail]
+    have = {a["id"] for a in deck}
+    for act in ACTIONS:
+        if len(deck) >= limit:
+            break
+        if act["id"] in avail and act["id"] not in have:
+            deck.append(act)
+            have.add(act["id"])
+    return deck[:limit]
+
+
 def _make_section_panel(index, section):
     """One collapsible drawer per tool section, under the main
     panel. Until v1.0 every section was drawn as a box in one long
@@ -3129,10 +4083,16 @@ def _make_section_panel(index, section):
         _WRAP_CAP = _fit_width(context)
         wm = context.window_manager
         show_real = getattr(wm, "buddy_show_real", True)
-        stale = _stale_map()
-        for act in ACTIONS:
-            if act["section"] == section and act["id"] not in stale:
-                _draw_action(self.layout, act, show_real)
+        for act in _section_actions(section, context):
+            _draw_action(self.layout, act, show_real)
+
+    def poll(cls, context):
+        # A drawer with nothing usable in it right now does not
+        # appear at all - it comes back when its tools do.
+        try:
+            return bool(_section_actions(section, context))
+        except Exception:
+            return True
 
     attrs = {
         "bl_idname": f"VIEW3D_PT_buddy_sec_{index}",
@@ -3143,6 +4103,7 @@ def _make_section_panel(index, section):
         "bl_parent_id": "VIEW3D_PT_blender_buddy",
         "bl_order": index,
         "draw": draw,
+        "poll": classmethod(poll),
     }
     if index > 0:
         attrs["bl_options"] = {"DEFAULT_CLOSED"}
@@ -3153,10 +4114,57 @@ SECTION_PANELS = tuple(
     _make_section_panel(i, s) for i, s in enumerate(SECTIONS))
 
 
+class VIEW3D_PT_buddy_projects(Panel):
+    """Guided projects live in their own drawer, closed until
+    wanted (owner, 2026-11-12: "the donut tutorial is
+    permanent"). The panel opens on the tools of the moment; a
+    project shows its step card at the top of the main panel
+    only while it is actually running."""
+    bl_label = "Learn by doing: projects & ways of working"
+    bl_idname = "VIEW3D_PT_buddy_projects"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Blender Buddy"
+    bl_parent_id = "VIEW3D_PT_blender_buddy"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = len(SECTIONS) + 1
+
+    def draw(self, context):
+        global _WRAP_CAP
+        _WRAP_CAP = _fit_width(context)
+        layout = self.layout
+        if getattr(context.scene, "buddy_tour_started", False):
+            pkg = _active_package(context)
+            _wrap(layout, f"Running now: {pkg['name']} - its step "
+                          "card is at the top of the main panel.")
+            layout.operator("buddy.tour_hide",
+                            text="Hide the project card")
+            return
+        groups = [
+            ("Guided projects",
+             [p for p in PACKAGES if p.get("kind") != "flow"]),
+            ("Ways of working - how the community does the job",
+             [p for p in PACKAGES if p.get("kind") == "flow"]),
+        ]
+        for title, pkgs in groups:
+            if not pkgs:
+                continue
+            layout.label(text=title, icon="INFO")
+            for pkg in pkgs:
+                _wrap(layout, f"{pkg['name']} - {pkg['byline']}")
+                _wrap(layout, pkg["intro"])
+                op = layout.operator("buddy.tour_start",
+                                     text=f"Start: {pkg['name']}",
+                                     icon="MESH_TORUS")
+                op.package = pkg["id"]
+
+
 CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_tour_start, BUDDY_OT_tour_hide, BUDDY_OT_tour_do,
            BUDDY_OT_open_prefs, BUDDY_OT_ask_expert, BUDDY_OT_run_plan,
-           BUDDY_OT_clear_plan, VIEW3D_PT_blender_buddy) + SECTION_PANELS
+           BUDDY_OT_clear_plan, BUDDY_OT_test_expert,
+           VIEW3D_PT_blender_buddy,
+           VIEW3D_PT_buddy_projects) + SECTION_PANELS
 
 
 def register():
@@ -3217,6 +4225,8 @@ def register():
         name="Expert plan report", default="")
     bpy.types.WindowManager.buddy_plan_retried = StringProperty(
         name="Expert plan replanned", default="")
+    bpy.types.WindowManager.buddy_expert_status = StringProperty(
+        name="Expert connection test result", default="")
     global _EXPERT_HANDLE
     try:
         _EXPERT_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
@@ -3237,7 +4247,7 @@ def unregister():
     for attr in ("buddy_query", "buddy_show_real", "buddy_ask",
                  "buddy_answer", "buddy_suggested", "buddy_agent",
                  "buddy_plan", "buddy_plan_summary", "buddy_plan_report",
-                 "buddy_plan_retried"):
+                 "buddy_plan_retried", "buddy_expert_status"):
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
     for attr in ("buddy_tour_started", "buddy_tour_epoch",

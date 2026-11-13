@@ -110,12 +110,49 @@ changes none of Blender's functions. It makes them visible:
   says what happened in plain words, and may offer one revised plan
   — it never runs that revision until you press Run again. Turn
   agent mode off and it goes back to advice only, with a "Do it"
-  button when one Buddy button fits. Its latest tip also floats as
-  a small card over the 3D window (tour steps update it too), and
-  you can turn the floating card off in preferences.
+  button when one Buddy button fits. (Its tips can also float as
+  a small card over the 3D window - off by default, because it got
+  in the way; turn it on in preferences if you like it.)
 - **One press for multi-step jobs.** "Cut one shape out of another"
   does the whole Boolean setup and applies it. "Give it a colour"
   builds and assigns the material.
+
+## New in v2.0: the panel follows the moment
+
+v1 translated Blender. v2 redesigns how you move through it -
+in two ways:
+
+- **Only what you can use, only when you can use it.** The panel
+  now opens on a **"For right now"** deck: the few tools this
+  exact moment calls for, in the order a person reaches for
+  them. Pick a thing and it's Move, Size, Turn, Start shaping.
+  Enter Edit Mode and the deck becomes the shaping bench. The
+  section drawers follow the same rule - a tool that can't run
+  yet (wrong mode, nothing picked, no modifier to apply) isn't
+  greyed out, it simply isn't there, and it appears the moment
+  it becomes usable. A drawer with nothing usable in it doesn't
+  appear at all. Search works the same way. Nothing is lost:
+  the complete index at the bottom still holds every tool this
+  Blender has.
+- **Ways of working: the community's job patterns, as guided
+  flows.** Under "Learn by doing" you'll now find flows that
+  follow the order experienced Blender users actually work in -
+  gathered from the community's own guides (the full research
+  lives in `redesign/COMMUNITY_PATTERNS.md` in this repo):
+  **Make a hard-surface thing** (blockout, lock the size,
+  forms, live detail, edges, shading), **Make it look real**
+  (frame the shot, light, surfaces, light again, picture,
+  save) and **Get it ready for 3D printing** (millimetres,
+  locked size, one solid, export, verify). Each step names the
+  method, teaches it in plain words, shows only the tools that
+  step needs, and ticks off only when your scene proves it.
+  The Donut is still there too - in its own drawer now, not
+  squatting at the top of the panel.
+
+Also fixed: setting up the ChatGPT (Codex) expert route on
+Windows - Buddy now finds the Codex program where it actually
+installs, and the expert settings have a **Test this
+connection** button that tells you plainly whether it answered.
 
 ## Nothing is lost
 
