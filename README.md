@@ -5,6 +5,16 @@ one rule:
 
 > **If a day-1 beginner can't use it, we aren't done.**
 
+![Blender Buddy running in Blender: the guided-projects panel and the floating expert card](https://github.com/flavorgood/blender-buddy/releases/download/v1.0.0/bb_v10_full.png)
+
+The panel's sections are drawers — one open at a time:
+
+![Section drawers with plain-words buttons](https://github.com/flavorgood/blender-buddy/releases/download/v1.0.0/bb_v10_drawers.png)
+
+And Day 1 is the Donut, taught step by step — you do it, it checks:
+
+![A Donut project step card in the panel](https://github.com/flavorgood/blender-buddy/releases/download/v1.0.0/bb_v10_teachcard.png)
+
 Blender's problem isn't missing power — it's that the power is hidden
 behind shortcuts and names you have to already know. Blender Buddy
 changes none of Blender's functions. It makes them visible:
@@ -86,7 +96,7 @@ changes none of Blender's functions. It makes them visible:
 
 ## Nothing is lost
 
-Blender 4.2.5 exposes **2,410 tools**. Blender Buddy puts **93** of
+Blender 4.2.5 exposes **2,410 tools**. Blender Buddy puts **96** of
 the everyday ones on plain-words buttons in 13 job-ordered
 section drawers (one open at a time, the rest a single line each) —
 and **all 2,410** are in the searchable "Everything else Blender can
