@@ -1,8 +1,8 @@
 schema_version = "1.0.0"
 id = "blender_buddy"
-version = "2.0.0"
+version = "3.2.0"
 name = "Blender Buddy - Blender in Plain Words"
-tagline = "AAA-level 3D creation, usable by anyone"
+tagline = "Power in the hands of average people, no 10k hours needed"
 maintainer = "flavorgood"
 type = "add-on"
 license = ["SPDX:GPL-3.0-or-later"]

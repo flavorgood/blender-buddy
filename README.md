@@ -1,4 +1,4 @@
-# Blender Buddy — AAA-level 3D creation, usable by anyone
+# Blender Buddy — Put the power in the hands of average people who can't spend 10k hours learning a skill
 
 Blender is the free professional studio behind films, video games,
 product designs, architecture and 3D printing — the same class of
@@ -65,22 +65,20 @@ changes none of Blender's functions. It makes them visible:
   ("bevell") all find their tool, ranked best-first. Gibberish still
   finds nothing.
 - **Guided projects — Day 1 is the Donut.** At the top of the
-  panel sits a shelf of guided projects. The first is the donut,
-  the famous one from the Blender Guru's tutorial — picked because
-  one small project touches almost every core skill. It *teaches*:
-  each of the 8 steps is a card telling you what to do with your
-  own hands in real Blender (menus and keys named, in plain words),
-  naming the skill it teaches — adding shapes, Edit Mode,
-  modifiers, materials, scattering, staging a scene, camera and
-  light, saving. There is no "do this step" button; a step ticks
-  off only when your scene *proves* you did it (the object, the
-  colour, the render are really there), and the card tells you in
-  plain words what it's still waiting for. The method is his: a
-  plump dough ring with its pale fry line; the icing as the *top
-  of the dough itself*, thickened, its edge pulled down into
-  uneven drips; glossy pink; sprinkles scattered over the top; the
-  scene staged like his final shot — white plate, dark table, mug
-  of coffee, warm side light in a dark room. More projects can be
+  panel sits a shelf of guided projects. The first is the donut:
+  the follow-along companion to Blender Guru's new Blender 5.0
+  series (see "New in v3.2"). Each of its 8 steps pairs with one
+  video part, opens that part from the card, and tells you what
+  to do with your own hands in real Blender (menus and keys
+  named, in plain words) — the cup and the mug from a photo,
+  Edit Mode, the icing as the *top of the dough itself*
+  (thickened, dripped, shrink-wrapped onto the dough),
+  materials with subsurface, photo textures wired as a real
+  PBR recipe, seams and UV unwrapping, Blender 5.0's Scatter
+  on Surface sprinkles, and lighting a final picture. There is
+  no "do this step" button; a step ticks off only when your
+  scene *proves* you did it, and the card tells you in plain
+  words what it's still waiting for. More projects can be
   added to the shelf the same way.
 - **Your own Buddy agent — key, ChatGPT login, or local AI.** There
   is no "log in with ChatGPT/Claude" button an add-on is allowed to
@@ -116,6 +114,112 @@ changes none of Blender's functions. It makes them visible:
 - **One press for multi-step jobs.** "Cut one shape out of another"
   does the whole Boolean setup and applies it. "Give it a colour"
   builds and assigns the material.
+
+## New in v3.2: the Donut, rebuilt as a follow-along companion
+
+The guided Donut project is rebuilt around Blender Guru's
+**new donut series for Blender 5.0** ("Blender Donut Tutorial
+(2025)"). It is no longer a course of its own — it is a
+**follow-along companion** to his: the video teaches, Buddy
+sits beside you. Each of the 8 steps pairs with the exact part
+it follows (Part 1's cup, Part 2's mug from the photo, Part 3's
+dripping icing, Part 4's materials and first render, Part 5's
+photo textures, Part 6's UV unwrapping, Part 7's Scatter on
+Surface sprinkles, Part 8's lighting finale), carries a
+**"Watch Part N" link that opens that video**, tells you what
+he is about to do before he does it, and ticks **only when
+your scene proves you caught up** — the icing really carries
+Solidify and a Shrinkwrap aimed at the dough; the scatter step
+really finds Blender 5.0's Scatter on Surface modifier, your
+sprinkle collection and your painted vertex group. Where a
+part's finish is a judgment (a handle that looks right, a
+pattern that sits straight, a render that looks like food),
+the card says so plainly instead of pretending a tick can see
+it. Progress is never stored: close Blender mid-project,
+reopen the file, and the card reads its place back from the
+scene alone — proven by a test that builds two steps, saves,
+reloads, and checks the tour resumes at step 3. Part 7's
+modifier exists only in Blender 5.0+, so on older Blender
+that one step honestly waits (its check answers "not yet",
+never an error) while the other seven work as always.
+
+## New in v3.1: the plain-words layer - where am I, and what's about to bite me
+
+Furniture was never the deepest problem. The deepest
+problem is that Blender never explains its own invisible
+ideas - modes, the origin, the 3D cursor, which thing is
+"active" - and a beginner hits those walls in the first
+hour and concludes Blender is broken. v3.1 teaches the
+concepts at the moment they bite:
+
+- **"Where you are", always on screen.** The top of the
+  panel now states, in plain words, what half of Blender
+  you're in: *"You're moving whole things"* - or, in Edit
+  Mode, *"You're reshaping 'Cube' itself - you're moving
+  its corners, edges and faces, that's why your tools
+  changed"*, with a **Back to moving whole things** button
+  underneath. Sculpting, posing and painting get the same
+  treatment. Pick several things and it says which one is
+  *in charge* - and what that even means.
+- **Heads-ups for the invisible traps, with the fix
+  attached.** Buddy watches the scene and speaks up in
+  plain words when: a thing's **spin point** (the little
+  orange dot Blender calls the origin) is sitting away
+  from the thing itself - *"that's why it swings in a
+  wide circle when you turn it"* - with **Put the spin
+  point in the middle** / **at the bottom** buttons; the
+  **target** (the 3D cursor) has drifted far away, so new
+  things would appear in the wrong place; a thing's size
+  is stretched but **not locked in**, so shaping tools
+  come out uneven (and the minus-size flip that turns a
+  thing inside-out gets its own warning); or **everything
+  is hidden** and the window only *looks* empty. Every
+  heads-up can be dismissed per thing with **Got it** -
+  it won't nag about the same thing twice.
+
+## New in v3.0: Buddy lives inside Blender itself
+
+v2 was still, in the end, a smarter panel - and a panel is an
+extra window, not a redesign. v3 moves into Blender's own
+furniture:
+
+- **Blender can open AS Buddy.** Installing Buddy also
+  installs a **Blender Buddy app template**: from the splash
+  screen's New File list (or by launching with it), Blender
+  opens on Buddy's own screens - **Start, Model, Look,
+  Finish** - and Blender's default workspace sprawl simply
+  isn't there. The Start screen asks the only first question
+  that matters: *What are you making?*
+- **The whole screen follows the job.** Start a guided job
+  and each step re-forms the entire program around it: the
+  workspace switches (modelling steps on the Model screen,
+  colour steps on the Look screen with the shader editor
+  already open, the picture step on the Finish screen
+  through the camera), and the viewport shading follows.
+  Buddy conducts the application, not just its own corner
+  of it. In a plain file, "Set up Buddy's screens" (in the
+  add-on preferences) builds the same screens into the file
+  you're in - your own workspaces are never touched.
+- **The tools are where your mouse already is.** Press the
+  **`** key (top-left of the keyboard) and the moment's
+  tools appear in a circle around your cursor, in the 3D
+  view itself. The 3D view's own header bar carries a
+  **Buddy tools** button and your job's progress. And in
+  Edit Mode, Blender's own toolbar gains three of Buddy's
+  plain-words tools next to Blender's own: **Pull a face
+  out**, **Add a ring of edges**, **Draw a cut** - the same
+  operators as Extrude, Loop Cut and Knife, under names a
+  beginner already understands.
+- **Compact by default.** The step card now leads with where
+  you are and the step's tools; the full written lesson is
+  one tap away ("Show the full lesson") instead of a wall of
+  text. The "where you are" line was rewritten per kind of
+  thing picked - a camera is for framing and taking the
+  picture now, never for "shaping".
+
+Everything from v1/v2 is still underneath, unchanged -
+Blender itself is never modified, and disabling Buddy
+changes nothing.
 
 ## New in v2.0: the panel follows the moment
 
@@ -254,13 +358,17 @@ can never be fooled that way again.
 The guided-project suite proves the teaching contract — every
 step carries by-hand instructions, a named skill and a
 what's-still-missing line, and no "do this step" button exists in
-the panel — and proves each step's scene check against the step's
-reference build (it asserts the icing carries a Solidify modifier
-and a dripped rim, and the dough carries its fry-line material),
-including the taught by-hand routes (sprinkles scattered by a
-particle system tick the step). The donut in `demo/` was built by
-that reference machinery and rendered through the project's own
-camera. The
+the panel — proves every donut step carries its own verified
+video link, and proves each step's scene check against the step's
+reference build (the icing's Solidify + Shrinkwrap onto the
+dough, the mug's seams, and on Blender 5.x the Scatter on
+Surface modifier with its sprinkle collection and painted
+vertex group; on 4.2.5 it proves the scatter check simply
+answers "not yet"). It also proves interrupt-and-resume: two
+steps built, the file saved and reloaded fresh, and the tour
+reads its place back from the scene alone. The donut in `demo/`
+was built by that reference machinery and rendered through the
+project's own camera. The
 expert suite proves the advice plumbing with a stubbed service — no
 key, no call; answers and suggested buttons land in the panel; an
 invented button name is dropped; a dead service becomes a plain

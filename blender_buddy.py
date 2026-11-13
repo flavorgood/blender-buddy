@@ -27,6 +27,8 @@ import os
 import random
 import re
 import shutil
+import filecmp
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -37,15 +39,15 @@ from difflib import SequenceMatcher
 import bpy
 from bpy.props import (BoolProperty, EnumProperty, IntProperty,
                        StringProperty)
-from bpy.types import AddonPreferences, Operator, Panel
+from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (2, 0, 0),
+    "version": (3, 2, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
-    "description": "AAA-level 3D creation, usable by anyone: Blender "
+    "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
                    "redesigned around the job you're doing - every tool "
                    "visible, searchable in your own words, taught by "
                    "doing real projects, with your own AI expert.",
@@ -1192,17 +1194,87 @@ def _paint(obj, mat_name, rgba, roughness=0.55, subsurface=0.0):
     obj.data.materials.append(mat)
 
 
-def _tour_step_dough(context):
-    # The famous tutorial's first move: get rid of the starter cube.
-    # Only when the scene is EXACTLY Blender's untouched starter set
-    # (Cube, Camera, Light and nothing else) - a lived-in scene is
-    # never touched.
-    objs = list(context.scene.objects)
-    if {o.name for o in objs} <= {"Cube", "Camera", "Light"}:
-        bpy.ops.object.select_all(action="SELECT")
-        bpy.ops.object.delete()
-    # His dough is PLUMP: a fat tube, squashed a little, smoothed and
-    # subdivided - not the thin default ring.
+# ----------------------------------------------------------------------------
+# The Donut package, rebuilt as the follow-along companion to
+# Blender Guru's NEW donut series - "Blender Donut Tutorial
+# (2025)", taught in Blender 5.0. One step per part:
+#   Part 1 (2026) - the basics, taught on a coffee cup
+#   Part 2 Basic Modelling - the real mug, from a reference photo
+#   Part 3 Basic Organic Modelling - icing that drips and hugs
+#   Part 4 Basic Materials - plate, lattice, SSS, first picture
+#   Part 5 Basic Texturing - photo textures as a three-map recipe
+#   Part 6 Basic UV Unwrapping - seams on the mug, coffee foam
+#   Part 7 How to Scatter in Blender 5.0 - Scatter on Surface
+#   Part 8 The Basics of Lighting and Rendering - the finale
+# The video teaches; these steps orient (which part, what he is
+# about to do), verify (the tick is the scene's proof, never a
+# button press) and rescue (the missing text names what your
+# screen is still missing). The run functions are the reference
+# builds the tests prove the checks against - the panel never
+# offers them.
+# ----------------------------------------------------------------------------
+
+def _find_dough(context):
+    """The dough ring: his name for it first, then the shape of
+    it - a fat ring (a hole in the middle) that is not any of
+    the scene's other named pieces."""
+    named = _scene_obj(context, "Dough")
+    if named is not None and named.type == "MESH":
+        return named
+    skip = {"Icing", "Sprinkles", "Plate", "Table", "Mug", "Cup",
+            "Coffee Foam", "Mug Coffee", "Mug Handle"}
+    for obj in context.scene.objects:
+        if obj.type != "MESH" or obj.name in skip:
+            continue
+        if obj.name.startswith("Sprinkle"):
+            continue
+        if len(obj.data.vertices) < 300:
+            continue
+        if min(math.hypot(v.co.x, v.co.y)
+               for v in obj.data.vertices) > 0.25:
+            return obj
+    return None
+
+
+def _render_proof(context):
+    """A picture exists because someone rendered: the Render
+    Result still holds it, or a render file was written to the
+    scene's output path during this tour."""
+    img = bpy.data.images.get("Render Result")
+    try:
+        if img is not None and img.size[0] > 0 and img.has_data:
+            return True
+    except Exception:
+        pass
+    fp = context.scene.render.filepath
+    if fp and fp.lower().endswith(".png"):
+        target = bpy.path.abspath(fp)
+        if os.path.exists(target):
+            epoch = getattr(context.scene, "buddy_tour_epoch", 0)
+            if epoch <= 0 or os.path.getmtime(target) >= epoch - 2:
+                return True
+    return False
+
+
+def _sss_weight(obj):
+    """The strongest subsurface (light sinking into food) on any
+    of the object's materials - 0 when there is none."""
+    best = 0.0
+    if obj is None or obj.type != "MESH":
+        return best
+    for mat in obj.data.materials:
+        if mat is None or not mat.use_nodes or mat.node_tree is None:
+            continue
+        bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf is not None and "Subsurface Weight" in bsdf.inputs:
+            best = max(best, float(
+                bsdf.inputs["Subsurface Weight"].default_value))
+    return best
+
+
+def _build_dough_ring(context):
+    """His dough: a PLUMP ring - fat tube, squashed a little,
+    smoothed and subdivided - not the thin default torus."""
     bpy.ops.mesh.primitive_torus_add(
         major_radius=1.0, minor_radius=0.42,
         major_segments=64, minor_segments=24)
@@ -1213,15 +1285,15 @@ def _tour_step_dough(context):
         poly.use_smooth = True
     mod = obj.modifiers.new("Smoother", "SUBSURF")
     mod.levels = 2
+    return obj
 
 
-def _tour_step_icing(context):
+def _build_icing(context, dough):
+    """His real method (Part 3): the icing is the TOP of the
+    dough itself, separated off, pulled down into drips, given
+    thickness (Solidify, his 0.025), and shrink-wrapped onto
+    the dough so it hugs instead of floating."""
     import bmesh
-    dough = _dough(context)
-    if dough is None:
-        raise RuntimeError("The dough ring is not there yet - do step 1 first.")
-    # The tutorial's real method: the icing is the TOP of the dough
-    # itself, separated off and given thickness - never a second ring.
     icing = dough.copy()
     icing.data = dough.data.copy()
     context.scene.collection.objects.link(icing)
@@ -1233,8 +1305,7 @@ def _tour_step_icing(context):
     under = [f for f in bm.faces if f.calc_center_median().z < -0.02]
     bmesh.ops.delete(bm, geom=under, context="FACES")
     # Drips: the rim verts are pulled down the dough's side by an
-    # uneven amount - long drips in places, short in others - the
-    # wavy edge that makes it read as icing and not a shell.
+    # uneven amount - long drips in places, short in others.
     rng = random.Random(4)
     p1, p2, p3 = (rng.uniform(0, 6.28), rng.uniform(0, 6.28),
                   rng.uniform(0, 6.28))
@@ -1251,38 +1322,26 @@ def _tour_step_icing(context):
     bm.free()
     for poly in icing.data.polygons:
         poly.use_smooth = True
-    # Stack order matters (learned from a bad render): thickness
-    # FIRST, smoothing second - and a breath of outward lift - so the
-    # icing sits ON the dough. Smoothing an open shell first shrinks
-    # it under the dough's surface and the dough swallows it.
     for mod in list(icing.modifiers):
         icing.modifiers.remove(mod)
+    hug = icing.modifiers.new("Hug the Dough", "SHRINKWRAP")
+    hug.target = dough
+    hug.wrap_method = "NEAREST_SURFACEPOINT"
+    hug.offset = 0.012
     thick = icing.modifiers.new("Icing Thickness", "SOLIDIFY")
-    thick.thickness = 0.05
+    thick.thickness = 0.025
     sub = icing.modifiers.new("Smoother", "SUBSURF")
     sub.levels = 2
     icing.scale = (1.015, 1.015, 0.835)
     bpy.ops.object.select_all(action="DESELECT")
     icing.select_set(True)
     context.view_layer.objects.active = icing
+    return icing
 
 
-def _tour_step_icing_pink(context):
-    icing = _scene_obj(context, "Icing")
-    if icing is None:
-        raise RuntimeError("There is no icing yet - do the icing step first.")
-    # Glossy, like his: low roughness, a whisper of subsurface.
-    _paint(icing, "Buddy Pink", (0.80, 0.30, 0.47, 1.0),
-           roughness=0.18, subsurface=0.05)
-
-
-def _tour_step_dough_colour(context):
-    dough = _dough(context)
-    if dough is None:
-        raise RuntimeError("The dough ring is not there yet - do step 1 first.")
-    # Golden baked dough WITH the pale fry line around its middle -
-    # the band where the donut floated in the oil. Faces around the
-    # outside equator get the paler material.
+def _colour_dough(context, dough):
+    """Golden baked dough WITH the pale fry line around its
+    middle - and subsurface up, so it reads as food."""
     golden = bpy.data.materials.get("Buddy Dough") or \
         bpy.data.materials.new("Buddy Dough")
     _principled(golden, (0.52, 0.28, 0.09, 1.0),
@@ -1301,127 +1360,181 @@ def _tour_step_dough_colour(context):
             poly.material_index = 1
 
 
-_SPRINKLE_COLOURS = [
-    (0.35, 0.75, 0.70, 1.0),   # teal
-    (0.62, 0.52, 0.85, 1.0),   # lavender
-    (0.95, 0.90, 0.70, 1.0),   # cream
-    (0.95, 0.62, 0.72, 1.0),   # pale pink
-    (0.96, 0.96, 0.96, 1.0),   # white
-    (0.55, 0.75, 0.95, 1.0),   # sky
-]
+def _tour_step_first_cup(context):
+    # The new series teaches the whole workshop on a cup first -
+    # and only when the scene is EXACTLY Blender's untouched
+    # starter set is the starter trio cleared.
+    objs = list(context.scene.objects)
+    if {o.name for o in objs} <= {"Cube", "Camera", "Light"}:
+        bpy.ops.object.select_all(action="SELECT")
+        bpy.ops.object.delete()
+    import bmesh
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=0.40, depth=0.95, vertices=32,
+        location=(1.95, 0.60, 0.06))
+    cup = context.object
+    cup.name = "Cup"
+    # The opening (his 17:57 move): the top face goes away.
+    bm = bmesh.new()
+    bm.from_mesh(cup.data)
+    bm.faces.ensure_lookup_table()
+    top = [f for f in bm.faces if f.calc_center_median().z > 0.40]
+    bmesh.ops.delete(bm, geom=top, context="FACES")
+    bm.to_mesh(cup.data)
+    bm.free()
+    for poly in cup.data.polygons:
+        poly.use_smooth = True
+    walls = cup.modifiers.new("Cup Walls", "SOLIDIFY")
+    walls.thickness = 0.035
+    sub = cup.modifiers.new("Smoother", "SUBSURF")
+    sub.levels = 2
+    # His last move of Part 1 (27:11): save the file.
+    if not bpy.data.filepath:
+        bpy.ops.wm.save_as_mainfile(
+            filepath=_home("blender_buddy_my_donut.blend"))
 
 
-def _tour_step_sprinkles(context):
-    from mathutils import Matrix, Quaternion
-    icing = _scene_obj(context, "Icing")
-    if icing is None:
-        raise RuntimeError("Sprinkles need the icing first - it is step 5.")
-    rng = random.Random(11)
-    mats = []
-    for i, rgba in enumerate(_SPRINKLE_COLOURS):
-        name = f"Sprinkle Colour {i + 1}"
-        mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
-        _principled(mat, rgba, roughness=0.35)
-        mats.append(mat)
-    if context.mode != "OBJECT":
-        bpy.ops.object.mode_set(mode="OBJECT")
-    # One long thin sprinkle shape, reused for every instance.
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=12, ring_count=8,
-                                         radius=1.0)
-    template = context.object
-    template.data.transform(
-        Matrix.Diagonal((0.083, 0.016, 0.016, 1.0)))
-    template_mesh = template.data
-    # Sample the icing's REAL surface (evaluated, drips and all) and
-    # lay each sprinkle flat on it, spun a random way - the way his
-    # sprinkles actually sit.
-    dg = context.evaluated_depsgraph_get()
-    eval_obj = icing.evaluated_get(dg)
-    eval_mesh = eval_obj.to_mesh()
-    mw = icing.matrix_world
-    faces = []
-    for poly in eval_mesh.polygons:
-        cw = mw @ poly.center
-        nw = (mw.to_3x3() @ poly.normal).normalized()
-        if cw.z > 0.08 and nw.z > 0.2:
-            faces.append((cw, nw))
-    eval_obj.to_mesh_clear()
-    if not faces:
-        raise RuntimeError("Could not find the top of the icing.")
-    made = []
-    count = 130
-    for i in range(count):
-        cw, nw = faces[rng.randrange(len(faces))]
-        spin = Quaternion(nw, rng.uniform(0, 2 * math.pi))
-        align = nw.to_track_quat("Z", "Y")
-        mat4 = (Matrix.Translation(cw + nw * 0.012)
-                @ (spin @ align).to_matrix().to_4x4())
-        mesh = template_mesh.copy()
-        mesh.transform(mat4)
-        mesh.materials.append(mats[i % len(mats)])
-        obj = bpy.data.objects.new("Sprinkle", mesh)
-        context.scene.collection.objects.link(obj)
-        made.append(obj)
-    # A few that fell on the plate, like his final shot.
-    for i in range(6):
-        a = rng.uniform(0, 2 * math.pi)
-        r = rng.uniform(1.2, 1.45)
-        pos = (r * math.cos(a), r * math.sin(a), -0.335)
-        yaw = Quaternion((0, 0, 1), rng.uniform(0, 2 * math.pi))
-        mesh = template_mesh.copy()
-        mesh.transform(Matrix.Translation(pos)
-                       @ yaw.to_matrix().to_4x4())
-        mesh.materials.append(mats[(count + i) % len(mats)])
-        obj = bpy.data.objects.new("Sprinkle", mesh)
-        context.scene.collection.objects.link(obj)
-        made.append(obj)
-    bpy.data.objects.remove(template, do_unlink=True)
+def _reference_image(context):
+    """A small stand-in for the cup reference photo he links
+    from the series page - a plain mug silhouette, drawn in
+    pixels here (no downloads)."""
+    img = bpy.data.images.get("Cup Reference")
+    if img is None:
+        img = bpy.data.images.new("Cup Reference", 96, 96)
+    w, h = 96, 96
+    px = []
+    for y in range(h):
+        for x in range(w):
+            inside = 28 <= x <= 62 and 18 <= y <= 80
+            handle = (62 < x <= 74 and 34 <= y <= 62
+                      and not (66 < x <= 70 and 40 <= y <= 56))
+            if inside or handle:
+                px.extend((0.45, 0.30, 0.20, 1.0))
+            else:
+                px.extend((0.92, 0.92, 0.94, 1.0))
+    img.pixels.foreach_set(px)
+    img.update()
+    return img
+
+
+def _tour_step_mug_reference(context):
+    import bmesh
+    # The reference photo, standing where he puts it - on show
+    # in the scene, lined up behind the mug it teaches.
+    img = _reference_image(context)
+    bpy.ops.object.empty_add(type="IMAGE",
+                             location=(1.95, 1.30, 0.35),
+                             rotation=(math.pi / 2, 0, 0))
+    ref = context.object
+    ref.name = "Mug Reference"
+    ref.data = img
+    ref.empty_display_size = 1.1
+    # The mug itself: a cylinder given rings, a profile, an
+    # opening, walls - and a handle joined into it.
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=0.40, depth=0.95, vertices=48,
+        location=(1.95, 0.60, 0.06))
+    mug = context.object
+    mug.name = "Mug"
+    bm = bmesh.new()
+    bm.from_mesh(mug.data)
+    bm.edges.ensure_lookup_table()
+    vertical = [e for e in bm.edges
+                if abs(e.verts[0].co.z - e.verts[1].co.z) > 0.5]
+    bmesh.ops.subdivide_edges(bm, edges=vertical, cuts=5)
+    bm.verts.ensure_lookup_table()
+    for v in bm.verts:
+        t = (v.co.z + 0.475) / 0.95
+        f = 0.92 + 0.10 * math.sin(math.pi * max(0.0, min(1.0, t)))
+        if t > 0.92:
+            f *= 1.04          # a slight lip at the rim
+        if t < 0.05:
+            f *= 0.90          # the foot - his bottom lip
+        v.co.x *= f
+        v.co.y *= f
+    bm.faces.ensure_lookup_table()
+    top = [f for f in bm.faces if f.calc_center_median().z > 0.40]
+    bmesh.ops.delete(bm, geom=top, context="FACES")
+    bm.to_mesh(mug.data)
+    bm.free()
+    for poly in mug.data.polygons:
+        poly.use_smooth = True
+    walls = mug.modifiers.new("Mug Walls", "SOLIDIFY")
+    walls.thickness = 0.03
+    # The handle: a ring standing on edge, sunk into the wall.
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=0.17, minor_radius=0.035,
+        major_segments=32, minor_segments=10,
+        location=(2.42, 0.60, 0.12), rotation=(0, math.pi / 2, 0))
+    handle = context.object
     bpy.ops.object.select_all(action="DESELECT")
-    for s in made:
-        s.select_set(True)
-    context.view_layer.objects.active = made[0]
+    mug.select_set(True)
+    handle.select_set(True)
+    context.view_layer.objects.active = mug
     bpy.ops.object.join()
-    context.object.name = "Sprinkles"
-
-
-def _tour_step_plate(context):
-    # His final shot, staged: white plate, dark table, mug of coffee.
-    bpy.ops.mesh.primitive_cylinder_add(
-        radius=1.55, depth=0.06, location=(0, 0, -0.38))
-    plate = context.object
-    plate.name = "Plate"
-    _paint(plate, "Buddy Plate", (0.93, 0.93, 0.95, 1.0), roughness=0.35)
-    bpy.ops.mesh.primitive_circle_add(
-        vertices=48, radius=7.0, fill_type="NGON", location=(0, 0, -0.415))
-    table = context.object
-    table.name = "Table"
-    _paint(table, "Buddy Table", (0.16, 0.14, 0.13, 1.0), roughness=0.9)
-    bpy.ops.mesh.primitive_cylinder_add(
-        radius=0.34, depth=0.5, location=(1.95, 0.6, -0.165))
     mug = context.object
     mug.name = "Mug"
     _paint(mug, "Buddy Mug", (0.36, 0.21, 0.13, 1.0), roughness=0.4)
-    bpy.ops.mesh.primitive_circle_add(
-        vertices=32, radius=0.29, fill_type="NGON", location=(1.95, 0.6, 0.07))
-    coffee = context.object
-    coffee.name = "Mug Coffee"
-    _paint(coffee, "Buddy Coffee", (0.05, 0.03, 0.02, 1.0), roughness=0.25)
-    bpy.ops.mesh.primitive_torus_add(
-        major_radius=0.15, minor_radius=0.032,
-        major_segments=32, minor_segments=10,
-        location=(2.30, 0.6, -0.15), rotation=(0, math.pi / 2, 0))
-    handle = context.object
-    handle.name = "Mug Handle"
-    mug_mat = bpy.data.materials.get("Buddy Mug")
-    if mug_mat:
-        handle.data.materials.append(mug_mat)
 
 
-def _tour_step_picture(context):
+def _tour_step_icing_hug(context):
+    # The folded-in mini-step: the plain ring itself. Part 3
+    # assumes it (his series makes it on the way); if it is not
+    # there yet, the reference builds it first.
+    dough = _find_dough(context)
+    if dough is None:
+        dough = _build_dough_ring(context)
+    _build_icing(context, dough)
+
+
+def _tour_step_first_picture(context):
     from mathutils import Vector
     scene = context.scene
-    # The mood of his final shot: a near-black room and warm light
-    # raking in from the side.
+    dough = _find_dough(context)
+    icing = _scene_obj(context, "Icing")
+    if dough is None or icing is None:
+        raise RuntimeError("The donut comes first - that is Part 3.")
+    # The plate (Part 3's homework) and the table under it.
+    if _scene_obj(context, "Plate") is None:
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=1.55, depth=0.06, location=(0, 0, -0.38))
+        plate = context.object
+        plate.name = "Plate"
+        _paint(plate, "Buddy Plate", (0.93, 0.93, 0.95, 1.0),
+               roughness=0.35)
+    if _scene_obj(context, "Table") is None:
+        bpy.ops.mesh.primitive_circle_add(
+            vertices=48, radius=7.0, fill_type="NGON",
+            location=(0, 0, -0.415))
+        table = context.object
+        table.name = "Table"
+        _paint(table, "Buddy Table", (0.16, 0.14, 0.13, 1.0),
+               roughness=0.9)
+    # The Lattice: the whole donut bent gently out of round, so
+    # it stops looking computer-perfect (his 8:29 move).
+    if _scene_obj(context, "Lumpy") is None:
+        lat_data = bpy.data.lattices.new("Lumpy")
+        lat_data.points_u = 3
+        lat_data.points_v = 3
+        lat_data.points_w = 2
+        lat = bpy.data.objects.new("Lumpy", lat_data)
+        scene.collection.objects.link(lat)
+        lat.location = (0, 0, 0)
+        lat.scale = (3.1, 3.1, 1.15)
+        rng = random.Random(7)
+        for point in lat_data.points:
+            point.co_deform.x += rng.uniform(-0.05, 0.05)
+            point.co_deform.y += rng.uniform(-0.05, 0.05)
+            point.co_deform.z += rng.uniform(-0.03, 0.03)
+        for target in (dough, icing):
+            mod = target.modifiers.new("Lumpy", "LATTICE")
+            mod.object = lat
+    # Materials with the food setting: subsurface above zero on
+    # both dough and icing.
+    _paint(icing, "Buddy Pink", (0.80, 0.30, 0.47, 1.0),
+           roughness=0.18, subsurface=0.25)
+    _colour_dough(context, dough)
+    # The room, one light, the camera - then the first picture.
     if scene.world is None:
         scene.world = bpy.data.worlds.new("World")
     scene.world.use_nodes = True
@@ -1433,258 +1546,774 @@ def _tour_step_picture(context):
         bpy.ops.object.camera_add(location=(3.3, -4.4, 1.9))
         cam = context.object
         cam.data.lens = 42
-        # Aimed a touch right of centre so the mug is in the shot,
-        # like his final frame.
         direction = Vector((0.35, 0.1, -0.05)) - cam.location
-        cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+        cam.rotation_euler = direction.to_track_quat(
+            "-Z", "Y").to_euler()
         scene.camera = cam
     if not any(o.type == "LIGHT" for o in scene.objects):
-        bpy.ops.object.light_add(type="SUN", location=(-3.0, -2.0, 3.0),
+        bpy.ops.object.light_add(type="SUN",
+                                 location=(-3.0, -2.0, 3.0),
                                  rotation=(0.9, 0.25, -0.65))
         sun = context.object
-        sun.data.energy = 2.4
-        sun.data.color = (1.0, 0.80, 0.62)
-        bpy.ops.object.light_add(type="POINT", location=(2.5, 2.0, 1.2))
-        fill = context.object
-        fill.data.energy = 12.0
-        fill.data.color = (0.7, 0.8, 1.0)
-    bpy.ops.buddy.action(action_id="take_picture")
+        sun.data.energy = 2.2
+    # The picture is written to a file as well as shown - the
+    # same habit the picture button teaches, and the file is
+    # the proof that survives everywhere.
+    path = (scene.render.filepath or "").strip()
+    if path in {"", "/tmp", "/tmp/"}:
+        scene.render.filepath = _home("blender_buddy_picture.png")
+    bpy.ops.render.render(write_still=True)
 
 
-def _tour_step_save(context):
-    bpy.ops.buddy.action(action_id="save_work")
+def _make_texture_set(name, rgb, seed, rough_mid):
+    """Three small photo-like maps drawn in pixels here - a
+    mottled colour map, a roughness map (data), and a normal
+    map (data). No downloads; they stand in for his Poliigon
+    textures. Saved as files and packed, so they travel with
+    the scene."""
+    folder = os.path.join(tempfile.gettempdir(),
+                          "buddy_donut_textures")
+    os.makedirs(folder, exist_ok=True)
+    rng = random.Random(seed)
+    size = 128
+    cells = {}
+    for gy in range(16):
+        for gx in range(16):
+            cells[(gx, gy)] = rng.uniform(-0.16, 0.16)
+
+    def cell_noise(x, y):
+        return cells[(x // 8, y // 8)]
+
+    def build(kind):
+        img = bpy.data.images.get(f"{name} {kind}")
+        if img is None:
+            img = bpy.data.images.new(f"{name} {kind}", size, size)
+        px = []
+        for y in range(size):
+            for x in range(size):
+                n = cell_noise(x, y) + rng.uniform(-0.03, 0.03)
+                if kind == "Colour":
+                    px.extend((max(0.0, rgb[0] * (1 + n)),
+                               max(0.0, rgb[1] * (1 + n)),
+                               max(0.0, rgb[2] * (1 + n)), 1.0))
+                elif kind == "Roughness":
+                    v = max(0.05, min(0.95, rough_mid + n))
+                    px.extend((v, v, v, 1.0))
+                else:  # Normal: mostly flat, gently bumpy
+                    px.extend((0.5 + n * 0.6, 0.5 + n * 0.4, 1.0, 1.0))
+        # Colours space FIRST: changing it afterwards throws the
+        # pixels away (measured on 4.2.5 and 5.3 - the buffer
+        # resets to black), which silently rendered every
+        # textured surface black.
+        want = "sRGB" if kind == "Colour" else "Non-Color"
+        if img.colorspace_settings.name != want:
+            img.colorspace_settings.name = want
+        img.pixels.foreach_set(px)
+        img.filepath_raw = os.path.join(
+            folder, f"buddy_{name.lower().replace(' ', '_')}_"
+                    f"{kind.lower()}.png")
+        img.save()
+        try:
+            img.pack()
+        except Exception:
+            pass
+        return img
+
+    return {"colour": build("Colour"), "rough": build("Roughness"),
+            "normal": build("Normal")}
 
 
-def _check_dough(context):
-    return _dough(context) is not None
+def _apply_pbr(obj, tex, subsurface=0.0):
+    """Wire a texture set into the object's material the way
+    Part 5 teaches: colour into Base Color, roughness as data,
+    a Normal Map node into the Normal socket."""
+    mat = bpy.data.materials.get(f"Buddy {obj.name} Surface")
+    if mat is None:
+        mat = bpy.data.materials.new(f"Buddy {obj.name} Surface")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    for node in list(nt.nodes):
+        nt.nodes.remove(node)
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (300, 0)
+    out.location = (560, 0)
+    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    if subsurface > 0 and "Subsurface Weight" in bsdf.inputs:
+        bsdf.inputs["Subsurface Weight"].default_value = subsurface
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    mapping = nt.nodes.new("ShaderNodeMapping")
+    nt.links.new(coord.outputs["UV"], mapping.inputs["Vector"])
+
+    def tex_node(image, loc):
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.image = image
+        node.location = loc
+        nt.links.new(mapping.outputs["Vector"], node.inputs["Vector"])
+        return node
+
+    col = tex_node(tex["colour"], (0, 160))
+    nt.links.new(col.outputs["Color"], bsdf.inputs["Base Color"])
+    rgh = tex_node(tex["rough"], (0, -80))
+    nt.links.new(rgh.outputs["Color"], bsdf.inputs["Roughness"])
+    nrm = tex_node(tex["normal"], (0, -320))
+    nmap = nt.nodes.new("ShaderNodeNormalMap")
+    nmap.location = (240, -320)
+    nt.links.new(nrm.outputs["Color"], nmap.inputs["Color"])
+    nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
 
 
-def _check_icing(context):
+def _tour_step_real_surfaces(context):
+    dough = _find_dough(context)
     icing = _scene_obj(context, "Icing")
-    return icing is not None and any(
-        m.type == "SOLIDIFY" for m in icing.modifiers)
+    plate = _scene_obj(context, "Plate")
+    table = _scene_obj(context, "Table")
+    if None in (dough, icing, plate, table):
+        raise RuntimeError("The scene comes first - that is Part 4.")
+    _apply_pbr(table, _make_texture_set(
+        "Table Wood", (0.30, 0.20, 0.13), 21, 0.8))
+    _apply_pbr(plate, _make_texture_set(
+        "Plate Ceramic", (0.90, 0.90, 0.92), 22, 0.3))
+    _apply_pbr(dough, _make_texture_set(
+        "Dough Crumb", (0.55, 0.32, 0.12), 23, 0.55),
+        subsurface=0.3)
+    _apply_pbr(icing, _make_texture_set(
+        "Icing Glaze", (0.82, 0.32, 0.48), 24, 0.2),
+        subsurface=0.25)
 
 
-def _check_icing_pink(context):
-    c = _first_colour(_scene_obj(context, "Icing"))
-    return bool(c) and c[0] > 0.75 and c[1] < 0.72 and 0.2 < c[2] < 0.9
+def _tour_step_unwrap_mug(context):
+    import bmesh
+    mug = _scene_obj(context, "Mug")
+    if mug is None:
+        raise RuntimeError("The mug comes first - that is Part 2.")
+    # Seams: one line of edges down the back of the mug and the
+    # ring of edges around its rim - the cuts his unwrap uses.
+    bm = bmesh.new()
+    bm.from_mesh(mug.data)
+    bm.edges.ensure_lookup_table()
+    for e in bm.edges:
+        a, b = e.verts[0].co, e.verts[1].co
+        mid = (a + b) / 2
+        vertical = abs(a.z - b.z) > 0.05 and \
+            math.hypot(a.x - b.x, a.y - b.y) < 0.05
+        back = math.atan2(mid.y, mid.x) > 2.6 or \
+            math.atan2(mid.y, mid.x) < -2.6
+        rim = a.z > 0.40 and b.z > 0.40 and abs(a.z - b.z) < 0.05
+        if (vertical and back) or rim:
+            e.seam = True
+    bm.to_mesh(mug.data)
+    bm.free()
+    if not mug.data.uv_layers:
+        mug.data.uv_layers.new(name="UVMap")
+    # The coffee itself: a foam disc just inside the rim, with
+    # a material of its own.
+    if _scene_obj(context, "Coffee Foam") is None:
+        bpy.ops.mesh.primitive_circle_add(
+            vertices=32, radius=0.34, fill_type="NGON",
+            location=(1.95, 0.60, 0.49))
+        foam = context.object
+        foam.name = "Coffee Foam"
+        _paint(foam, "Buddy Foam", (0.92, 0.85, 0.72, 1.0),
+               roughness=0.5)
 
 
-def _check_dough_colour(context):
-    c = _first_colour(_dough(context))
-    return bool(c) and 0.3 < c[0] < 0.75 and c[1] < 0.45 and c[2] < 0.3
-
-
-def _check_sprinkles(context):
-    if _scene_obj(context, "Sprinkles") is not None:
-        return True
-    # The taught way: a particle system scattering them over the
-    # icing (what the famous tutorial does) proves it too.
-    icing = _scene_obj(context, "Icing")
-    return icing is not None and len(icing.particle_systems) > 0
-
-
-def _check_plate(context):
-    return _scene_obj(context, "Plate") is not None
-
-
-def _check_picture(context):
-    # A fresh Blender scene already HAS a camera and a light, so their
-    # existence proves nothing. The proof is the picture file itself,
-    # written after this tour started.
-    epoch = getattr(context.scene, "buddy_tour_epoch", 0)
-    if epoch <= 0:
-        return False
-    target = os.path.join(os.path.expanduser("~"), "blender_buddy_picture.png")
-    fp = context.scene.render.filepath
-    if fp and fp.endswith(".png"):
-        target = bpy.path.abspath(fp)
-    if os.path.exists(target) and os.path.getmtime(target) >= epoch - 2:
-        return True
-    # The taught way: the learner renders with F12 and their picture
-    # is sitting in the render window, saved or not. A Render Result
-    # with real pixels in it only exists because someone rendered.
-    img = bpy.data.images.get("Render Result")
+def _scatter_group():
+    """Blender 5.0's own Scatter on Surface node group, from
+    the essentials library every 5.x install ships. None on
+    older Blender - the feature simply is not there."""
+    existing = bpy.data.node_groups.get("Scatter on Surface")
+    if existing is not None:
+        return existing
+    path = os.path.join(
+        bpy.utils.system_resource("DATAFILES"), "assets", "nodes",
+        "geometry_nodes_essentials.blend")
+    if not os.path.exists(path):
+        return None
     try:
-        return bool(img) and img.size[0] > 0 and img.has_data
+        with bpy.data.libraries.load(path, link=False) as (src, dst):
+            if "Scatter on Surface" not in src.node_groups:
+                return None
+            dst.node_groups = ["Scatter on Surface"]
     except Exception:
-        return False
+        return None
+    return bpy.data.node_groups.get("Scatter on Surface")
 
+
+def _tour_step_scatter(context):
+    grp = _scatter_group()
+    if grp is None:
+        raise RuntimeError(
+            "Scatter on Surface is one of Blender 5.0's new "
+            "tools, and this copy of Blender does not have it. "
+            "This step waits for Blender 5.0 or newer - every "
+            "other step works on what you have.")
+    icing = _scene_obj(context, "Icing")
+    if icing is None:
+        raise RuntimeError("Sprinkles need the icing first - "
+                           "that is Part 3.")
+    # Three sprinkle variants in their own collection - a rod,
+    # a ball, a disc - each with its own bright colour.
+    coll = bpy.data.collections.get("Sprinkle Types")
+    if coll is None:
+        coll = bpy.data.collections.new("Sprinkle Types")
+        context.scene.collection.children.link(coll)
+
+    def variant(name, build, rgba, spot):
+        obj = _scene_obj(context, name)
+        if obj is not None:
+            return obj
+        build(spot)
+        obj = context.object
+        obj.name = name
+        for parent in list(obj.users_collection):
+            parent.objects.unlink(obj)
+        coll.objects.link(obj)
+        _paint(obj, f"Buddy {name}", rgba, roughness=0.35)
+        return obj
+
+    def build_rod(spot):
+        from mathutils import Matrix
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            segments=12, ring_count=8, radius=1.0, location=spot)
+        context.object.data.transform(
+            Matrix.Diagonal((0.085, 0.017, 0.017, 1.0)))
+
+    variant("Sprinkle Rod", build_rod,
+            (0.35, 0.75, 0.70, 1.0), (4.5, 3.5, 0))
+    variant("Sprinkle Ball",
+            lambda s: bpy.ops.mesh.primitive_ico_sphere_add(
+                subdivisions=2, radius=0.022, location=s),
+            (0.95, 0.62, 0.72, 1.0), (4.8, 3.5, 0))
+    variant("Sprinkle Disc",
+            lambda s: bpy.ops.mesh.primitive_cylinder_add(
+                radius=0.032, depth=0.012, vertices=16, location=s),
+            (0.62, 0.52, 0.85, 1.0), (5.1, 3.5, 0))
+    # The painted guide: a vertex group, weight on the icing's
+    # top, nothing on its underside - painted the way he paints
+    # it, here computed from the icing's own shape.
+    vg = icing.vertex_groups.get("Sprinkles")
+    if vg is None:
+        vg = icing.vertex_groups.new(name="Sprinkles")
+    top = [v.index for v in icing.data.vertices if v.co.z > 0.05]
+    if top:
+        vg.add(top, 1.0, "REPLACE")
+    # The modifier itself - Blender 5.0's own scatter, pointed
+    # at the collection, mixing variants, masked by the group.
+    if not any(m.type == "NODES" and m.node_group is grp
+               for m in icing.modifiers):
+        mod = icing.modifiers.new("Scatter on Surface", "NODES")
+        mod.node_group = grp
+        try:
+            inp = mod.properties.inputs
+            inp.Socket_6.value = "Collection"   # Instance Type
+            inp.Socket_7.value = coll           # Collection
+            inp.Socket_17.value = True          # Pick Instance
+            inp.Socket_30.value = "Amount"      # Density Method
+            inp.Socket_31.value = 140           # Amount
+            inp.Socket_39.value = True          # Randomize
+            inp.Socket_35.value = (0.0, 0.0, 6.283)  # spin freely
+            inp.Socket_29.value = True          # Masking on
+            inp.Socket_2.attribute_name = "Sprinkles"  # the mask
+        except Exception:
+            pass  # the modifier + group are the proof; the
+            # values are defaults a learner can match by hand
+
+
+def _tour_step_final_picture(context):
+    scene = context.scene
+    # The finale's lighting build: the sun from Part 4 stays,
+    # and two purpose-placed lights join it - a warm key and a
+    # cool rim - so the picture is lit in layers.
+    if _scene_obj(context, "Key Light") is None:
+        bpy.ops.object.light_add(type="AREA",
+                                 location=(2.5, -2.5, 3.0),
+                                 rotation=(0.85, 0.0, 0.65))
+        key = context.object
+        key.name = "Key Light"
+        key.data.energy = 250
+        key.data.shape = "DISK"
+        key.data.size = 2.0
+        key.data.color = (1.0, 0.95, 0.88)
+    if _scene_obj(context, "Rim Light") is None:
+        bpy.ops.object.light_add(type="POINT",
+                                 location=(-3.0, 2.5, 2.0))
+        rim = context.object
+        rim.name = "Rim Light"
+        rim.data.energy = 15
+    rim = _scene_obj(context, "Rim Light")
+    rim.data.color = (0.75, 0.85, 1.0)
+    if scene.camera is None:
+        bpy.ops.object.camera_add(location=(3.3, -4.4, 1.9))
+        scene.camera = context.object
+    if scene.render.engine == "CYCLES":
+        scene.cycles.samples = 64
+    scene.render.filepath = _home("blender_buddy_donut_final.png")
+    bpy.ops.render.render(write_still=True)
+
+
+# --- the checks: the scene itself is the only proof -----------
 
 def _check_saved(context):
+    # Shared with the job flows: the work exists as a file.
     return bool(bpy.data.filepath)
 
 
+def _check_picture(context):
+    # Shared with the job flows: a picture was rendered.
+    return _render_proof(context)
+
+
+def _check_first_cup(context):
+    # Part 1's tick is the save: the work exists as a file.
+    return _check_saved(context)
+
+
+def _check_mug_reference(context):
+    has_ref = any(
+        o.type == "EMPTY" and o.empty_display_type == "IMAGE"
+        for o in context.scene.objects)
+    if not has_ref:
+        return False
+    cup = _scene_obj(context, "Cup")
+    base = len(cup.data.vertices) if (
+        cup is not None and cup.type == "MESH") else 100
+    for obj in context.scene.objects:
+        if obj.type != "MESH" or obj is cup:
+            continue
+        if len(obj.data.vertices) > max(base * 2, base + 60):
+            return True
+    return False
+
+
+def _check_icing_hug(context):
+    dough = _find_dough(context)
+    if dough is None:
+        return False
+    icing = _scene_obj(context, "Icing")
+    if icing is None:
+        return False
+    if not any(m.type == "SOLIDIFY" for m in icing.modifiers):
+        return False
+    return any(m.type == "SHRINKWRAP" and m.target is dough
+               for m in icing.modifiers)
+
+
+def _check_first_picture(context):
+    if _scene_obj(context, "Plate") is None:
+        return False
+    if _scene_obj(context, "Table") is None:
+        return False
+    dough = _find_dough(context)
+    icing = _scene_obj(context, "Icing")
+    if dough is None or icing is None:
+        return False
+    if _sss_weight(icing) <= 0 or _sss_weight(dough) <= 0:
+        return False
+    return _render_proof(context)
+
+
+def _pbr_pattern(mat):
+    """(photo wired into the material, a data map present, a
+    Normal Map node present) for one material's node recipe."""
+    if mat is None or not mat.use_nodes or mat.node_tree is None:
+        return False, False, False
+    nt = mat.node_tree
+    bsdf = nt.nodes.get("Principled BSDF")
+    if bsdf is None:
+        return False, False, False
+    feeding = set()
+    stack = [bsdf]
+    while stack:
+        node = stack.pop()
+        if node in feeding:
+            continue
+        feeding.add(node)
+        for sock in node.inputs:
+            for link in sock.links:
+                stack.append(link.from_node)
+    wired = False
+    noncolor = False
+    for node in nt.nodes:
+        if node.type != "TEX_IMAGE" or node.image is None:
+            continue
+        if node in feeding:
+            wired = True
+        if node.image.colorspace_settings.name != "sRGB":
+            noncolor = True
+    normal = any(n.type == "NORMAL_MAP" for n in nt.nodes)
+    return wired, noncolor, normal
+
+
+def _check_real_surfaces(context):
+    targets = []
+    for name in ("Table", "Plate", "Icing"):
+        obj = _scene_obj(context, name)
+        if obj is not None and obj.type == "MESH":
+            targets.append(obj)
+    dough = _find_dough(context)
+    if dough is not None:
+        targets.append(dough)
+    if len(targets) < 4:
+        return False
+    wired_objects = 0
+    any_noncolor = False
+    any_normal = False
+    for obj in targets:
+        obj_wired = False
+        for mat in obj.data.materials:
+            wired, noncolor, normal = _pbr_pattern(mat)
+            obj_wired = obj_wired or wired
+            any_noncolor = any_noncolor or noncolor
+            any_normal = any_normal or normal
+        if obj_wired:
+            wired_objects += 1
+    return (wired_objects >= 3 and any_noncolor and any_normal)
+
+
+def _check_unwrap_mug(context):
+    mug = _scene_obj(context, "Mug")
+    if mug is None or mug.type != "MESH":
+        return False
+    if not any(e.use_seam for e in mug.data.edges):
+        return False
+    foam = _scene_obj(context, "Coffee Foam")
+    if foam is None or foam.type != "MESH":
+        return False
+    return len(foam.data.materials) > 0 and \
+        foam.data.materials[0] is not None
+
+
+def _check_scatter(context):
+    icing = _scene_obj(context, "Icing")
+    if icing is None:
+        return False
+    if not any(m.type == "NODES" and m.node_group is not None
+               and "Scatter on Surface" in m.node_group.name
+               for m in icing.modifiers):
+        return False
+    variants = False
+    for coll in bpy.data.collections:
+        if coll is context.scene.collection:
+            continue
+        small = [o for o in coll.objects
+                 if o.type == "MESH" and len(o.data.vertices) < 2000]
+        if len(small) >= 2:
+            variants = True
+    if not variants:
+        return False
+    for vg in icing.vertex_groups:
+        for v in list(icing.data.vertices)[:600]:
+            try:
+                if vg.weight(v.index) > 0.0:
+                    return True
+            except RuntimeError:
+                continue
+    return False
+
+
+def _check_final_picture(context):
+    lights = [o for o in context.scene.objects if o.type == "LIGHT"]
+
+    def deliberate(light):
+        c = light.data.color
+        return max(abs(c[0] - 1.0), abs(c[1] - 1.0),
+                   abs(c[2] - 1.0)) > 0.02
+
+    if not (len(lights) >= 2 or any(deliberate(l) for l in lights)):
+        return False
+    return _render_proof(context)
+
+
 TOUR_STEPS = [
-    {"title": "Add the dough ring",
-     "skill": "Adding a shape and changing its settings",
-     "how": "Every donut starts as a plain ring of dough - the "
-            "famous tutorial's first move, and yours.",
+    {"title": "Your first cup, saved",
+     "skill": "Moving around, adding a shape, Edit Mode, your "
+              "first modifier - and saving",
+     "how": "Part 1 of the new series ('Blender Donut Tutorial "
+            "Part 1 (2026)'): before any donut exists, he "
+            "teaches the whole workshop on a coffee cup - then "
+            "saves the file.",
      "teach": [
-         "1. Get rid of the starter cube: click it, press X, then "
-         "choose Delete. (Keep the camera and the light - you will "
-         "want them later.)",
-         "2. Press Shift+A, go to Mesh, click Torus. A ring appears - "
-         "that is the dough's shape.",
-         "3. Look at the bottom-left corner: a small settings box "
-         "appeared for the ring you just added. Set Major Segments "
-         "to 64 and Minor Segments to 24 (smoother), and Minor "
-         "Radius to 0.42 (plumper).",
-         "4. Flatten it a little, like real dough: press S, then Z, "
-         "move the mouse down a touch, and click.",
-         "5. Right-click the ring and choose Shade Smooth.",
-         "6. Open the wrench tab on the right (Modifier Properties), "
-         "click Add Modifier, choose Subdivision Surface, and set "
-         "Levels Viewport to 2."],
-     "missing": "No dough yet - this step is done when a ring "
-                "(a torus) is sitting in your scene.",
-     "run": _tour_step_dough, "check": _check_dough},
-    {"title": "Make the icing",
-     "skill": "Edit Mode: changing part of a shape - and modifiers "
-              "that give it thickness",
-     "how": "His real method: the icing is the top of the dough "
-            "itself, lifted off and given thickness, with its edge "
-            "pulled down the sides into uneven drips.",
+         "1. Watch Part 1 first. He starts with moving around "
+         "(from 1:30): hold the middle mouse button and drag to "
+         "orbit; scroll to zoom. Everything else stands on this.",
+         "2. Adding things is at 6:02, Shade Smooth at 9:32 - "
+         "right-click the shape and pick Shade Smooth when your "
+         "cup looks faceted.",
+         "3. The cup itself starts at 10:27. At 15:42 he enters "
+         "Edit Mode (Tab) - working on the skin, not the whole "
+         "thing - and at 17:57 he deletes the top face in Edit "
+         "Mode to open the cup's mouth.",
+         "4. Modifiers arrive at 18:27: the wrench tab, Add "
+         "Modifier, Subdivision Surface (20:40) makes the cup "
+         "smooth; loop cuts (22:43) and the Inset tool (24:31) "
+         "shape it, and at 26:47 he gives the cup's walls real "
+         "thickness.",
+         "5. At 27:11 he saves - Ctrl+S, a name, Save Blender "
+         "File. Do the same now: this step ticks the moment "
+         "your work exists as a saved file."],
+     "missing": "Not saved yet: this step is done when your "
+                "scene - cup and all - is saved as a .blend "
+                "file (Ctrl+S).",
+     "video": {"url": "https://www.youtube.com/watch?v=-tbSCMbJA6o",
+               "label": "Watch Part 1 - Blender Donut Tutorial "
+                        "Part 1"},
+     "tools": ["make_smoother", "loop_cut", "inset_face",
+               "save_work"],
+     "run": _tour_step_first_cup, "check": _check_first_cup},
+    {"title": "The mug with a handle, built from the photo",
+     "skill": "Reference images: modelling a real thing by "
+              "looking at it, not from memory",
+     "how": "Part 2 ('Blender Basic Modelling Tutorial'): he "
+            "models a realistic coffee mug from a reference "
+            "photo - the photo he links from the series page.",
      "teach": [
-         "1. Click the dough, press Shift+D, then Enter - an exact "
-         "copy, in exactly the same place.",
-         "2. With the copy picked, press Tab. You are in Edit Mode "
-         "now: working on its skin, not the whole thing. Press 3 "
-         "(above the letters) to select by faces.",
-         "3. Turn your view by holding the middle mouse button and "
-         "dragging. Drag a box over the BOTTOM half of the copy to "
-         "select those faces, then press X and choose Faces. The "
-         "copy is now just the top shell.",
-         "4. Press Tab to leave Edit Mode. In the list of things at "
-         "the top-right (the Outliner), double-click the copy's name "
-         "and rename it to Icing.",
-         "5. With Icing picked, open the wrench tab, click Add "
-         "Modifier, choose Solidify, and set Thickness to 0.05 - "
-         "that gives the icing real thickness.",
-         "6. The drips: Tab back into Edit Mode on the Icing, select "
-         "the faces along its lower edge, press O (nearby points now "
-         "move together), then G, then Z, and pull some spots down "
-         "further than others. Press Tab when it looks drippy."],
-     "missing": "This step is done when a piece named Icing exists "
-                "with a Solidify modifier on it - the top of the "
-                "dough, lifted off and thickened.",
-     "run": _tour_step_icing, "check": _check_icing},
-    {"title": "Colour the icing pink",
-     "skill": "Materials: giving something a colour and a shine",
-     "how": "Pink and glossy, like his.",
+         "1. Watch Part 2. At 0:00 he makes the case for "
+         "reference; at 3:25 he adds the photo (Shift+A, Image, "
+         "Reference) and works with it on show in the scene.",
+         "2. At 7:31 he builds the mug's large forms against "
+         "the photo; the bottom lip is at 10:18. Model what the "
+         "photo shows, not what you remember a mug looks like.",
+         "3. The handle is modelled at 13:25 and joined into "
+         "itself at 20:54; at 23:36 he fixes the shading "
+         "artifacts the join leaves behind - grey smudges are "
+         "normal there, and fixable.",
+         "4. Honest note: no measurement can judge your handle "
+         "- it counts when it looks like the photo's handle to "
+         "you. This step ticks on the photo being in your scene "
+         "and your mug having grown well past the plain Part 1 "
+         "cup."],
+     "missing": "This step is done when the reference photo is "
+                "in your scene as a visible image, and your mug "
+                "has grown into a real modelled mug - well beyond "
+                "the plain practice cup.",
+     "video": {"url": "https://www.youtube.com/watch?v=K1UyEdmSttQ",
+               "label": "Watch Part 2 - Basic Modelling"},
+     "tools": ["start_shaping", "inset_face", "look_smooth"],
+     "run": _tour_step_mug_reference, "check": _check_mug_reference},
+    {"title": "Icing that drips and hugs the donut",
+     "skill": "Edit Mode selection, Solidify, and the "
+              "Shrinkwrap modifier",
+     "how": "Part 3 ('Blender Basic Organic Modelling "
+            "Tutorial'): the icing is the donut's own top - "
+            "thickened, pulled into drips, and shrink-wrapped "
+            "onto the dough so it hugs.",
      "teach": [
-         "1. Click the Icing (if the dough is in the way, pick it in "
-         "the Outliner list at the top-right).",
-         "2. On the right, open the Material tab - the red-and-white "
-         "checker ball.",
-         "3. Click New - the icing gets its own material.",
-         "4. Click the white strip next to Base Color and pick a "
-         "pink: strong on the red, a middling amount of blue, not "
-         "much green. Slide it around until it looks like strawberry "
-         "icing.",
-         "5. Drag Roughness down to about 0.2. Low roughness is what "
-         "makes it glossy, like wet icing."],
-     "missing": "The icing is not pink yet: it needs its own "
-                "material, with a pink Base Color.",
-     "run": _tour_step_icing_pink, "check": _check_icing_pink},
-    {"title": "Colour the dough golden",
-     "skill": "One object, two materials: the fry line",
-     "how": "Baked golden, with the pale fry line around its "
-            "middle - the band where the donut floated in the oil.",
+         "1. First the ring itself, if you don't have it yet: "
+         "Shift+A, Mesh, Torus; right-click, Shade Smooth; the "
+         "wrench tab, Add Modifier, Subdivision Surface at "
+         "level 2. His Part 3 opens (0:00) by naming objects - "
+         "rename yours Dough, and the copy below Icing.",
+         "2. At 3:16 he duplicates the dough; at 4:08 he "
+         "selects half of it - the top - in Edit Mode (Tab, "
+         "then select by faces). The top is the icing; delete "
+         "the rest of the copy.",
+         "3. At 7:35, thickness: with Icing picked, the wrench "
+         "tab, Add Modifier, Solidify - his thickness is about "
+         "0.025. At 13:03 he pulls the rim down into runoff "
+         "drips with proportional editing (the O key).",
+         "4. At 14:26, the hug: Add Modifier, Deform, "
+         "Shrinkwrap, and set its Target to the Dough. The "
+         "icing now clings to the donut instead of floating "
+         "above it.",
+         "5. Stuck mid-part? His chapter at 5:46 is literally "
+         "called the Unstuck Yourself Guide - it is the "
+         "video's own rescue page."],
+     "missing": "This step is done when a ring of dough exists "
+                "and the piece named Icing has both a Solidify "
+                "modifier and a Shrinkwrap modifier aimed at "
+                "the dough.",
+     "video": {"url": "https://www.youtube.com/watch?v=9OA2asQdi_U",
+               "label": "Watch Part 3 - Basic Organic Modelling"},
+     "tools": ["give_thickness", "wrap_onto", "start_shaping"],
+     "run": _tour_step_icing_hug, "check": _check_icing_hug},
+    {"title": "A lumpy donut, its first picture, and skin like food",
+     "skill": "Staging a set, the Lattice, materials with "
+              "subsurface - and the first render",
+     "how": "Part 4 ('Blender Basic Materials Tutorial'): the "
+            "plate arrives, a lattice makes the donut lumpy, "
+            "real materials go on - and the setting that makes "
+            "it read as food is turned on.",
      "teach": [
-         "1. Click the Dough.",
-         "2. In the Material tab, click New, and set Base Color to a "
-         "baked golden brown - think toast.",
-         "3. The fry line: in the Material tab, click the + at the "
-         "right of the material list to add a second slot, click "
-         "New in it, and make this one a pale tan.",
-         "4. Press Tab for Edit Mode, press 3, and select a band of "
-         "faces around the dough's outside middle.",
-         "5. Back in the Material tab, click the pale material in "
-         "the list, then click Assign - the band turns pale. Press "
-         "Tab to finish."],
-     "missing": "The dough is not golden yet: its first material "
-                "needs a baked golden-brown Base Color.",
-     "run": _tour_step_dough_colour, "check": _check_dough_colour},
-    {"title": "Add the sprinkles",
-     "skill": "Scattering: make one sprinkle, get a hundred copies",
-     "how": "Long thin sprinkles lying flat on the icing, in "
-            "pastel colours - scattered by Blender itself, not "
-            "placed one by one.",
+         "1. Watch Part 4. It opens (0:00) modelling the plate "
+         "- that was Part 3's homework - and the donut rests "
+         "on it.",
+         "2. At 8:29 he bends the donut out of round with a "
+         "Lattice: perfect circles read as computer-made, so "
+         "the whole donut gets gently deformed before anyone "
+         "looks closely.",
+         "3. At 16:03 comes your first render - F12 - with "
+         "camera control at 17:02. It will look grey and plain: "
+         "that is correct at this point, the colour has not "
+         "happened yet. If it comes out black, suspect the "
+         "light first, not your donut.",
+         "4. Basic materials arrive at 23:30 (the checker-ball "
+         "tab): the icing gets its glossy pink, the dough its "
+         "baked golden. Then SSS at 26:30 - Subsurface Weight "
+         "above zero on both: light sinks into the surface and "
+         "glows a little, like real icing and crumb, instead "
+         "of bouncing off like plastic.",
+         "5. The table is added last (29:35) - the big flat "
+         "shape everything sits on. This step ticks when the "
+         "plate, the table, the subsurface and a render are "
+         "all in your scene, whichever order you did them."],
+     "missing": "This step is done when the donut sits on a "
+                "plate on a table, both dough and icing have "
+                "Subsurface Weight above zero, and a render "
+                "exists.",
+     "video": {"url": "https://www.youtube.com/watch?v=5Xlu2zwbJd0",
+               "label": "Watch Part 4 - Basic Materials"},
+     "tools": ["give_colour", "take_picture", "camera_here"],
+     "run": _tour_step_first_picture,
+     "check": _check_first_picture},
+    {"title": "Real surfaces from photo textures",
+     "skill": "Image textures: colour, roughness and bump "
+              "working together as one recipe",
+     "how": "Part 5 ('Blender Basic Texturing Tutorial'): he "
+            "textures the table, plate, donut and icing with "
+            "photo textures - and a real surface turns out to "
+            "be three pictures doing three different jobs.",
      "teach": [
-         "1. Press Shift+A, Mesh, Ico Sphere - a small ball. Shrink "
-         "it with S, then stretch it into a little rod: press S, "
-         "then Y, drag a little, click.",
-         "2. In the Outliner, rename it Sprinkle. Give it a colour: "
-         "Material tab, New, any bright colour you like.",
-         "3. Click the Icing. Open the Particles tab on the right "
-         "(the icon with dots flying off it) and click the + to add "
-         "a particle system.",
-         "4. Change its Type from Emitter to Hair.",
-         "5. In that same tab, find the Render section: set Render "
-         "As to Object, and in Instance Object choose Sprinkle.",
-         "6. Set Amount to about 130. If they stand on end, look in "
-         "the Rotation section and raise Random - real sprinkles "
-         "lie messily."],
-     "missing": "No sprinkles yet: this step is done when a "
-                "particle system is scattering sprinkles over the "
-                "icing (or an object called Sprinkles exists).",
-     "run": _tour_step_sprinkles, "check": _check_sprinkles},
-    {"title": "Set the scene",
-     "skill": "Staging a scene: plates, tables and props",
-     "how": "His final shot, staged: the donut on a white plate, "
-            "on a dark table, with a mug of coffee beside it.",
+         "1. Watch Part 5 - his chapter at 2:34 ('What are PBR "
+         "Textures?') is the whole idea in four minutes. Open "
+         "the Shader Editor - the screen of boxes and wires. "
+         "Each surface is a recipe hanging off the Principled "
+         "BSDF, the one big node everything feeds into.",
+         "2. The colour photo (an Image Texture node) plugs "
+         "into Base Color. It is the only picture that is "
+         "actually colour, so its Colour Space stays sRGB.",
+         "3. A second picture plugs into Roughness - where the "
+         "surface is shiny, where it is dull. Set its Colour "
+         "Space to Non-Color: it is data, not colour, and "
+         "leaving it on sRGB is the classic 'looks wrong and "
+         "nobody says why'.",
+         "4. A third picture feeds a Normal Map node, and that "
+         "plugs into the Principled's Normal socket - fine "
+         "bumps faked from a photo. Also Non-Color. (He "
+         "textures the icing at 21:37 and the donut at 27:42.)",
+         "5. Buddy's tick looks for exactly this recipe - a "
+         "photo wired into the material, at least one "
+         "Non-Color data map, and a Normal Map node - across "
+         "your table, plate, dough and icing."],
+     "missing": "This step is done when your table, plate, "
+                "dough and icing wear photo textures wired into "
+                "their materials - with at least one Non-Color "
+                "data map and a Normal Map node in the recipe.",
+     "video": {"url": "https://www.youtube.com/watch?v=h30ZJQrb4s8",
+               "label": "Watch Part 5 - Basic Texturing"},
+     "tools": ["give_colour", "paint_picture"],
+     "run": _tour_step_real_surfaces,
+     "check": _check_real_surfaces},
+    {"title": "Unwrap the mug so its pattern sits right",
+     "skill": "Seams and UV unwrapping: choosing where a "
+              "shape's wrapping paper is cut",
+     "how": "Part 6 ('Blender Basic UV Unwrapping Tutorial'): "
+            "the mug gets a pattern - and a pattern only lands "
+            "straight if you first choose where the mug's skin "
+            "is cut to lay it flat.",
      "teach": [
-         "1. The plate: Shift+A, Mesh, Cylinder. Flatten it - S, "
-         "then Z, drag down - and widen it with S. Rename it Plate "
-         "in the Outliner, and give it a white material.",
-         "2. If the plate cuts through the donut, lift the donut "
-         "onto it: click the Dough, Shift-click the Icing, then G, "
-         "then Z, and raise them until the dough rests on the plate.",
-         "3. The table: Shift+A, Mesh, Plane. Make it big with S, "
-         "and slip it just under the plate with G, then Z. Give it "
-         "a dark grey-brown material.",
-         "4. The mug: Shift+A, Mesh, Cylinder - smaller, beside the "
-         "plate. Its handle: Shift+A, Mesh, Torus - shrink it, "
-         "press R then X to stand it on edge, and park it against "
-         "the mug's side."],
-     "missing": "This step is done when an object named Plate is "
-                "in the scene, with the donut resting on it.",
-     "run": _tour_step_plate, "check": _check_plate},
-    {"title": "Take the picture",
-     "skill": "Camera, light, and the render",
-     "how": "A dark room and warm light raking in from the side - "
-            "the mood of his final shot - then the picture itself.",
+         "1. Watch Part 6. To wrap a flat picture around a "
+         "mug, Blender needs a flat map of its skin - the UV "
+         "map. You choose the cuts: pick the mug, Tab into "
+         "Edit Mode, select edges, and Mark Seam (right-click "
+         "menu, or Ctrl+E). Down the back and around the rim "
+         "is where a real mug's glaze line runs.",
+         "2. Then select everything (A) and press U, then "
+         "Unwrap. The mug's skin flattens into the UV Editor. "
+         "Seams in the wrong place make the pattern stretch - "
+         "Buddy can see your seams, but only your eye can "
+         "judge the flattening.",
+         "3. At 25:02 he creates the coffee foam: a flat disc "
+         "just inside the mug's rim, with a material of its "
+         "own, so the mug reads as full instead of hollow. "
+         "(The handle gets its own island in the unwrap at "
+         "2:54 - that is why it was joined the way it was.)"],
+     "missing": "This step is done when your mug has seams "
+                "marked on its edges and a coffee-foam disc "
+                "sits inside the mug's rim with a material of "
+                "its own. Whether the pattern sits straight is "
+                "your eye's call - no tick can see that.",
+     "video": {"url": "https://www.youtube.com/watch?v=yxAqN8TzFbo",
+               "label": "Watch Part 6 - Basic UV Unwrapping"},
+     "tools": ["start_shaping", "paint_it"],
+     "run": _tour_step_unwrap_mug, "check": _check_unwrap_mug},
+    {"title": "Sprinkles by the hundred, none by hand",
+     "skill": "The Scatter on Surface modifier: making "
+              "Blender place the copies for you",
+     "how": "Part 7 ('How to Scatter in Blender 5.0'): "
+            "Blender 5.0's new Scatter on Surface modifier "
+            "covers the icing in sprinkles - you model two or "
+            "three, it places the hundred.",
      "teach": [
-         "1. The mood first: on the right, open the World tab (the "
-         "globe) and set its colour almost black.",
-         "2. Click the light in the scene (or add one: Shift+A, "
-         "Light, Sun). In its tab set Strength to about 2.5 and its "
-         "colour warm, like late sun. Press R and tilt it so the "
-         "light rakes in from the side.",
-         "3. Frame the shot: turn your view with the middle mouse "
-         "until the donut, plate and mug look their best. Then open "
-         "the View menu at the top of the big window: Align View, "
-         "Align Active Camera to View. The camera jumps to where "
-         "you are looking.",
-         "4. Press F12. Blender renders - that is your picture.",
-         "5. In the picture window, choose Image, then Save As, and "
-         "save it somewhere you will find it."],
-     "missing": "No picture yet: frame the donut and press F12 to "
-                "render it.",
-     "run": _tour_step_picture, "check": _check_picture},
-    {"title": "Save your work",
-     "skill": "Files: keeping your work",
-     "how": "Save the whole scene, so you can close Blender and "
-            "come back to your donut any time.",
+         "1. Watch Part 7. At 0:18 he explains the 3D cursor - "
+         "the red-and-white target is where new things are "
+         "born. At 0:51 he models one sprinkle; at 5:21 he "
+         "makes the sprinkle variants - a few shapes, gathered "
+         "into one Collection.",
+         "2. At 7:23 he adds the Scatter on Surface modifier "
+         "to the icing (wrench tab, Add Modifier) and points "
+         "it at the sprinkle collection, with Pick Instance on "
+         "so it mixes the variants instead of cloning one.",
+         "3. At 12:44 he controls where it scatters: the "
+         "icing's painted vertex group becomes the modifier's "
+         "Distribution Mask, so sprinkles land where the "
+         "icing shows and nowhere else. Paint it in Weight "
+         "Paint mode - red is 'sprinkles here'.",
+         "4. At 18:19 he fixes intersections (sprinkles sunk "
+         "too deep - lift them with the Surface Offset), and "
+         "at 24:04 the colours get randomized.",
+         "5. This modifier is new in Blender 5.0. On an older "
+         "Blender it simply is not there, and this one step "
+         "waits until you are on 5.0 or newer."],
+     "missing": "This step is done when the icing carries a "
+                "Scatter on Surface modifier, a collection "
+                "holds at least two sprinkle shapes, and the "
+                "icing has a painted vertex group guiding them.",
+     "video": {"url": "https://www.youtube.com/watch?v=_-QsGTL7pS0",
+               "label": "Watch Part 7 - How to Scatter in "
+                        "Blender 5.0"},
+     "tools": [],
+     "run": _tour_step_scatter, "check": _check_scatter},
+    {"title": "Light it like a photo, render it twice",
+     "skill": "Lighting for realism - and the two render "
+              "engines, Eevee and Cycles",
+     "how": "The finale ('The Basics of Lighting and "
+            "Rendering in Blender'): he lights the donut for "
+            "realism, then renders it in both of Blender's "
+            "engines so you can see what each one does.",
      "teach": [
-         "1. Press Ctrl+S.",
-         "2. Choose a folder you will remember, name the file "
-         "My Donut, and click Save Blender File.",
-         "3. From now on, File, Open brings this exact scene back - "
-         "dough, icing and all."],
-     "missing": "Not saved yet: press Ctrl+S and save the file.",
-     "run": _tour_step_save, "check": _check_saved},
+         "1. Watch the finale. His own summary of it: you "
+         "learn to add lights for realism. The method is one "
+         "light at a time, looking at what each one changes - "
+         "a single flat light is exactly why a render looks "
+         "like plastic.",
+         "2. Build the light in layers: a strong main light "
+         "from one side to shape the donut, a gentler light to "
+         "lift the shadows, and the room's own light (the "
+         "World) kept in check. This step ticks when your "
+         "scene holds a real setup - more than one light, or "
+         "one light you have deliberately aimed and coloured "
+         "- and a fresh render exists.",
+         "3. Then render it twice: Render Properties, Render "
+         "Engine - once with Eevee (fast, a little less true), "
+         "once with Cycles (slow, honest light), F12 each "
+         "time, and compare the two pictures side by side.",
+         "4. Which one looks like food is your eye's decision. "
+         "That judgment is the whole craft of this part - no "
+         "tick can grade it, and Buddy won't pretend to."],
+     "missing": "This step is done when your scene is lit on "
+                "purpose - more than one light, or one "
+                "deliberately set - and a fresh render exists. "
+                "The rest, whether it looks like a photo, is "
+                "your eye: that is the real finish.",
+     "video": {"url": "https://www.youtube.com/watch?v=WobATxh3i-g",
+               "label": "Watch Part 8 - Lighting and Rendering "
+                        "(the finale)"},
+     "tools": ["add_sun", "add_lamp", "take_picture", "save_work"],
+     "run": _tour_step_final_picture,
+     "check": _check_final_picture},
 ]
 
 
@@ -2324,14 +2953,16 @@ PRINT_STEPS = [
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
-     "byline": "The Blender Guru's famous first project - the one "
-               "millions of people started with.",
-     "intro": "One small project that touches almost everything in "
-              "Blender: shapes, Edit Mode, modifiers, colour, "
-              "scattering, staging a scene, light and camera - and "
-              "saving. You do every step with your own hands, in "
-              "real Blender. This card guides you and ticks each "
-              "step off only when your scene proves you did it.",
+     "byline": "The follow-along companion to Blender Guru's new "
+               "donut series for Blender 5.0 - the famous first "
+               "project, rebuilt for 5.0.",
+     "intro": "Eight video parts, eight steps. He teaches on "
+              "YouTube; this companion keeps your place in the "
+              "series, tells you what he is about to do, and "
+              "ticks each step off only when your scene proves "
+              "you caught up. Cup, mug, icing, materials, photo "
+              "textures, unwrapping, scattering, light - you do "
+              "every step with your own hands, in real Blender.",
      "steps": TOUR_STEPS},
     {"id": "hard_surface",
      "kind": "flow",
@@ -2523,6 +3154,8 @@ class BUDDY_OT_tour_start(Operator):
         pkg = PACKAGES_BY_ID.get(self.package or "donut", PACKAGES[0])
         context.scene.buddy_tour_package = pkg["id"]
         context.scene.buddy_tour_started = True
+        _CONDUCT["key"] = None
+        _conduct_check()
         context.scene.buddy_tour_epoch = int(time.time())
         _TOUR_TIP_STEP = 0
         _EXPERT_TIP = (f"{pkg['name']}, step 1: "
@@ -2564,11 +3197,16 @@ class BUDDY_OT_tour_do(Operator):
         if not (0 <= self.step < len(steps)):
             return {"CANCELLED"}
         step = steps[self.step]
+        global _BUILDING
+        _BUILDING = True
         try:
             step["run"](context)
         except Exception as exc:
             self.report({"WARNING"}, f"That step didn't finish: {exc}")
             return {"CANCELLED"}
+        finally:
+            _BUILDING = False
+        _conduct_check()
         if step["check"](context):
             nxt = self.step + 1
             if nxt < len(steps):
@@ -2718,6 +3356,19 @@ class BUDDY_Preferences(AddonPreferences):
                       "nothing: install a free local AI (for example "
                       "Ollama), pick Local, and everything stays on "
                       "your computer.")
+        layout.separator()
+        _wrap(layout, "Buddy's screens: Buddy can rearrange "
+                      "Blender itself around your job - its own "
+                      "Start, Model, Look and Finish screens in "
+                      "the tabs at the very top, switching as "
+                      "your job's steps change. Set them up in "
+                      "this file now; from your next Blender "
+                      "start, 'Blender Buddy' is also one of "
+                      "the opening choices on the splash "
+                      "screen.")
+        layout.operator("buddy.build_screens",
+                        text="Set up Buddy's screens in this file")
+        layout.separator()
         _wrap(layout, "Whatever way you pick: when you ask, Buddy "
                       "sends your question plus a short description "
                       "of your scene (what's in it, what you have "
@@ -3693,18 +4344,42 @@ def _draw_action(layout, act, show_real):
 
 
 def _hint(context):
+    """One true sentence about where you are. It used to point
+    at numbered sections ("move it in section 3...") - the
+    owner, looking at it on a camera, called it 'very lacking':
+    the sections move and hide now, and a camera cannot be
+    shaped at all. So: per-kind words, no section numbers,
+    never an action the picked thing cannot do."""
     obj = context.object
     if obj is None:
-        return ("You have not picked anything yet. Either click a thing in the "
-                "big window, or add a box in section 1 below - a box is the "
-                "easiest first thing to practise on.")
+        return ("You have not picked anything yet. Click a thing "
+                "in the big window, or start with the tools "
+                "above - adding a box is the easiest first "
+                "thing to practise on.")
     if context.mode == "EDIT_MESH":
-        return (f"You are SHAPING '{obj.name}' - changing its corners, edges "
-                "and faces. Section 4 is your main toolbox right now. 'Start "
-                "shaping it' (section 4) takes you back to moving whole things.")
-    return (f"You have picked '{obj.name}'. Move it or size it in section 3, "
-            "copy or combine it in section 5, or press 'Start shaping it' in "
-            "section 4 to change its actual shape.")
+        return (f"You are SHAPING '{obj.name}' - changing its "
+                "corners, edges and faces. The tools above are "
+                "the shaping tools that fit right now. Press "
+                "Tab to go back to moving the whole thing.")
+    if obj.type == "CAMERA":
+        return ("You have picked the camera. The tools above "
+                "look through it and aim it - when the frame "
+                "looks right, take the picture.")
+    if obj.type == "LIGHT":
+        return ("You have picked a light. Move it to change "
+                "where it shines; how strong it is and its "
+                "colour live in the light's own settings.")
+    if obj.type in ("CURVE", "FONT"):
+        return (f"You have picked '{obj.name}'. The tools above "
+                "are what can be done with it right now - move "
+                "it, size it, or turn it into a solid shape you "
+                "can shape like anything else.")
+    if obj.type != "MESH":
+        return (f"You have picked '{obj.name}'. The tools above "
+                "are what can be done with it right now.")
+    return (f"You have picked '{obj.name}'. The tools above are "
+            "its tools for right now - move it, size it, copy "
+            "it, or start shaping it.")
 
 
 class VIEW3D_PT_blender_buddy(Panel):
@@ -3723,7 +4398,14 @@ class VIEW3D_PT_blender_buddy(Panel):
 
         scene = context.scene
         if not (wm.buddy_query or "").strip():
+            ws = getattr(context, "workspace", None)
+            if (ws is not None and ws.name == "Buddy Start"
+                    and not getattr(scene, "buddy_tour_started",
+                                    False)):
+                _draw_start(layout, context)
+                return
             if getattr(scene, "buddy_tour_started", False):
+                _draw_strip(layout, context)
                 box = layout.box()
                 global _TOUR_TIP_STEP, _EXPERT_TIP
                 pkg = _active_package(context)
@@ -3755,9 +4437,20 @@ class VIEW3D_PT_blender_buddy(Panel):
                               icon="MESH_TORUS")
                     _wrap(box, step["title"])
                     _wrap(box, step["how"])
-                    _wrap(box, f"The skill: {step['skill']}.")
-                    for line in step["teach"]:
-                        _wrap(box, line)
+                    video = step.get("video")
+                    if video:
+                        op = box.operator(
+                            "wm.url_open", text=video["label"],
+                            icon="URL")
+                        op.url = video["url"]
+                    box.prop(scene, "buddy_show_lesson",
+                             text="Show the full lesson",
+                             toggle=True)
+                    if getattr(scene, "buddy_show_lesson",
+                               False):
+                        _wrap(box, f"The skill: {step['skill']}.")
+                        for line in step["teach"]:
+                            _wrap(box, line)
                     shown = []
                     for tid in step.get("tools") or []:
                         act = ACTIONS_BY_ID.get(tid)
@@ -3775,6 +4468,10 @@ class VIEW3D_PT_blender_buddy(Panel):
                                "this card watches your scene and "
                                "moves on by itself when it's done.")
                     box.operator("buddy.tour_hide", text="Hide for now")
+
+        if not (wm.buddy_query or "").strip():
+            _draw_where(layout, context)
+            _draw_heads_up(layout, context)
 
         if not (wm.buddy_query or "").strip():
             box = layout.box()
@@ -4158,11 +4855,933 @@ class VIEW3D_PT_buddy_projects(Panel):
                                      icon="MESH_TORUS")
                 op.package = pkg["id"]
 
+# ----------------------------------------------------------------------------
+# The complete redesign: Buddy inside Blender itself (v3).
+# Until v2 everything Buddy made lived in one sidebar panel -
+# the owner, using it: "all the controls are still in their
+# default place, this is just an extra window not a blender
+# interface redesign". So v3 moves into Blender's own furniture:
+#
+# - An APP TEMPLATE ("Blender Buddy", installed into the user's
+#   app-template folder): Blender can open AS Buddy - its own
+#   Start / Model / Look / Finish workspaces and nothing else.
+# - STEP-CONDUCTING: while a job runs, each step re-forms the
+#   whole screen - the workspace switches, and the viewport
+#   shading and camera view follow. (Mode is deliberately NOT
+#   conducted: steps like the donut's icing begin in Object
+#   Mode and enter Edit Mode mid-step, in their own words -
+#   the step's tools switch mode when pressed, as they have
+#   since v1.) Buddy conducts the application, not just its
+#   own region.
+# - An in-viewport PIE of the moment's tools on the ` key, and
+#   a "Buddy tools" button + job progress in the 3D view's own
+#   header bar.
+# - Plain-words tools in Blender's OWN toolbar (T): the same
+#   operators as the native Extrude / Loop Cut / Knife tools,
+#   under names a beginner already understands.
+# Everything still layers over Blender; disabling Buddy
+# changes nothing, and none of it depends on the template -
+# in a plain file the same screens can be built on request.
+# ----------------------------------------------------------------------------
+
+BUDDY_SCREENS = ("Buddy Start", "Buddy Model", "Buddy Look",
+                 "Buddy Finish")
+
+_SCREEN_AREA_SWAPS = {
+    "Buddy Start": {},
+    "Buddy Model": {},
+    "Buddy Look": {"PROPERTIES": "NODE_EDITOR",
+                   "DOPESHEET_EDITOR": "IMAGE_EDITOR"},
+    "Buddy Finish": {"OUTLINER": "IMAGE_EDITOR"},
+}
+
+# (package, step) -> (workspace, viewport shading, view, mode)
+_STEP_SCREENS = {
+    ("donut", 0): ("Buddy Model", None, None, None),
+    ("donut", 1): ("Buddy Model", None, None, None),
+    ("donut", 2): ("Buddy Model", None, None, None),
+    ("donut", 3): ("Buddy Finish", "RENDERED", None, None),
+    ("donut", 4): ("Buddy Look", "RENDERED", None, None),
+    ("donut", 5): ("Buddy Look", None, None, None),
+    ("donut", 6): ("Buddy Model", None, None, None),
+    ("donut", 7): ("Buddy Finish", "RENDERED", "CAMERA", None),
+    ("hard_surface", 0): ("Buddy Model", None, None, None),
+    ("hard_surface", 1): ("Buddy Model", None, None, None),
+    ("hard_surface", 2): ("Buddy Model", None, None, None),
+    ("hard_surface", 3): ("Buddy Model", None, None, None),
+    ("hard_surface", 4): ("Buddy Model", None, None, None),
+    ("hard_surface", 5): ("Buddy Model", None, None, None),
+    ("hard_surface", 6): ("Buddy Model", None, None, None),
+    ("hard_surface", 7): ("Buddy Look", "RENDERED", None, None),
+    ("look_real", 0): ("Buddy Model", None, None, None),
+    ("look_real", 1): ("Buddy Model", None, None, None),
+    ("look_real", 2): ("Buddy Finish", None, "CAMERA", None),
+    ("look_real", 3): ("Buddy Look", "RENDERED", None, None),
+    ("look_real", 4): ("Buddy Look", None, None, None),
+    ("look_real", 5): ("Buddy Finish", "RENDERED", "CAMERA", None),
+    ("look_real", 6): ("Buddy Finish", None, None, None),
+    ("print_ready", 0): ("Buddy Model", None, None, None),
+    ("print_ready", 1): ("Buddy Model", None, None, None),
+    ("print_ready", 2): ("Buddy Model", None, None, None),
+    ("print_ready", 3): ("Buddy Model", None, None, None),
+    ("print_ready", 4): ("Buddy Finish", None, None, None),
+}
+
+_CONDUCT = {"key": None, "scheduled": False}
+_BUILDING = False
+_BUDDY_KEYMAPS = []
+
+
+def _conduct_spec(context):
+    scene = getattr(context, "scene", None)
+    if scene is None or not getattr(scene, "buddy_tour_started",
+                                    False):
+        return None, None
+    pkg = _active_package(context)
+    _checks, current = tour_state(context)
+    if current >= len(pkg["steps"]):
+        return (pkg["id"], "done"), ("Buddy Finish", None, None,
+                                      None)
+    return ((pkg["id"], current),
+            _STEP_SCREENS.get((pkg["id"], current)))
+
+
+def _conduct_check(*_args):
+    """Watch for the job's step changing; when it does, the
+    whole screen re-forms for the new step. Cheap when nothing
+    changed, and never allowed to raise."""
+    if _BUILDING:
+        # A reference build is mid-flight: its half-made scene
+        # must not conduct anything. The key stays unconsumed,
+        # so the finished step conducts when the build ends.
+        return
+    try:
+        key, spec = _conduct_spec(bpy.context)
+        if key == _CONDUCT["key"]:
+            return
+        _CONDUCT["key"] = key
+        if spec is None or _CONDUCT["scheduled"]:
+            return
+        _CONDUCT["scheduled"] = True
+        bpy.app.timers.register(_conduct_apply,
+                                first_interval=0.05)
+    except Exception:
+        pass
+
+
+def _conduct_apply():
+    _CONDUCT["scheduled"] = False
+    if _BUILDING:
+        _CONDUCT["key"] = None
+        return None
+    try:
+        context = bpy.context
+        _key, spec = _conduct_spec(context)
+        if spec is None:
+            return None
+        ws_name, shading, view, mode = spec
+        window = getattr(context, "window", None)
+        if window is None:
+            return None
+        ws = bpy.data.workspaces.get(ws_name)
+        if ws is not None and window.workspace != ws:
+            window.workspace = ws
+        if shading or view:
+            for area in window.screen.areas:
+                if area.type != "VIEW_3D":
+                    continue
+                for space in area.spaces:
+                    if space.type != "VIEW_3D":
+                        continue
+                    if shading:
+                        try:
+                            space.shading.type = shading
+                        except Exception:
+                            pass
+                    if view == "CAMERA" and space.region_3d:
+                        try:
+                            space.region_3d.view_perspective = \
+                                "CAMERA"
+                        except Exception:
+                            pass
+        if mode == "EDIT" and context.mode == "OBJECT":
+            obj = context.object
+            if obj is not None and obj.type == "MESH":
+                bpy.ops.object.mode_set(mode="EDIT")
+    except Exception:
+        pass
+    return None
+
+
+_SCREENS_JOB = {"stage": "idle", "base": None, "current": None,
+                "created": []}
+
+
+def _screens_tick():
+    """Build Buddy's screens one UI tick at a time. A
+    workspace's screen only accepts edits that survive saving
+    once the workspace has actually been shown, and switching
+    to it settles a tick later - so: switch to the base screen,
+    settle, copy it, settle, then edit the copy's screen."""
+    job = _SCREENS_JOB
+    try:
+        context = bpy.context
+        window = getattr(context, "window", None)
+        if window is None:
+            job["stage"] = "idle"
+            return None
+        if job["stage"] == "to_base":
+            base = bpy.data.workspaces.get(job["base"] or "")
+            if base is not None:
+                window.workspace = base
+            job["stage"] = "dup"
+            return 0.35
+        if job["stage"] == "dup":
+            missing = [n for n in BUDDY_SCREENS
+                       if n not in bpy.data.workspaces]
+            if not missing:
+                job["stage"] = "idle"
+                return None
+            name = missing[0]
+            before = {w.name for w in bpy.data.workspaces}
+            bpy.ops.workspace.duplicate()
+            fresh = [w for w in bpy.data.workspaces
+                     if w.name not in before]
+            if not fresh:
+                job["stage"] = "idle"
+                return None
+            fresh[0].name = name
+            window.workspace = fresh[0]
+            job["current"] = name
+            job["stage"] = "edit"
+            return 0.35
+        if job["stage"] == "edit":
+            swaps = _SCREEN_AREA_SWAPS[job["current"]]
+            for area in window.screen.areas:
+                if area.type in swaps:
+                    try:
+                        area.type = swaps[area.type]
+                    except Exception:
+                        pass
+                if area.type == "VIEW_3D":
+                    for space in area.spaces:
+                        if space.type == "VIEW_3D":
+                            space.show_region_ui = True
+            job["created"].append(job["current"])
+            if all(n in bpy.data.workspaces
+                   for n in BUDDY_SCREENS):
+                job["stage"] = "idle"
+                return None
+            job["stage"] = "to_base"
+            return 0.1
+    except Exception:
+        job["stage"] = "idle"
+    return None
+
+
+def _build_screens(context):
+    """Start building Buddy's screens in this file (they appear
+    in the top tabs one by one over a couple of seconds - see
+    _screens_tick for why it can't be instant). Existing
+    workspaces, yours and Buddy's, are never touched. Returns
+    the Buddy screens already present."""
+    window = getattr(context, "window", None)
+    if window is None:
+        return []
+    present = [n for n in BUDDY_SCREENS
+               if n in bpy.data.workspaces]
+    if len(present) == len(BUDDY_SCREENS):
+        return present
+    if _SCREENS_JOB["stage"] == "idle":
+        _SCREENS_JOB["base"] = window.workspace.name
+        _SCREENS_JOB["created"] = []
+        _SCREENS_JOB["stage"] = "to_base"
+        if not bpy.app.timers.is_registered(_screens_tick):
+            bpy.app.timers.register(_screens_tick,
+                                    first_interval=0.1)
+    return present
+
+
+class BUDDY_OT_build_screens(Operator):
+    bl_idname = "buddy.build_screens"
+    bl_label = "Set Up Buddy's Screens"
+    bl_description = ("Give this file Buddy's own screens - "
+                      "Start, Model, Look and Finish - in the "
+                      "workspace tabs at the very top. Your own "
+                      "screens are never touched")
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        present = _build_screens(context)
+        if len(present) == len(BUDDY_SCREENS):
+            self.report({"INFO"}, "Buddy's screens are already "
+                                  "set up in this file.")
+            ws = bpy.data.workspaces.get("Buddy Start")
+            if ws is not None and getattr(context, "window",
+                                          None):
+                context.window.workspace = ws
+        else:
+            self.report({"INFO"}, "Buddy is building its "
+                                  "screens - watch the tabs at "
+                                  "the very top: Start, Model, "
+                                  "Look and Finish appear one "
+                                  "by one.")
+        return {"FINISHED"}
+
+
+def _template_source():
+    try:
+        d = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "templates", "Blender_Buddy")
+        return d if os.path.isdir(d) else None
+    except Exception:
+        return None
+
+
+def _install_template():
+    """Put the Buddy app template where Blender looks for it,
+    so from the next start Blender offers 'Blender Buddy' as
+    one of its opening choices. Only copies what changed."""
+    src = _template_source()
+    if not src:
+        return
+    try:
+        dst = bpy.utils.user_resource(
+            "SCRIPTS",
+            path="startup/bl_app_templates_user/Blender_Buddy",
+            create=True)
+        for name in ("startup.blend", "__init__.py"):
+            s = os.path.join(src, name)
+            t = os.path.join(dst, name)
+            if os.path.isfile(s) and (
+                    not os.path.isfile(t)
+                    or not filecmp.cmp(s, t, shallow=False)):
+                shutil.copy2(s, t)
+    except Exception:
+        pass
+
+# ----------------------------------------------------------------
+# The plain-words layer (v3.1): where am I, and what is about
+# to bite me. The owner's standard, 2026-11-13: the redesign
+# is for the average person, and the gaps are the concepts
+# Blender never explains - modes, the origin, the 3D cursor,
+# picked vs in-charge. So Buddy says where you are in plain
+# words at all times, and watches for the invisible traps,
+# naming each in plain words at the moment it bites, with the
+# fix attached. Trap text avoids Blender's jargon word when a
+# plain word exists: the origin is "the spin point", the 3D
+# cursor is "the target".
+
+
+def _bbox_world(obj):
+    """(centre, size, low, high) of the object's box, in the
+    world's measurements."""
+    from mathutils import Vector
+    corners = [obj.matrix_world @ Vector(c)
+               for c in obj.bound_box]
+    lo = Vector((min(c.x for c in corners),
+                 min(c.y for c in corners),
+                 min(c.z for c in corners)))
+    hi = Vector((max(c.x for c in corners),
+                 max(c.y for c in corners),
+                 max(c.z for c in corners)))
+    return (lo + hi) * 0.5, hi - lo, lo, hi
+
+
+def _where_am_i(context):
+    """(headline, sub): where you are, in plain words. Never
+    Blender's bare mode names - a mode is explained by what
+    you can do in it and how to get back."""
+    obj = context.object
+    name = obj.name if obj else None
+    mode = context.mode
+    if mode == "EDIT_MESH" and obj:
+        return (f"You're reshaping '{name}' itself",
+                "You're moving its corners, edges and faces - "
+                "that's why your tools changed. This is the "
+                "shaping half of Blender; nothing is broken.")
+    if mode.startswith("SCULPT") and obj:
+        return (f"You're sculpting '{name}'",
+                "Pushing its surface around like clay. The "
+                "brush is sized in the bar above the big "
+                "window.")
+    if mode == "POSE" and obj:
+        return (f"You're posing '{name}'",
+                "You're moving its bones and the body "
+                "follows. You're not changing the things "
+                "themselves.")
+    if mode == "PAINT_WEIGHT" and obj:
+        return (f"You're painting bone strength on '{name}'",
+                "Where it's red, the bone pulls hard. Where "
+                "it's blue, the bone barely moves it.")
+    if mode in ("PAINT_VERTEX", "PAINT_TEXTURE") and obj:
+        return (f"You're painting on '{name}'",
+                "Colour goes straight onto the thing itself.")
+    if mode == "PARTICLE_EDIT" and obj:
+        return (f"You're combing the hair on '{name}'",
+                "Each stroke moves the strands under the "
+                "brush.")
+    if mode != "OBJECT" and obj:
+        return (f"You're working on '{name}' up close",
+                "A close-up mode is on - the button below "
+                "takes you back to moving whole things.")
+    picked = [o for o in context.selected_objects]
+    if obj is None:
+        return ("You're moving whole things",
+                "Nothing is picked yet. Click a thing in the "
+                "big window to pick it, then it can be moved, "
+                "sized and turned as one piece.")
+    if len(picked) > 1:
+        return (f"You're moving whole things - '{name}' is "
+                "in charge",
+                f"{len(picked)} things are picked. The paler "
+                "orange one is in charge: it's the one tools "
+                "measure from, and the one whose settings "
+                "you see. The others just come along.")
+    return (f"You're moving whole things - '{name}' is picked",
+            "It moves, sizes and turns as one piece. To "
+            "change its actual shape, start shaping it - "
+            "the button below - and you move its corners "
+            "instead.")
+
+
+def _is_shown(obj):
+    if obj.hide_viewport:
+        return False
+    try:
+        return not obj.hide_get()
+    except Exception:
+        return True
+
+
+def _traps(context):
+    """The invisible traps, in the order they bite. Each is a
+    dict: key (its mute identity), text (plain words), fixes
+    (a list of (operator, button text)). Computed live from
+    the scene every draw - no state that can go stale."""
+    out = []
+    scene = context.scene
+    if scene is None:
+        return out
+    objs = list(scene.objects)
+    obj = context.object
+    if objs and not any(_is_shown(o) for o in objs):
+        out.append({
+            "key": "all_hidden",
+            "text": "Everything you've made is hidden right "
+                    "now - that's why the big window looks "
+                    "empty. Your work is still here.",
+            "fixes": [("buddy.show_everything",
+                       "Show everything")],
+        })
+    if obj is not None and obj.type == "MESH":
+        try:
+            centre, size, lo, hi = _bbox_world(obj)
+            biggest = max(size.x, size.y, size.z)
+            origin = obj.matrix_world.translation
+            if biggest > 0.001 and \
+                    (origin - centre).length > 0.6 * biggest:
+                out.append({
+                    "key": f"origin_far|{obj.name}",
+                    "text": f"'{obj.name}' turns around its "
+                            "spin point - the little orange "
+                            "dot - and that dot is sitting "
+                            "away from the thing itself. "
+                            "That's why it swings in a wide "
+                            "circle when you turn it.",
+                    "fixes": [
+                        ("buddy.origin_center",
+                         "Put the spin point in the middle"),
+                        ("buddy.origin_bottom",
+                         "Put the spin point at the bottom")],
+                })
+        except Exception:
+            pass
+    if obj is not None:
+        sx, sy, sz = obj.scale
+        if min(sx, sy, sz) < 0:
+            out.append({
+                "key": f"mirrored|{obj.name}",
+                "text": f"'{obj.name}' has a minus in its "
+                        "size numbers, which flips it "
+                        "inside-out. Some tools will treat "
+                        "it wrong until the flip is locked "
+                        "in.",
+                "fixes": [("buddy.lock_in",
+                           "Lock in the flip")],
+            })
+        elif max(abs(sx - 1), abs(sy - 1),
+                 abs(sz - 1)) > 0.02:
+            out.append({
+                "key": f"scale_open|{obj.name}",
+                "text": f"'{obj.name}' is stretched by its "
+                        f"size numbers ({sx:g}, {sy:g}, "
+                        f"{sz:g}) but the stretch isn't "
+                        "locked in yet. Until it is, some "
+                        "shaping tools - like rounding an "
+                        "edge - come out uneven.",
+                "fixes": [("buddy.lock_in",
+                           "Lock in the size and turn")],
+            })
+    try:
+        cur = scene.cursor.location
+        far = cur.length > 4.0
+        if far and obj is not None:
+            far = (cur - obj.matrix_world.translation
+                   ).length > 4.0
+        if far:
+            fixes = [("buddy.cursor_home",
+                      "Bring the target back to the middle")]
+            if obj is not None:
+                fixes.append(
+                    ("buddy.cursor_to_picked",
+                     f"Put the target on '{obj.name}'"))
+            out.append({
+                "key": "cursor_far",
+                "text": "The target - the red-and-white "
+                        "ring - is a long way from the "
+                        "middle of things. New things you "
+                        "add appear at the target, so they'd "
+                        "land way over there.",
+                "fixes": fixes,
+            })
+    except Exception:
+        pass
+    return out
+
+
+def _muted_keys(context):
+    try:
+        return set(json.loads(
+            getattr(context.window_manager, "buddy_muted",
+                    "[]") or "[]"))
+    except Exception:
+        return set()
+
+
+def _visible_traps(context):
+    muted = _muted_keys(context)
+    return [t for t in _traps(context)
+            if t["key"] not in muted][:2]
+
+
+def _draw_where(layout, context):
+    box = layout.box()
+    box.label(text="Where you are", icon="INFO")
+    headline, sub = _where_am_i(context)
+    _wrap(box, headline)
+    _wrap(box, sub)
+    obj = context.object
+    if context.mode != "OBJECT":
+        box.operator("buddy.mode_back",
+                     text="Back to moving whole things")
+    elif obj is not None and obj.type == "MESH":
+        op = box.operator("buddy.action",
+                          text=f"Start shaping '{obj.name}'")
+        op.action_id = "start_shaping"
+
+
+def _draw_heads_up(layout, context):
+    for trap in _visible_traps(context):
+        box = layout.box()
+        box.label(text="Heads up", icon="ERROR")
+        _wrap(box, trap["text"])
+        for idname, text in trap["fixes"]:
+            box.operator(idname, text=text)
+        op = box.operator("buddy.mute_trap", text="Got it")
+        op.trap_key = trap["key"]
+
+
+def _only_active(context, call):
+    """Run call() with just the active thing selected and in
+    the moving-whole-things mode, then put the selection and
+    mode back. Several of Blender's fix-it operators only run
+    that way, and a beginner should never have to know."""
+    obj = context.object
+    keep = [o for o in context.selected_objects]
+    was = context.mode
+    if was != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
+    try:
+        call()
+    finally:
+        bpy.ops.object.select_all(action="DESELECT")
+        for other in keep:
+            try:
+                other.select_set(True)
+            except Exception:
+                pass
+        context.view_layer.objects.active = obj
+        if was == "EDIT_MESH":
+            try:
+                bpy.ops.object.mode_set(mode="EDIT")
+            except Exception:
+                pass
+
+
+class BUDDY_OT_mode_back(Operator):
+    bl_idname = "buddy.mode_back"
+    bl_label = "Back to moving whole things"
+    bl_description = ("Leave the close-up mode you're in and "
+                      "go back to moving whole things")
+
+    @classmethod
+    def poll(cls, context):
+        return (context.object is not None
+                and context.mode != "OBJECT")
+
+    def execute(self, context):
+        bpy.ops.object.mode_set(mode="OBJECT")
+        self.report({"INFO"}, "Back to moving whole things.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_origin_center(Operator):
+    bl_idname = "buddy.origin_center"
+    bl_label = "Put the spin point in the middle"
+    bl_description = ("Move this thing's spin point - the "
+                      "point it turns and grows around, the "
+                      "little orange dot (Blender calls it "
+                      "the origin) - into the middle of the "
+                      "thing")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def execute(self, context):
+        obj = context.object
+        _only_active(context, lambda: bpy.ops.object.origin_set(
+            type="ORIGIN_GEOMETRY", center="BOUNDS"))
+        self.report({"INFO"}, f"The spin point of "
+                              f"'{obj.name}' is in its "
+                              "middle now.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_origin_bottom(Operator):
+    bl_idname = "buddy.origin_bottom"
+    bl_label = "Put the spin point at the bottom"
+    bl_description = ("Move this thing's spin point to the "
+                      "bottom middle of the thing, so it "
+                      "stands on the ground the way you'd "
+                      "expect")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def execute(self, context):
+        from mathutils import Vector
+        obj = context.object
+        centre, size, lo, hi = _bbox_world(obj)
+        target = Vector((centre.x, centre.y, lo.z))
+        cursor = context.scene.cursor
+        saved = cursor.location.copy()
+
+        def place():
+            cursor.location = target
+            bpy.ops.object.origin_set(type="ORIGIN_CURSOR")
+
+        try:
+            _only_active(context, place)
+        finally:
+            cursor.location = saved
+        self.report({"INFO"}, f"The spin point of "
+                              f"'{obj.name}' is at its "
+                              "bottom now.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_cursor_home(Operator):
+    bl_idname = "buddy.cursor_home"
+    bl_label = "Bring the target back to the middle"
+    bl_description = ("Put the target (the red-and-white "
+                      "ring - Blender calls it the 3D cursor) "
+                      "back at the middle of the world, where "
+                      "new things appear sensibly")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        context.scene.cursor.location = (0.0, 0.0, 0.0)
+        self.report({"INFO"}, "The target is back in the "
+                              "middle.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_cursor_to_picked(Operator):
+    bl_idname = "buddy.cursor_to_picked"
+    bl_label = "Put the target on the picked thing"
+    bl_description = ("Put the target on the picked thing, "
+                      "so the next thing you add appears "
+                      "right there")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def execute(self, context):
+        obj = context.object
+        context.scene.cursor.location = \
+            obj.matrix_world.translation
+        self.report({"INFO"}, f"The target is on "
+                              f"'{obj.name}' now.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_lock_in(Operator):
+    bl_idname = "buddy.lock_in"
+    bl_label = "Lock in the size and turn"
+    bl_description = ("Make this thing's current size and "
+                      "turn its real ones (Blender calls "
+                      "this applying the transform), so "
+                      "every tool treats it the way it "
+                      "looks")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def execute(self, context):
+        obj = context.object
+        _only_active(context, lambda: bpy.ops.object
+                     .transform_apply(location=False,
+                                      rotation=True,
+                                      scale=True))
+        self.report({"INFO"}, f"'{obj.name}' is locked in "
+                              "at the size and turn it "
+                              "shows.")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_show_everything(Operator):
+    bl_idname = "buddy.show_everything"
+    bl_label = "Show everything"
+    bl_description = "Bring back everything you've hidden"
+
+    def execute(self, context):
+        shown = 0
+        for obj in context.scene.objects:
+            if not _is_shown(obj):
+                shown += 1
+            obj.hide_viewport = False
+            try:
+                obj.hide_set(False)
+            except Exception:
+                pass
+        self.report({"INFO"}, f"Showing everything "
+                              f"({shown} thing(s) were "
+                              "hidden).")
+        return {"FINISHED"}
+
+
+class BUDDY_OT_mute_trap(Operator):
+    bl_idname = "buddy.mute_trap"
+    bl_label = "Got it"
+    bl_description = "Stop showing this one heads-up"
+
+    trap_key: StringProperty(default="")
+
+    def execute(self, context):
+        keys = _muted_keys(context)
+        keys.add(self.trap_key)
+        context.window_manager.buddy_muted = json.dumps(
+            sorted(keys))
+        return {"FINISHED"}
+
+
+class VIEW3D_MT_buddy_pie(Menu):
+    bl_idname = "VIEW3D_MT_buddy_pie"
+    bl_label = "Buddy - for right now"
+
+    def draw(self, context):
+        pie = self.layout.menu_pie()
+        for act in _now_deck(context, limit=8):
+            if act.get("icon"):
+                op = pie.operator("buddy.action",
+                                  text=act["plain"],
+                                  icon=act["icon"])
+            else:
+                op = pie.operator("buddy.action",
+                                  text=act["plain"])
+            op.action_id = act["id"]
+
+
+class BUDDY_OT_pie(Operator):
+    bl_idname = "buddy.pie"
+    bl_label = "Buddy Tools for Right Now"
+    bl_description = ("Open the tools for this moment in a "
+                      "circle around your mouse - the same deck "
+                      "as the panel, without leaving the big "
+                      "window (key: the ` key, top-left)")
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        bpy.ops.wm.call_menu_pie(name="VIEW3D_MT_buddy_pie")
+        return {"FINISHED"}
+
+
+def _buddy_header_draw(self, context):
+    """Buddy in the 3D view's own header: the pie button, and
+    the running job's progress where Blender's own bar is."""
+    try:
+        layout = self.layout
+        row = layout.row(align=True)
+        row.operator("buddy.pie", text="Buddy tools",
+                     icon="TOOL_SETTINGS")
+        scene = getattr(context, "scene", None)
+        if scene is not None and getattr(
+                scene, "buddy_tour_started", False):
+            pkg = _active_package(context)
+            _c, current = tour_state(context)
+            if current < len(pkg["steps"]):
+                row.label(text=f"{pkg['name']}: step "
+                               f"{current + 1} of "
+                               f"{len(pkg['steps'])}")
+            else:
+                row.label(text=f"{pkg['name']}: finished")
+    except Exception:
+        pass
+
+
+def _draw_action_compact(layout, act):
+    if act.get("icon"):
+        op = layout.operator("buddy.action", text=act["plain"],
+                             icon=act["icon"])
+    else:
+        op = layout.operator("buddy.action", text=act["plain"])
+    op.action_id = act["id"]
+
+
+def _draw_strip(layout, context):
+    """The slim step strip, drawn at the top of Buddy's main
+    panel while a job runs: where you are and the moment's
+    first tools, in one glance. (It began as its own panel;
+    Blender would not promise to draw a second top-level panel
+    above the main one, so the strip lives at the top of the
+    main panel instead - same sight, guaranteed place.)"""
+    pkg = _active_package(context)
+    checks, current = tour_state(context)
+    box = layout.box()
+    if current >= len(pkg["steps"]):
+        box.label(text=f"Finished: {pkg['name']}",
+                  icon="CHECKMARK")
+        return
+    step = pkg["steps"][current]
+    box.label(text=f"{pkg['name']} - step {current + 1} of "
+                   f"{len(pkg['steps'])}", icon="INFO")
+    _wrap(box, step["title"])
+    for act in _now_deck(context, limit=4):
+        _draw_action_compact(box, act)
+
+
+def _draw_start(layout, context):
+    """The Start screen's whole content, drawn as the main
+    panel when the Buddy Start screen is showing and no job
+    is running: 'What are you making?' Picking a job starts
+    it - and the conducting moves you to the screen that job
+    starts on."""
+    _wrap(layout, "Pick a job and Buddy arranges the whole "
+                  "program around it, step by step. Or model "
+                  "freely - the tools for the moment are "
+                  "always on the ` key (top-left of the "
+                  "keyboard) and in the Buddy tools button in "
+                  "the bar above the big window.")
+    for pkg in PACKAGES:
+        box = layout.box()
+        _wrap(box, pkg["name"])
+        _wrap(box, pkg["byline"])
+        op = box.operator("buddy.tour_start",
+                          text=f"Start: {pkg['name']}",
+                          icon="PLAY")
+        op.package = pkg["id"]
+
+
+class _BuddyExtrudeTool(WorkSpaceTool):
+    bl_space_type = "VIEW_3D"
+    bl_context_mode = "EDIT_MESH"
+    bl_idname = "buddy.extrude"
+    bl_label = "Pull a face out"
+    bl_description = ("Pull the picked faces out into new "
+                      "shape - Blender calls this Extrude")
+    bl_icon = "ops.mesh.extrude_region_move"
+    bl_widget = None
+    bl_keymap = (
+        ("mesh.extrude_context_move",
+         {"type": "LEFTMOUSE", "value": "PRESS"}, None),
+    )
+
+
+class _BuddyLoopCutTool(WorkSpaceTool):
+    bl_space_type = "VIEW_3D"
+    bl_context_mode = "EDIT_MESH"
+    bl_idname = "buddy.loop_cut"
+    bl_label = "Add a ring of edges"
+    bl_description = ("Slice a new ring of edges all the way "
+                      "around the shape - Blender calls this "
+                      "Loop Cut")
+    bl_icon = "ops.mesh.loopcut_slide"
+    bl_widget = None
+    bl_keymap = (
+        ("mesh.loopcut_slide",
+         {"type": "LEFTMOUSE", "value": "PRESS"}, None),
+    )
+
+
+class _BuddyKnifeTool(WorkSpaceTool):
+    bl_space_type = "VIEW_3D"
+    bl_context_mode = "EDIT_MESH"
+    bl_idname = "buddy.knife"
+    bl_label = "Draw a cut"
+    bl_description = ("Draw a cut across the shape with the "
+                      "mouse - Blender calls this the Knife")
+    bl_icon = "ops.mesh.knife_tool"
+    bl_widget = None
+    bl_keymap = (
+        ("mesh.knife_tool",
+         {"type": "LEFTMOUSE", "value": "PRESS"}, None),
+    )
+
+
+_BUDDY_TOOLS = ((_BuddyExtrudeTool, {"builtin.extrude_region"}),
+                (_BuddyLoopCutTool, {"builtin.loop_cut"}),
+                (_BuddyKnifeTool, {"builtin.knife"}))
+
+
+def _register_tools():
+    for cls, after in _BUDDY_TOOLS:
+        try:
+            bpy.utils.register_tool(cls, after=after)
+        except Exception:
+            pass
+
+
+def _unregister_tools():
+    for cls, _after in reversed(_BUDDY_TOOLS):
+        try:
+            bpy.utils.unregister_tool(cls)
+        except Exception:
+            pass
+
+
 
 CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_tour_start, BUDDY_OT_tour_hide, BUDDY_OT_tour_do,
            BUDDY_OT_open_prefs, BUDDY_OT_ask_expert, BUDDY_OT_run_plan,
            BUDDY_OT_clear_plan, BUDDY_OT_test_expert,
+           BUDDY_OT_pie, BUDDY_OT_build_screens,
+           BUDDY_OT_mode_back, BUDDY_OT_origin_center,
+           BUDDY_OT_origin_bottom, BUDDY_OT_cursor_home,
+           BUDDY_OT_cursor_to_picked, BUDDY_OT_lock_in,
+           BUDDY_OT_show_everything, BUDDY_OT_mute_trap,
+           VIEW3D_MT_buddy_pie,
            VIEW3D_PT_blender_buddy,
            VIEW3D_PT_buddy_projects) + SECTION_PANELS
 
@@ -4188,6 +5807,8 @@ def register():
         description="Which guided project is active in the panel",
         default="donut",
     )
+    bpy.types.Scene.buddy_show_lesson = BoolProperty(
+        name="Show the full lesson", default=False)
     bpy.types.Scene.buddy_tour_started = BoolProperty(
         name="Guided project started",
         description="Whether a guided project is showing in the panel",
@@ -4227,12 +5848,42 @@ def register():
         name="Expert plan replanned", default="")
     bpy.types.WindowManager.buddy_expert_status = StringProperty(
         name="Expert connection test result", default="")
+    bpy.types.WindowManager.buddy_muted = StringProperty(
+        name="Heads-ups already got",
+        description="Which plain-words heads-ups you've "
+                    "already said 'got it' to (this session)",
+        default="[]")
     global _EXPERT_HANDLE
     try:
         _EXPERT_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
             _draw_expert_overlay, (), "WINDOW", "POST_PIXEL")
     except Exception:
         _EXPERT_HANDLE = None
+    _install_template()
+    try:
+        bpy.types.VIEW3D_HT_header.append(_buddy_header_draw)
+    except Exception:
+        pass
+    try:
+        if _conduct_check not in \
+                bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.append(
+                _conduct_check)
+    except Exception:
+        pass
+    _register_tools()
+    try:
+        wm = bpy.context.window_manager
+        kc = wm.keyconfigs.addon if wm else None
+        if kc:
+            km = kc.keymaps.new(name="3D View",
+                                space_type="VIEW_3D")
+            kmi = km.keymap_items.new("buddy.pie",
+                                      type="ACCENT_GRAVE",
+                                      value="PRESS")
+            _BUDDY_KEYMAPS.append((km, kmi))
+    except Exception:
+        pass
 
 
 def unregister():
@@ -4247,13 +5898,31 @@ def unregister():
     for attr in ("buddy_query", "buddy_show_real", "buddy_ask",
                  "buddy_answer", "buddy_suggested", "buddy_agent",
                  "buddy_plan", "buddy_plan_summary", "buddy_plan_report",
-                 "buddy_plan_retried", "buddy_expert_status"):
+                 "buddy_plan_retried", "buddy_expert_status",
+                 "buddy_muted"):
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
-    for attr in ("buddy_tour_started", "buddy_tour_epoch",
+    for attr in ("buddy_tour_started", "buddy_show_lesson",
+                 "buddy_tour_epoch",
                  "buddy_tour_package"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
+    for km, kmi in _BUDDY_KEYMAPS:
+        try:
+            km.keymap_items.remove(kmi)
+        except Exception:
+            pass
+    _BUDDY_KEYMAPS.clear()
+    _unregister_tools()
+    try:
+        bpy.types.VIEW3D_HT_header.remove(_buddy_header_draw)
+    except Exception:
+        pass
+    try:
+        bpy.app.handlers.depsgraph_update_post.remove(
+            _conduct_check)
+    except Exception:
+        pass
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 
