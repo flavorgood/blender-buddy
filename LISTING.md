@@ -1,7 +1,7 @@
 # Blender Buddy — store listing draft (for extensions.blender.org)
 
 Status: the extension package is BUILT and validated by Blender's
-own tooling (`blender_buddy_v1.0_extension.zip`, built from
+own tooling (`blender_buddy_v1.1_extension.zip`, built from
 `extension_src/`), and it installs + enables through Blender's
 extension system in a fresh profile. What remains is human-side:
 a Blender ID account, the maintainer's license ruling (below), and
@@ -31,7 +31,7 @@ visible, in plain words:
 • Search in your own words: synonyms, half-words, US spellings and
   typos all find their tool ("bevell", "squish it flat",
   "doughnut shape"). Gibberish finds nothing.
-• Nothing is lost: the 93 everyday tools sit on plain-words
+• Nothing is lost: the 96 everyday tools sit on plain-words
   buttons, and ALL of Blender's tools (2,410 on Blender 4.2.5)
   are in the searchable index in the same panel, each runnable.
 • Day 1 is the Donut: the famous first project as 8 taught
@@ -70,7 +70,7 @@ its Python API).
 1. Create a Blender ID at id.blender.org (free).
 2. ~~Rule on the license~~ — done, GPL-3.0-or-later (above).
 3. On extensions.blender.org: Submit → upload
-   `blender_buddy_v1.0_extension.zip` → paste the description
+   `blender_buddy_v1.1_extension.zip` → paste the description
    above → answer the network-permission question with the
    justification above.
 4. Review by the platform team follows; fixes, if any, come back

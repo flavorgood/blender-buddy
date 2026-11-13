@@ -203,7 +203,14 @@ v1.0: the section drawers, the guided-projects shelf, a live step
 card advancing on scene proof, and the card redrawn with rounded
 corners — the first v1.0 photo caught those corners folded into a
 wedge, so the card is now built from explicit triangles with its
-geometry pinned by a test, and the re-shot card is clean. Still
+geometry pinned by a test, and the re-shot card is clean. v1.1
+adds the "Move around & find things" survival drawer at position
+2 — bring what I picked into view, see everything at once, find
+everything in my scene, look through the camera, move the camera
+to what I'm looking at, walk navigation, and the front/top/side
+views with their no-number-pad menu paths — photographed in the
+GUI as a drawer stack (its own contents verified by the survival
+test suite). Still
 not verified: a
 live conversation with a real AI service, a real signed-in Codex
 program, or a real local model (each needs the real thing on a
