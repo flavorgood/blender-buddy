@@ -42,7 +42,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Every common Blender tool, labelled by the job it does, "
@@ -137,7 +137,7 @@ ACTIONS = [
          plain="Walk through your scene",
          does="Walk about inside your scene like a game: mouse looks around, W A S D walk, E and Q go up and down. Click or press Enter when you're done, Esc to jump back.",
          real="Walk Navigation", key="", icon="",
-         kind="op", target="view3d.walk_navigation", words="walk fly navigate game wasd first person inside look around"),
+         kind="op", target="view3d.walk", words="walk fly navigate game wasd first person inside look around"),
     dict(id="look_front", section="2. Move around & find things",
          plain="Look at it from the front",
          does="Puts your eye square in front of the scene, like looking at a photo of it. The plain way, without the number pad: View menu, Viewpoint, Front.",
@@ -589,6 +589,122 @@ _DONE = {
 }
 
 
+# ----------------------------------------------------------------------------
+# The anti-stale self-check. Buddy's law (owner, 2026-11-12): Buddy is a
+# Blender expert that must not go stale across Blender updates. The big
+# index already re-learns itself from the running Blender on every
+# launch. The curated buttons are the part written against one era of
+# Blender - so on first use in any session, every curated action is
+# checked against THIS Blender: the operator, modifier type, mode or
+# toolbar tool it points at must still exist here. Anything that
+# changed is hidden from the drawers and the search, and named in
+# plain words in the panel, instead of failing silently in a
+# beginner's hands. A check that cannot be made (a Blender too
+# restructured to ask) counts as fine - Buddy never hides a tool on
+# a guess.
+# ----------------------------------------------------------------------------
+
+_STALE_CACHE = None
+
+
+def _enum_items(idname, prop):
+    """The valid values of an operator's enum property, or None when
+    this Blender can't be asked that way."""
+    try:
+        rna = _resolve_op(idname).get_rna_type()
+        return set(rna.properties[prop].enum_items.keys())
+    except Exception:
+        return None
+
+
+def _known_tool_ids():
+    """Every toolbar tool id in the 3D View on this Blender, read from
+    the same tool table Blender's own toolbar draws - or None when it
+    can't be read."""
+    try:
+        from bl_ui.space_toolsystem_common import ToolSelectPanelHelper
+
+        def _walk(cls):
+            for sub in cls.__subclasses__():
+                yield sub
+                yield from _walk(sub)
+
+        def _collect(node, out):
+            if node is None:
+                return
+            if hasattr(node, "idname"):
+                out.add(node.idname)
+            elif isinstance(node, (list, tuple)):
+                for child in node:
+                    _collect(child, out)
+
+        ids = set()
+        for sub in _walk(ToolSelectPanelHelper):
+            if sub.__name__ == "VIEW3D_PT_tools_active":
+                for entry in sub.tools_all():
+                    _collect(entry, ids)
+        return ids or None
+    except Exception:
+        return None
+
+
+def _check_action(act, op_idnames=None, modifier_types=None,
+                  mode_names=None, tool_ids=None):
+    """None when the tool behind this action still exists in the
+    running Blender; otherwise a short plain reason it does not."""
+    kind = act.get("kind")
+    target = act.get("target", "")
+    if kind == "op":
+        # bpy.ops will happily invent a wrapper for an operator that
+        # does not exist - it only fails when called. The live index
+        # (built from this Blender's real registry) is the truth.
+        if op_idnames is not None and target not in op_idnames:
+            return "the tool behind it is not in this Blender"
+    elif kind == "modifier":
+        if modifier_types is not None and target not in modifier_types:
+            return "this kind of modifier is not in this Blender"
+    elif kind == "mode":
+        if mode_names is not None and target not in mode_names:
+            return "this mode is not in this Blender"
+    elif kind == "tool":
+        if tool_ids is not None and target not in tool_ids:
+            return "this toolbar tool is not in this Blender"
+    elif kind == "custom":
+        if target not in _CUSTOM:
+            return "Buddy's own helper for it is missing"
+    else:
+        return "Buddy doesn't know how to run it"
+    return None
+
+
+def _self_check(actions=None):
+    """Check actions (default: the whole catalogue) against this
+    Blender. Returns [{'id', 'plain', 'reason'}] for the ones that no
+    longer match it."""
+    acts = ACTIONS if actions is None else actions
+    op_idnames = {e["idname"] for e in build_index()}
+    modifier_types = _enum_items("object.modifier_add", "type")
+    mode_names = _enum_items("object.mode_set", "mode")
+    tool_ids = _known_tool_ids()
+    stale = []
+    for act in acts:
+        reason = _check_action(act, op_idnames, modifier_types,
+                               mode_names, tool_ids)
+        if reason:
+            stale.append({"id": act["id"], "plain": act["plain"],
+                          "reason": reason})
+    return stale
+
+
+def _stale_map():
+    """{action_id: reason} for every curated action that changed in
+    this Blender. Computed once per session, then cached."""
+    global _STALE_CACHE
+    if _STALE_CACHE is None:
+        _STALE_CACHE = {s["id"]: s["reason"] for s in _self_check()}
+    return _STALE_CACHE
+
+
 _STOPWORDS = {"the", "a", "an", "it", "my", "this", "that", "of", "to",
               "me", "i", "want", "how", "do", "can", "please", "something",
               "not", "no", "on", "in", "is", "are", "was", "with", "for"}
@@ -699,7 +815,10 @@ def search_actions(query):
     if not tokens:
         return []
     scored = []
+    stale = _stale_map()
     for pos, a in enumerate(ACTIONS):
+        if a["id"] in stale:
+            continue
         hay_text = " ".join([a["plain"], a["does"], a["real"],
                              a.get("words", "")]).lower()
         hay_words = set(_words_of(hay_text))
@@ -1616,6 +1735,15 @@ class BUDDY_OT_action(Operator):
         if act is None:
             return {"CANCELLED"}
 
+        stale_reason = _stale_map().get(act["id"])
+        if stale_reason:
+            self.report({"WARNING"},
+                        "That one changed in this version of Blender, "
+                        "so Buddy has hidden it rather than guess: "
+                        f"{stale_reason}. Every current Blender tool "
+                        "is still in the search below.")
+            return {"CANCELLED"}
+
         needs = act.get("needs")
         if needs in {"object", "edit", "two"} and context.object is None:
             self.report({"ERROR"}, "Nothing is picked yet. Click a thing in the "
@@ -2333,7 +2461,8 @@ def _parse_plan(text):
                      line)
         if m:
             kind, ident = m.group(1), m.group(2)
-            if kind == "button" and any(a["id"] == ident for a in ACTIONS):
+            if kind == "button" and any(a["id"] == ident for a in ACTIONS
+                                        if a["id"] not in _stale_map()):
                 steps.append({"kind": "button", "id": ident})
             elif kind == "tool":
                 if valid_tools is None:
@@ -2506,7 +2635,8 @@ class BUDDY_OT_ask_expert(Operator):
         kept = []
         for line in lines:
             m = re.match(r"\s*BUTTON:\s*([a-z0-9_]+)\s*$", line)
-            if m and any(a["id"] == m.group(1) for a in ACTIONS):
+            if m and any(a["id"] == m.group(1) for a in ACTIONS
+                         if a["id"] not in _stale_map()):
                 suggested = m.group(1)
             elif not line.strip().upper().startswith("BUTTON:"):
                 kept.append(line)
@@ -2920,6 +3050,20 @@ class VIEW3D_PT_blender_buddy(Panel):
         box.label(text="Where you are", icon="INFO")
         _wrap(box, _hint(context))
 
+        stale = _stale_map()
+        if stale:
+            box = layout.box()
+            box.label(text="This Blender changed some tools",
+                      icon="ERROR")
+            names = "; ".join(ACTIONS_BY_ID[i]["plain"] for i in stale)
+            _wrap(box, f"{len(stale)} of Buddy's buttons were made "
+                       f"for an older Blender and don't match this "
+                       f"one (Blender {bpy.app.version_string}), so "
+                       f"they're hidden instead of failing on you: "
+                       f"{names}. Everything else works as normal, "
+                       f"and every tool this Blender actually has is "
+                       f"in the search below.")
+
         box = layout.box()
         box.label(text="What do you want to do?", icon="VIEWZOOM")
         box.prop(wm, "buddy_query", text="")
@@ -2983,8 +3127,9 @@ def _make_section_panel(index, section):
         _WRAP_CAP = _fit_width(context)
         wm = context.window_manager
         show_real = getattr(wm, "buddy_show_real", True)
+        stale = _stale_map()
         for act in ACTIONS:
-            if act["section"] == section:
+            if act["section"] == section and act["id"] not in stale:
                 _draw_action(self.layout, act, show_real)
 
     attrs = {

@@ -125,13 +125,13 @@ though nothing is wrong. You install Buddy **from a file**, one
 of these three ways (same plugin in all three):
 
 **Way 1 — the extension zip (Blender 4.2+):** grab
-`blender_buddy_v1.1_extension.zip` from the
+`blender_buddy_v1.2_extension.zip` from the
 [latest release](https://github.com/flavorgood/blender-buddy/releases/latest).
 In Blender: **Edit → Preferences → Get Extensions**, click the
 small dropdown arrow at the top right of that window →
 **Install from Disk…** → pick the zip. It switches on by itself.
 
-**Way 2 — the add-on zip:** grab `blender_buddy_v1.1.zip` from
+**Way 2 — the add-on zip:** grab `blender_buddy_v1.2.zip` from
 the same release. **Edit → Preferences → Add-ons → Install…** →
 pick the zip → then **tick the checkbox** next to "Blender
 Buddy" in the list. Until you tick it, nothing appears — Blender
@@ -179,6 +179,18 @@ the index holds 2,410 tools and its Run button executes real tools;
 sculpt mode, keyframes, GLB/STL/OBJ exports, render and save all
 produce real results; both install paths (zip package and the single
 `.py` file) install and enable through Blender's own Install button.
+The anti-stale self-check suite proves the v1.2 promise on two
+Blender generations at once (4.2.5 and 5.2.0): every one of the
+96 curated actions is verified against the running Blender's real
+registries - the live operator index, the modifier and mode
+lists, and the toolbar's own tool table - and flags nothing on
+either version, while planted fakes of every kind are caught.
+Its first catch was real: v1.1's Walk button pointed at an
+operator name that does not exist (Blender's lazy operator
+lookup had let a hollow existence test pass it); the check found
+it, the button now calls the real operator, and the survival
+suite's existence test was rewritten against the registry so it
+can never be fooled that way again.
 The guided-project suite proves the teaching contract — every
 step carries by-hand instructions, a named skill and a
 what's-still-missing line, and no "do this step" button exists in

@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "blender_buddy"
-version = "1.1.0"
+version = "1.2.0"
 name = "Blender Buddy - Blender in Plain Words"
 tagline = "Blender in plain words: every tool visible, named by its job"
 maintainer = "flavorgood"

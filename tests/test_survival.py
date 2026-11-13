@@ -35,12 +35,17 @@ assert ids == ["look_at_picked", "see_everything", "find_everything",
 print("SURVIVAL_PASS drawer second, nine rescue tools in order")
 
 # Every Blender operator the drawer names really exists here.
+# NOTE: hasattr() on bpy.ops proves nothing - bpy.ops invents a
+# wrapper for names that were never registered (this is how the
+# nonexistent view3d.walk_navigation passed in v1.1 and the button
+# shipped broken). The live index is built from the real registry,
+# so membership in it is the only honest existence test.
+REAL_OPS = {e["idname"] for e in bb.build_index()}
 for act in bb.ACTIONS:
     if act["section"] != "2. Move around & find things":
         continue
     if act["kind"] == "op":
-        cat, name = act["target"].split(".", 1)
-        assert hasattr(getattr(bpy.ops, cat), name), act["target"]
+        assert act["target"] in REAL_OPS, act["target"]
     if act["kind"] == "custom":
         assert act["target"] in bb._CUSTOM, act["target"]
 print("SURVIVAL_PASS every named tool exists in this Blender")
