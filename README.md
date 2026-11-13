@@ -106,21 +106,48 @@ your Blender, so it always matches your version. Blender's own
 interface, shortcuts and menus are untouched — turn the add-on off
 and nothing is different.
 
-Sections: Add something · Move it & size it · Shape it · Copy it &
-combine it · Make it look right · Fix common problems · More shapes ·
-More ways to shape it · Every other modifier · Sculpt it & paint it ·
-Animate it · Finish: picture, save, send it out · Find your way around.
+Sections: Add something · Move around & find things · Move it &
+size it · Shape it · Copy it & combine it · Make it look right ·
+Fix common problems · More shapes · More ways to shape it · Every
+other modifier · Sculpt it & paint it · Animate it · Finish:
+picture, save, send it out.
 
 ## Get it (2 minutes)
 
-You need Blender 4.2 or newer (free at blender.org).
+You need Blender 4.2 or newer (free at blender.org). Verified on
+Blender 4.2.5 and on Blender 5.2.0.
 
-1. Download **[blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/main/blender_buddy.py)**
-   (right-click → Save link as… if it opens in the browser instead of downloading).
-2. In Blender: **Edit → Preferences → Add-ons → Install…** and pick
-   the downloaded `blender_buddy.py`.
-3. Tick the checkbox next to **"Blender Buddy - Blender in Plain Words"**.
-4. In the 3D Viewport press **N** and open the **Blender Buddy** tab.
+**First, the trap that catches everyone:** do NOT search for
+Blender Buddy inside Blender's **Get Extensions** window. That
+search only covers Blender's official online store, and Buddy
+isn't published there yet — the search comes back empty even
+though nothing is wrong. You install Buddy **from a file**, one
+of these three ways (same plugin in all three):
+
+**Way 1 — the extension zip (Blender 4.2+):** grab
+`blender_buddy_v1.1_extension.zip` from the
+[latest release](https://github.com/flavorgood/blender-buddy/releases/latest).
+In Blender: **Edit → Preferences → Get Extensions**, click the
+small dropdown arrow at the top right of that window →
+**Install from Disk…** → pick the zip. It switches on by itself.
+
+**Way 2 — the add-on zip:** grab `blender_buddy_v1.1.zip` from
+the same release. **Edit → Preferences → Add-ons → Install…** →
+pick the zip → then **tick the checkbox** next to "Blender
+Buddy" in the list. Until you tick it, nothing appears — Blender
+never tells you this step exists.
+
+**Way 3 — no zip at all, one single file:** download
+**[blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/main/blender_buddy.py)**
+(right-click → Save link as… if it opens in the browser instead
+of downloading), then Way 2's steps, picking the `.py` file.
+
+Don't feed one door the other door's file: the **extension** zip
+only goes through **Get Extensions**, the plain zip and the
+`.py` only through **Add-ons**. The wrong pairing fails quietly.
+
+Whichever way you used: in the 3D Viewport press **N** and open
+the **Blender Buddy** tab on the right edge.
 
 Developers: the `blender_buddy/` folder in this repo is the same
 add-on in package form (zip it and install the zip), and
