@@ -129,7 +129,7 @@ bb._expert_settings = real_settings
 bb.shutil.which = real_which
 assert res == {"FINISHED"}
 status = ctx.window_manager.buddy_expert_status
-assert "Codex program isn't on this computer" in status, status
+assert "couldn't locate" in status, status
 print("CONTEXT_PASS codex test button:", status[:70])
 
 bb.unregister()

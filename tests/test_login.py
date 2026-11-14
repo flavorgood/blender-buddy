@@ -52,7 +52,7 @@ cli_calls = []
 bb._run_cli = lambda argv, timeout=120: cli_calls.append(argv) or ""
 wm.buddy_ask = "make a box"
 bpy.ops.buddy.ask_expert()
-assert "Codex program isn't on this computer" in wm.buddy_answer, wm.buddy_answer
+assert "couldn't locate" in wm.buddy_answer, wm.buddy_answer
 assert cli_calls == []
 print("LOGIN_PASS Codex missing -> plain setup message, no call")
 
