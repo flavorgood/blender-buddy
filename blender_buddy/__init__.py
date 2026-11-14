@@ -3332,11 +3332,11 @@ class BUDDY_Preferences(AddonPreferences):
             if found:
                 _wrap(layout, f"Codex program: found ({found}).")
             else:
-                _wrap(layout, "Codex program: not found on this "
-                              "computer yet. Install OpenAI's Codex "
-                              "program, open it once and sign in "
-                              "with your ChatGPT account, then press "
-                              "Test this connection.")
+                _wrap(layout, "Codex command-line program: not located "
+                              "from Blender. This does not prove the "
+                              "desktop app is missing. If it is already "
+                              "installed, restart Blender after Codex "
+                              "finishes updating, then test again.")
         _wrap(layout, "Why no plain 'log in with ChatGPT or Muse' "
                       "button? Those companies don't offer one to "
                       "other apps: a ChatGPT or Claude subscription "
@@ -3409,11 +3409,10 @@ def _expert_setup_message(settings):
     service = settings.get("service", "KEY")
     if service == "CODEX":
         return ("The expert is set to use your ChatGPT login, but "
-                "OpenAI's Codex program isn't on this computer yet. "
-                "Install Codex (it's OpenAI's own program), sign in "
-                "with your ChatGPT account once, then ask again - "
-                "Buddy asks through it, so your login never touches "
-                "Buddy.")
+                "Buddy couldn't locate OpenAI's Codex command-line program. "
+                "This does not mean the desktop app is missing or "
+                "that you need to sign in again. Buddy needs its "
+                "command-line executable to ask through your login.")
     if service == "LOCAL":
         return ("The expert is set to a local AI, but it didn't "
                 "answer. Make sure your local AI (for example "
@@ -3449,6 +3448,29 @@ def _run_cli(argv, timeout=120):
     return proc.stdout
 
 
+def _desktop_codex_candidates(local):
+    """The desktop app installs its CLI under a version/hash directory.
+    Check only that known location, never recursively scan user files or
+    run programs while drawing preferences. Hash names are not versions.
+    """
+    candidates = []
+    root = os.path.join(local, "OpenAI", "Codex", "bin")
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    executable = os.path.join(entry.path, "codex.exe")
+                    if os.path.isfile(executable):
+                        candidates.append((os.path.getmtime(executable), executable))
+                except OSError:
+                    continue  # An update may remove a version during discovery.
+    except OSError:
+        return []
+    return [path for _, path in sorted(candidates, reverse=True)]
+
+
 def _find_codex():
     """Find OpenAI's Codex program wherever it actually landed on
     this computer. The PATH lookup alone misses the normal Windows
@@ -3467,6 +3489,7 @@ def _find_codex():
             guesses += [os.path.join(appdata, "npm", "codex.cmd"),
                         os.path.join(appdata, "npm", "codex.bat")]
         if local:
+            guesses += _desktop_codex_candidates(local)
             guesses += [os.path.join(local, "Programs", "Codex",
                                      "codex.exe"),
                         os.path.join(local, "Programs", "OpenAI Codex",
@@ -3486,9 +3509,9 @@ def _ask_via_codex(system, user):
     path = _find_codex()
     if not path:
         raise RuntimeError(
-            "the Codex program isn't on this computer yet - install "
-            "OpenAI's Codex program, open it once and sign in with "
-            "your ChatGPT account, then ask again")
+            "Buddy couldn't locate the Codex command-line program. "
+            "An existing desktop installation may not be discoverable "
+            "from Blender; this is not a login failure.")
     out = _run_cli([path, "exec", "-s", "read-only",
                     "--skip-git-repo-check", f"{system}\n\n{user}"])
     text = (out or "").strip()
@@ -4058,10 +4081,10 @@ class BUDDY_OT_test_expert(Operator):
         try:
             if service == "CODEX" and _find_codex() is None:
                 raise RuntimeError(
-                    "the Codex program isn't on this computer yet. "
-                    "Install OpenAI's Codex program, open it once "
-                    "and sign in with your ChatGPT account, then "
-                    "press Test again")
+                    "Buddy couldn't locate the Codex command-line program. "
+                    "An existing desktop installation may not be "
+                    "discoverable from Blender; this is not a login "
+                    "failure.")
             reply = _ask_ai(settings, "You are a connection test.",
                             "Reply with exactly: BUDDY OK")
             if "BUDDY OK" in (reply or ""):
