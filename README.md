@@ -95,20 +95,30 @@ changes none of Blender's functions. It makes them visible:
   since 2026 with accounts blocked for it — Buddy won't put your
   Claude account at risk.) **Local AI:** run a free AI on your own
   computer (for example Ollama) — no key, no login, nothing leaves
-  the machine. With "Let the expert do it" on, asking in plain words
-  produces a short plan you can read before pressing **Run these
-  steps**. A plan can press Buddy buttons, run Blender's own tools,
-  set exact values — for example the size, strength and falloff of
-  the sculpt brush you describe, a bevel's width, or the picture's
-  sample count — apply real node-tree styles such as procedural
-  wood or marble, and open an add-on search when another plugin is
-  the better tool. Every named button, tool, setting and style is
-  checked against what really exists before a plan is shown;
-  invented steps are dropped. If a step cannot run, the agent stops,
-  says what happened in plain words, and may offer one revised plan
-  — it never runs that revision until you press Run again. Turn
-  agent mode off and it goes back to advice only, with a "Do it"
-  button when one Buddy button fits. (Its tips can also float as
+  the machine. Asking in plain words gets you advice, explanations
+  and exact values for your scene. Turn on **Expert help with
+  tasks** and the expert can also draft a short plan of steps —
+  which you read first, and run only by pressing **Run these
+  steps** yourself. A plan can press Buddy buttons, run Blender's
+  own everyday tools, set exact values — for example the size,
+  strength and falloff of the sculpt brush you describe, a bevel's
+  width, or the picture's sample count — wire your material's node
+  tree (add a node, set its value, join two sockets), set a colour
+  ramp from a description, apply node-tree styles such as
+  procedural wood or marble (read before they're written, so a
+  texture you already have is never silently overwritten), look up
+  real add-ons, models and textures — every link checked before
+  it's shown — and grow simple ingredients like a low tree or a
+  flat picture of a thing for the background. You stay the author
+  throughout: the expert assists with the task in front of you, it
+  doesn't do your project. Every named button, tool, setting and
+  style is checked against what really exists in your Blender
+  before a plan is shown; invented steps are dropped. If a step
+  cannot run, the expert stops, says what happened in plain words,
+  and may offer one revised plan — it never runs that revision
+  until you press Run again. With task help off, the expert still
+  suggests one Buddy button when a single button fits the answer,
+  as one press you make yourself. (Its tips can also float as
   a small card over the 3D window - off by default, because it got
   in the way; turn it on in preferences if you like it.)
 - **One press for multi-step jobs.** "Cut one shape out of another"
@@ -128,8 +138,9 @@ photo textures, Part 6's UV unwrapping, Part 7's Scatter on
 Surface sprinkles, Part 8's lighting finale), carries a
 **"Watch Part N" link that opens that video**, tells you what
 he is about to do before he does it, and ticks **only when
-your scene proves you caught up** — the icing really carries
-Solidify and a Shrinkwrap aimed at the dough; the scatter step
+your scene proves you caught up** — the finished icing is a
+real shell with its modifiers applied away, exactly as his
+part ends; the scatter step
 really finds Blender 5.0's Scatter on Surface modifier, your
 sprinkle collection and your painted vertex group. Where a
 part's finish is a judgment (a handle that looks right, a
@@ -142,6 +153,38 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.2.1: the tutorial, transcribed and proven
+
+Two honest admissions first. The v3.2.0 finale picture was
+near-black and should never have shipped; it has been removed
+from that release. And the v3.2.0 donut steps, checked against
+Blender Guru's actual videos line by line, diverged from his
+procedure in 61 places — steps he takes that Buddy skipped,
+values Buddy invented, checks written against Buddy's own
+reference scene instead of the scene his procedure produces.
+
+v3.2.1 is the correction. Every step of the companion is now
+a transcription of his series — his actions in his order, his
+stated values exact, and the values he leaves to the eye
+flagged as by-eye instead of filled in. The Expert was rebuilt
+the same way: its audit found the question box could vanish
+entirely on the ChatGPT-login route, and whole classes of
+connection failure collapsed into one shrug of a message; both
+are fixed, and the panel is now collapsible sections instead
+of one long scroll.
+
+Then the whole thing was proven the hard way: independent
+examiners walked the tutorial using only the on-screen cards —
+no video, no outside help — in fresh Blender installs. Steps
+1–3 passed every check: a step ticks exactly when the scene
+proves the work is done (a handle merely touching the mug
+never ticks; a hand-sewn handle does), cutting the work back
+out revokes the tick, and progress reads back from the saved
+file alone after a full restart. Steps 4–8 carry the same
+transcription and pass the same test suites; their own cold
+walk is under way. The release picture is the current build's
+own render of the finished scene.
 
 ## New in v3.1: the plain-words layer - where am I, and what's about to bite me
 

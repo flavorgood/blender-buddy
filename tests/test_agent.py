@@ -28,11 +28,17 @@ wm = ctx.window_manager
 
 assert hasattr(bpy.ops.buddy, "run_plan")
 assert hasattr(bpy.ops.buddy, "clear_plan")
-assert wm.buddy_agent is True
-print("AGENT_PASS operators present, agent mode on by default")
+assert wm.buddy_agent is False
+print("AGENT_PASS operators present, task help off by default "
+      "(advice is the front door - owner framing law, 2026-11-13)")
 
 bb._expert_settings = lambda: {"key": "test-key", "url": "http://stub",
                                "model": "stub-model", "float": True}
+
+# The sections below test the task machinery, so they opt in -
+# the default-off law is asserted above, and the advice section
+# near the end toggles it back off itself.
+wm.buddy_agent = True
 
 next_reply = ""
 calls = []
@@ -131,27 +137,35 @@ bevel = next(m for m in cube.modifiers if m.type == "BEVEL")
 assert abs(bevel.width - 0.08) < 1e-6, bevel.width
 assert bevel.segments == 4
 assert ctx.scene.cycles.samples == 64
-brush = ctx.tool_settings.sculpt.brush
-assert brush, "the setting must land on the current sculpt brush"
+brush = bb._sculpt_brush(ctx)
+assert brush, "the setting must land on the brush Buddy uses"
 assert brush.size == 120 and abs(brush.strength - 0.5) < 1e-6
-assert brush.curve_preset == "SPHERE"
+assert bb._get_falloff(brush) == "SPHERE", bb._get_falloff(brush)
 mat = cube.data.materials[0]
 node_types = {n.type for n in mat.node_tree.nodes}
 assert {"TEX_NOISE", "VALTORGB", "BUMP"} <= node_types, node_types
 assert wm.buddy_plan_report.startswith("Done - all 8 steps ran")
 print("AGENT_PASS exact settings read back and wood node tree built")
 
-# --- find is a real step: it opens the add-on search ------------------------
+# --- find is a real step: link-verified results, shown not opened ---------
+# (The old contract - find blindly opened a search tab - is what
+# audit finding W3 called inadequate. Now results are named items
+# whose links were verified before display, and opening one is
+# the user's own press in the panel. This section therefore uses
+# the real resource machinery, network and all.)
 plan = ask(
     "find me something for brick walls",
     "SUMMARY: Look for a brick-wall add-on.\n"
     "STEP: find:brick wall generator")
 assert plan == [{"kind": "find", "id": "brick wall generator"}], plan
 bpy.ops.buddy.run_plan()
-assert opened_urls and "extensions.blender.org/search/" in opened_urls[-1]
-assert "brick%20wall%20generator" in opened_urls[-1]
-assert "add-on search" in wm.buddy_plan_report
-print("AGENT_PASS find step opened the add-on search")
+results = json.loads(wm.buddy_find or "[]")
+assert results, "find must show verified results, not an empty promise"
+for r in results:
+    assert r["name"] and r["url"].startswith("http") and r["source"], r
+assert "Found for 'brick wall generator'" in wm.buddy_plan_report, \
+    wm.buddy_plan_report
+print("AGENT_PASS find step showed link-verified results")
 
 # --- a failed step replans once, and the new plan is not auto-run -----------
 clear_objects()

@@ -11,7 +11,7 @@ the submit button on the platform. Nothing here is live yet.
 Blender Buddy - Blender in Plain Words
 
 ## Tagline (max 64 chars, as validated)
-AAA-level 3D creation, usable by anyone
+Power in the hands of average people, no 10k hours needed
 
 ## Tags (platform list)
 3D View · User Interface · Mesh · Modeling · Material · Sculpt
@@ -27,8 +27,8 @@ people who open it — people with real ideas — quit within the
 first hour. The power was never the problem. The door is locked.
 
 Blender Buddy doesn't translate Blender. It redesigns how
-Blender is used — putting AAA-level modeling usability in the
-hands of normal people with great ideas:
+Blender is used — put the power in the hands of average
+people who can't spend 10k hours learning a skill:
 
 • Tools organised by the job you're trying to do, everything
   visible on screen instead of hidden behind shortcuts.
@@ -98,9 +98,10 @@ its Python API).
    as review notes.
 
 ## GitHub About (set 2026-11-12, wording updated 2026-11-12)
-Description: "Blender Buddy redesigns how Blender is used:
-AAA-level 3D creation in the hands of normal people with great
-ideas. Tools organised by the job, search in your own words,
+Description: "Put the power in the hands of average people
+who can't spend 10k hours learning a skill. Blender Buddy
+redesigns how Blender is used: tools organised by the job,
+search in your own words,
 learn-by-doing projects, your own AI expert — nothing removed.
 Free forever (GPL)."
 Topics: blender, blender-addon, blender-extension, beginners,

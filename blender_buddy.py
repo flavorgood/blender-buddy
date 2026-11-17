@@ -32,6 +32,8 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import threading
+import time
 import urllib.error
 import urllib.request
 from difflib import SequenceMatcher
@@ -44,7 +46,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 2, 0),
+    "version": (3, 2, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -1171,10 +1173,12 @@ def _first_colour(obj):
     return mat.diffuse_color if mat else None
 
 
-def _principled(mat, rgba, roughness, subsurface=0.0):
+def _principled(mat, rgba, roughness, subsurface=0.0,
+                sss_radius=None, sss_scale=None):
     """Set a material up the way the tutorial does: a real Principled
-    material with a base colour, a roughness, and a touch of
-    subsurface glow for food."""
+    material with a base colour, a roughness, and - for food - his
+    subsurface recipe: Weight all the way up, Radius dragged to
+    (1, 1, 1), the amount steered with Scale."""
     mat.diffuse_color = rgba
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
@@ -1183,56 +1187,877 @@ def _principled(mat, rgba, roughness, subsurface=0.0):
         bsdf.inputs["Roughness"].default_value = roughness
         if "Subsurface Weight" in bsdf.inputs:
             bsdf.inputs["Subsurface Weight"].default_value = subsurface
+        if sss_radius is not None and \
+                "Subsurface Radius" in bsdf.inputs:
+            bsdf.inputs["Subsurface Radius"].default_value = \
+                tuple(sss_radius)
+        if sss_scale is not None and \
+                "Subsurface Scale" in bsdf.inputs:
+            bsdf.inputs["Subsurface Scale"].default_value = sss_scale
 
 
-def _paint(obj, mat_name, rgba, roughness=0.55, subsurface=0.0):
+def _paint(obj, mat_name, rgba, roughness=0.55, subsurface=0.0,
+           sss_radius=None, sss_scale=None):
     mat = bpy.data.materials.get(mat_name)
     if mat is None:
         mat = bpy.data.materials.new(mat_name)
-    _principled(mat, rgba, roughness, subsurface)
+    _principled(mat, rgba, roughness, subsurface,
+                sss_radius=sss_radius, sss_scale=sss_scale)
     obj.data.materials.clear()
     obj.data.materials.append(mat)
 
 
 # ----------------------------------------------------------------------------
-# The Donut package, rebuilt as the follow-along companion to
-# Blender Guru's NEW donut series - "Blender Donut Tutorial
-# (2025)", taught in Blender 5.0. One step per part:
-#   Part 1 (2026) - the basics, taught on a coffee cup
-#   Part 2 Basic Modelling - the real mug, from a reference photo
+# The Donut package: the follow-along companion to Blender Guru's
+# NEW donut series - "Blender Donut Tutorial (2025)", taught in
+# Blender 5.0. One step per part:
+#   Part 1 (2026) - navigation, the donut AND the cup, first saves
+#   Part 2 Basic Modelling - the cup becomes the mug, from a photo
 #   Part 3 Basic Organic Modelling - icing that drips and hugs
 #   Part 4 Basic Materials - plate, lattice, SSS, first picture
 #   Part 5 Basic Texturing - photo textures as a three-map recipe
 #   Part 6 Basic UV Unwrapping - seams on the mug, coffee foam
 #   Part 7 How to Scatter in Blender 5.0 - Scatter on Surface
 #   Part 8 The Basics of Lighting and Rendering - the finale
-# The video teaches; these steps orient (which part, what he is
-# about to do), verify (the tick is the scene's proof, never a
-# button press) and rescue (the missing text names what your
+#
+# REPLICATION DOCTRINE (the fidelity audit, redesign/
+# DONUT_FIDELITY_AUDIT.md, is the spec): the steps, the checks
+# and the reference builds follow what he actually does -
+# movement for movement, value for value. Values he states are
+# used exactly and cited in comments. Values he sets by eye are
+# marked UNSTATED wherever the reference build has to pick one:
+# the build picks a plausible number and the comment says the
+# video leaves it open - it is never presented as his. The
+# checks grade the scene HIS procedure produces at each part's
+# end: objects are found by role (shape, structure, material),
+# never by name alone, because he assigns half the names in
+# Part 8 - or, for the foam, a different name than you'd guess.
+# The video teaches; these steps orient (which part, what he
+# is about to do), verify (the tick is the scene's proof, never
+# a button press) and rescue (the missing text names what your
 # screen is still missing). The run functions are the reference
 # builds the tests prove the checks against - the panel never
 # offers them.
 # ----------------------------------------------------------------------------
 
-def _find_dough(context):
-    """The dough ring: his name for it first, then the shape of
-    it - a fat ring (a hole in the middle) that is not any of
-    the scene's other named pieces."""
-    named = _scene_obj(context, "Dough")
+# His scale: the whole series lives at a tenth of the size
+# Blender's defaults suggest. The donut's ring is 0.1 m across
+# its middle; the cup starts as a 0.13 m radius cylinder.
+DONUT_MAJOR = 0.1        # Part 1: Major Radius 1 m -> 0.1
+DONUT_MINOR = 0.057      # Part 1: Minor Radius, dragged to ~0.057
+CUP_RADIUS = 0.13        # Part 1: cylinder Radius 0.13
+CUP_DEPTH = 0.24         # Part 1: depth dragged by eye - UNSTATED
+TABLE_TOP = -0.080       # staging: where the Part 4 table's top sits
+
+
+def _find_dough(context, objects=None):
+    """The dough ring, found by shape: a mesh with a real hole
+    through its middle whose underside curves all the way
+    around (the icing shell, which shares the hole, has no
+    underside near the hole - its bottom half was deleted).
+    His name for it ("Donut", from Part 3) is the fast path.
+    With objects given, that list is searched instead of
+    the live scene."""
+    if objects is None:
+        named = _scene_obj(context, "Donut")
+        if named is not None and named.type == "MESH":
+            return named
+        named = _scene_obj(context, "Dough")
+        if named is not None and named.type == "MESH":
+            return named
+        objects = context.scene.objects
+    else:
+        for want in ("Donut", "Dough"):
+            for obj in objects:
+                if obj.type == "MESH" and obj.name == want:
+                    return obj
+    for obj in objects:
+        if obj.type != "MESH" or len(obj.data.vertices) < 100:
+            continue
+        verts = obj.data.vertices
+        rs = [math.hypot(v.co.x, v.co.y) for v in verts]
+        r_max = max(rs)
+        if r_max <= 0 or min(rs) < 0.2 * r_max:
+            continue  # no hole through the middle
+        zs = [v.co.z for v in verts]
+        z_mid = (max(zs) + min(zs)) / 2
+        z_span = max(zs) - min(zs)
+        if z_span <= 0:
+            continue
+        # Underside near the hole: verts low on the shape and
+        # well inside its outer radius - only the full ring
+        # (the dough) has them; the icing's low verts are its
+        # drips, all out at the rim.
+        if any(v.co.z < z_mid - 0.36 * z_span
+               and math.hypot(v.co.x, v.co.y) < 0.7 * r_max
+               for v in verts):
+            return obj
+    return None
+
+
+def _find_icing(context, dough=None):
+    """The icing: the other ring - a shell with the same hole,
+    sitting exactly where the dough sits (it was duplicated
+    from it in place), but not the dough itself."""
+    if dough is None:
+        dough = _find_dough(context)
+    named = _scene_obj(context, "Icing")
+    if named is not None and named.type == "MESH" \
+            and named is not dough:
+        return named
+    if dough is None:
+        return None
+    for obj in context.scene.objects:
+        if obj.type != "MESH" or obj is dough:
+            continue
+        if len(obj.data.vertices) < 100:
+            continue
+        verts = obj.data.vertices
+        rs = [math.hypot(v.co.x, v.co.y) for v in verts]
+        if max(rs) <= 0 or min(rs) < 0.2 * max(rs):
+            continue
+        # Duplicated in place: its origin rides with the
+        # dough's origin, even after Part 8's parenting.
+        gap = (obj.matrix_world.translation
+               - dough.matrix_world.translation).length
+        if gap < 0.35 * DONUT_MINOR + 0.02:
+            return obj
+    return None
+
+
+def _radius_profile(obj):
+    """(r_body, height, z_min, z_max, radii, heights) for a
+    mesh cage, or None. r_body is the body's own wall radius,
+    read as the MEDIAN radius of the middle height band and
+    refined once toward the verts that cluster near it: in
+    that band the wall is the crowd, and everything else -
+    a handle, an inset ring - is a minority spread thin, so
+    the median lands on the wall itself.
+
+    The read this replaces took the 90th percentile of ALL
+    radii. On the low-vertex cage the card's own procedure
+    leaves behind, a grown handle is more than a tenth of
+    the verts and holds all of the largest radii, so the
+    percentile read the HANDLE as the body (measured on a
+    walked mug: r_body 0.283 on a 0.13 wall), the wall test
+    collapsed, and steps 1 and 2 un-ticked together the
+    moment Part 2's centrepiece was done - the learner was
+    stranded mid-part with no message. Walkthrough gap 2.13:
+    checks must grade the mesh the taught procedure
+    produces, not the reference build's mesh."""
+    verts = obj.data.vertices
+    if len(verts) < 12:
+        return None
+    rs = [math.hypot(v.co.x, v.co.y) for v in verts]
+    zs = [v.co.z for v in verts]
+    z_min, z_max = min(zs), max(zs)
+    height = z_max - z_min
+    if height <= 0:
+        return None
+    band = [r for r, z in zip(rs, zs)
+            if z_min + 0.15 * height < z < z_max - 0.15 * height]
+    if len(band) < 6:
+        band = list(rs)
+    band_sorted = sorted(band)
+    med = band_sorted[len(band_sorted) // 2]
+    if med <= 0:
+        return None
+    near = [r for r in band if 0.8 * med < r < 1.25 * med]
+    r_body = sum(near) / len(near) if near else med
+    return r_body, height, z_min, z_max, rs, zs
+
+
+def _point_in_poly(x, y, pts):
+    """Even-odd ray cast in the floor plan. A point sitting
+    on a vertex counts as inside - a triangle-fan cap has a
+    vert exactly on the axis, and it still roofs the cup."""
+    n = len(pts)
+    for px, py in pts:
+        if abs(px - x) < 1e-6 and abs(py - y) < 1e-6:
+            return True
+    inside = False
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            xin = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < xin:
+                inside = not inside
+    return inside
+
+
+def _top_open(obj, r_body, z_max, height):
+    """The top is really open: no face up there roofs the
+    middle. A cylinder cap's verts all sit ON the rim, so a
+    probe counting centre verts (the old read) can never see
+    a cap that was never deleted - the cap is a FACE, so
+    faces are what is tested: project each top-band face to
+    the floor plan and ask whether it covers the axis. A
+    thickened cup's rim annulus does not cover the axis; a
+    cap - n-gon or triangle fan - does. (Gap 1.17: the
+    'open cup' condition was, for the cap style this very
+    step creates, untested.)"""
+    verts = obj.data.vertices
+    z_cut = z_max - 0.25 * height
+    for poly in obj.data.polygons:
+        if poly.center.z < z_cut:
+            continue
+        pts = [(verts[i].co.x, verts[i].co.y)
+               for i in poly.vertices]
+        if any(math.hypot(px, py) < 0.05 * r_body
+               for px, py in pts):
+            return False
+        if _point_in_poly(0.0, 0.0, pts):
+            return False
+    return True
+
+
+def _is_container(obj):
+    """A cup/mug-shaped thing: a round wall standing around an
+    empty middle, roughly as tall as it is wide, with an open
+    top. Judged on the object's own cage, in its own space,
+    by the robust profile - so the mug stays a container
+    after its handle grows (the regression that stranded
+    the walk), while the dough ring and the icing shell,
+    which wrap an inner wall through their middle band,
+    never qualify."""
+    if obj is None or obj.type != "MESH":
+        return False
+    prof = _radius_profile(obj)
+    if prof is None:
+        return False
+    r_body, height, z_min, z_max, rs, zs = prof
+    ratio = r_body / height
+    if ratio < 0.28 or ratio > 1.05:
+        return False
+    # The wall is the crowd: most verts live at the body's
+    # radius. A handle's verts, out past it, are the
+    # minority and do not count against the wall.
+    wall = sum(1 for r in rs if 0.70 * r_body < r < 1.32 * r_body)
+    if wall < 0.5 * len(rs):
+        return False
+    # Nothing reaches into the middle at mid height: a ring
+    # (the dough) and a half shell (the icing) both carry an
+    # inner wall through the centre band and are not cups.
+    band = [(r, z) for r, z in zip(rs, zs)
+            if z_min + 0.2 * height < z < z_max - 0.2 * height]
+    if band:
+        inner = sum(1 for r, z in band if r < 0.62 * r_body)
+        if inner > 0.12 * len(band):
+            return False
+    return _top_open(obj, r_body, z_max, height)
+
+
+def _proud_cluster(obj):
+    """The verts that stick out past a container's wall,
+    partway up its side - the raw material of a handle.
+    Returns (proud, r_wall, height, z_min, z_max) with
+    proud a list of (radius, z, angle), or None."""
+    if obj is None or obj.type != "MESH":
+        return None
+    prof = _radius_profile(obj)
+    if prof is None:
+        return None
+    r_wall, height, z_min, z_max, rs, zs = prof
+    verts = obj.data.vertices
+    proud = [(r, z, math.atan2(verts[i].co.y, verts[i].co.x))
+             for i, (r, z) in enumerate(zip(rs, zs))
+             if r > 1.18 * r_wall
+             and z_min + 0.12 * height < z
+             < z_max - 0.08 * height]
+    return proud, r_wall, height, z_min, z_max
+
+
+def _wedge(proud):
+    """(arc, centre) of the smallest angular wedge holding
+    every proud vert, in radians. A ring, a flare or a
+    belly bulge wraps the whole body - its arc is the full
+    circle. A handle lives on ONE side of the mug."""
+    angs = sorted(a for _r, _z, a in proud)
+    if not angs:
+        return 0.0, 0.0
+    gaps = [(angs[(i + 1) % len(angs)] - angs[i]) % (2 * math.pi)
+            for i in range(len(angs))]
+    widest = max(range(len(angs)), key=lambda i: gaps[i])
+    arc = 2 * math.pi - gaps[widest]
+    centre = angs[(widest + 1) % len(angs)] + arc / 2
+    return arc, centre
+
+
+def _has_handle(obj):
+    """A handle grown from a container's wall: verts
+    sticking well out past the wall, partway up the side -
+    the extruded loop his Part 2 walks around. The wall it
+    is measured against is the robust body radius, so the
+    answer survives the handle's own verts joining the
+    cage (gap 2.13 measured this returning True while the
+    container test beside it failed).
+
+    Round 2 (re-walk M2): the old read counted ANY verts
+    past 1.18x the wall - and the taught reshape itself
+    (belly scaled out, foot flared, rings slid) lives
+    within a few percent of that line, so a handle-less
+    mug crossed it: step 2 ticked at the Solidify Apply
+    with no handle grown at all. A handle is not merely
+    FARTHER out than the wall - it is a LOCALIZED, DEEP
+    protrusion: its verts cluster in one wedge of the
+    circle (a ring or a bulge wraps all the way round)
+    and its crown reaches past every shaping move the
+    procedure teaches - the walked reshape peaks at
+    about 1.09x the wall, while the reference build's
+    own handle crowns at 1.24x and the walked mug's at
+    over 2x. Both tests are required now, and the crown
+    line sits between those measured classes."""
+    got = _proud_cluster(obj)
+    if got is None:
+        return False
+    proud, r_wall, _h, _lo, _hi = got
+    if len(proud) < 4:
+        return False
+    arc, _centre = _wedge(proud)
+    if arc > math.radians(170):
+        return False
+    return max(r for r, _z, _a in proud) >= 1.16 * r_wall
+
+
+def _boundary_loops(obj):
+    """Boundary edges (edges exactly one face uses) grouped
+    into loops by shared verts. A finished mug has exactly
+    one - its mouth - or none at all once its walls are
+    baked solid. Every other loop is a hole nobody closed."""
+    uses = {}
+    for poly in obj.data.polygons:
+        for a, b in poly.edge_keys:
+            key = (a, b) if a < b else (b, a)
+            uses[key] = uses.get(key, 0) + 1
+    boundary = [k for k, n in uses.items() if n == 1]
+    if not boundary:
+        return []
+    by_vert = {}
+    for i, (a, b) in enumerate(boundary):
+        by_vert.setdefault(a, []).append(i)
+        by_vert.setdefault(b, []).append(i)
+    seen = set()
+    loops = []
+    for i in range(len(boundary)):
+        if i in seen:
+            continue
+        comp = []
+        stack = [i]
+        while stack:
+            j = stack.pop()
+            if j in seen:
+                continue
+            seen.add(j)
+            comp.append(j)
+            a, b = boundary[j]
+            stack.extend(by_vert.get(a, ()))
+            stack.extend(by_vert.get(b, ()))
+        loops.append([boundary[j] for j in comp])
+    return loops
+
+
+def _dead_end_cap(obj, targets, rs, zs, r_body, line):
+    """True when the handle's far end is a cap that was
+    never joined - the touching state the taught pull
+    produces before any sewing.
+
+    The question is asked at the tube's two ends, and
+    nowhere else. Take the verts that are not wall-ring
+    verts - a height shared by a full ring of verts,
+    eight or more at one radius, is a ring of the cup's
+    own wall, and those are the ANCHORED verts - and
+    the connected components holding the spanning
+    faces' wall-side verts are the handle tube. Walk
+    the tube's graph diameter: the two farthest verts
+    mark its two ends, and each end's rim is the two
+    layers of verts at that end (a rectangular ring's
+    verts sit one graph step apart from each other,
+    so a single layer would catch only half the rim).
+    An end is ATTACHED when any of its rim verts has
+    an edge to an anchored vert: the root end always
+    is, because the tube grew out of the wall, and a
+    sewn, bridged or welded far end is too, because
+    those joins are built on the wall's own points. A
+    capped end merely resting against the wall shares
+    no point with it, so exactly one end attached
+    means the far end is a dead end and the veto
+    fires. Both ends attached - or no tube to judge -
+    is not this veto's to block.
+
+    Round 3's version scanned for a single FACE shaped
+    like a cap: all verts wall-side of the line, at
+    least two of them targets, no wall-ring vert among
+    them, no edge to one, nothing buried, and cutting
+    its verts away stranding no other target. Fix
+    round 4's diagnosis measured that scan on the
+    walked scenes and it never sees a real cap: one
+    walked end dips its top corners below the buried
+    line, the other's cap faces hold no targets at
+    all. What it fires on, in touching scenes and
+    joined ones alike, is a plain tube face of the
+    handle's own descent - the tube's cross-section
+    is the extruded wall face's rectangle, two
+    wall-side verts and two crown verts per ring, so
+    cutting one face's verts can never strand the end
+    beyond it, and the articulation clause waves every
+    mid-tube face through. The scan held the touching
+    states by that accident and vetoed every genuine
+    join the card teaches (the bridged walked mug
+    read False), which is why the test lives at the
+    ends now.
+
+    Round 5 corrects where the ends are measured.
+    Round 4's version seeded the tube search with
+    every target, wall-ring verts included, so the
+    wall's own verts sat inside the measured set -
+    and a sewn landing ties the end ring straight to
+    wall verts of the root's own rim (on the walked
+    mug the patch's top pair IS the root face's
+    bottom pair). The diameter then ran through the
+    wall: root and landing measured one step apart,
+    the arc's crown was the farthest point left, and
+    the crown read as the dead end. The anchored
+    verts now seed the tube's components but never
+    enter them, and the diameter is walked from a
+    vert of the tube itself."""
+    buckets = {}
+    for i in range(len(zs)):
+        buckets.setdefault(round(zs[i] / 0.004),
+                           []).append(i)
+    anchored = set()
+    for idxs in buckets.values():
+        if len(idxs) < 8:
+            continue
+        ring = sorted(rs[i] for i in idxs)
+        med = ring[len(ring) // 2]
+        for i in idxs:
+            if abs(rs[i] - med) < 0.012:
+                anchored.add(i)
+    if not anchored or not targets:
+        return False
+    full = {}
+    for edge in obj.data.edges:
+        a, b = edge.vertices
+        full.setdefault(a, set()).add(b)
+        full.setdefault(b, set()).add(a)
+
+    def bfs(src, allowed):
+        dist = {src: 0}
+        frontier = [src]
+        while frontier:
+            nxt = []
+            for g in frontier:
+                for h in full.get(g, ()):
+                    if h in allowed and h not in dist:
+                        dist[h] = dist[g] + 1
+                        nxt.append(h)
+            frontier = nxt
+        return dist
+
+    # The tube: the components of the anchored-free
+    # graph that hold at least one target. (A target
+    # that is itself a wall-ring vert still seeds its
+    # component - the tube's first ring hangs off the
+    # wall face it grew from.)
+    free = set(full) - anchored
+    tube = set()
+    for t in targets:
+        if t not in tube:
+            tube |= set(bfs(t, free))
+    # The anchored verts themselves never enter the
+    # measured set. Round 4's version let them in as
+    # BFS seeds, and a sewn landing ties the end ring
+    # straight to wall verts of the root's own rim -
+    # on the walked mug the patch's top pair IS the
+    # root face's bottom pair - so the diameter's
+    # path short-circuited through the wall: root and
+    # landing sat one step apart, the farthest point
+    # left standing was the arc's crown, and the
+    # crown, which touches nothing, read as the dead
+    # end (fix round 5's diagnosis has the walked
+    # measurements). With the wall's verts out of the
+    # graph, the sew's edges lead OUT of the tube,
+    # where they count as attachment, and the
+    # diameter runs the tube's own length again.
+    tube -= anchored
+    if not tube:
+        return False
+    # The tube's two ends, by graph diameter: farthest
+    # from a vert of the tube itself - a free target
+    # when one exists (stray wall fragments a seed
+    # pulled in carry no targets and are never the
+    # tube) - then farthest from that. Each end's rim
+    # is the two farthest layers from the OTHER end,
+    # drawn from the layers the search actually
+    # reached: with the wall's verts out of the set,
+    # a pulled-in fragment is its own component and
+    # is never reached.
+    seeds = targets & tube
+    d0 = bfs(min(seeds) if seeds else min(tube), tube)
+    end_a = max(d0, key=lambda v: d0[v])
+    da = bfs(end_a, tube)
+    end_b = max(da, key=lambda v: da[v])
+    db = bfs(end_b, tube)
+    span = db[end_a]
+    rim_a = {v for v in db if db[v] >= span - 1}
+    rim_b = {v for v in da if da[v] >= span - 1}
+
+    def attached(rim):
+        return any(h in anchored for v in rim
+                   for h in full.get(v, ()))
+
+    return attached(rim_a) != attached(rim_b)
+
+
+def _handle_returns(obj):
+    """The handle comes BACK to the body. A "spanning"
+    face - one with verts on both sides of the wall
+    line - exists wherever handle meets body: the grown
+    tube's first segment spans it at the root, and a
+    finished join spans it again at the landing (sewing
+    faces, bridge faces, a weld). Collect the wall-side
+    verts of every spanning face and measure how far
+    apart they reach ALONG THE WALL's own vert graph:
+
+    - one attachment (a handle grown and left hanging,
+      capped or not): its wall-side verts are one wall
+      face's rim - a four-corner ring, whose farthest
+      corners sit two steps apart;
+    - two attachments: the landing's rim joins the set,
+      and the farthest wall-side verts sit at least
+      three steps apart - across the root rim and down
+      the landing's own rim - even when the landing is
+      the very face below the root and the two rims
+      share an edge (the suite's construction);
+    - an end pushed INTO the wall (the walk's
+      overshoot) never welds: its spanning faces' inner
+      verts form a separate island in the wall graph,
+      and the island's verts sit buried in the body,
+      well inside the wall's own radius - which proves
+      the second attachment. An end merely TOUCHING the
+      wall, cap on and unsewn, also forms an island,
+      but its verts sit ON the wall's radius, not buried
+      in it - and proves nothing.
+
+    Distances are counted in wall rings, never in
+    metres or heights - the walked handle lands at its
+    root's own height, and the reference build's handle
+    hugs the wall at 1.24x it; both pass, and a hanging
+    handle fails at any size.
+
+    Round 3 closes the hole that reasoning leaves: a
+    grown handle whose descent runs along the wall -
+    the taught pull brings it home hugging the surface
+    - contributes wall-side verts at BOTH ends of its
+    own arc, the root rim and the rings of its descent,
+    and those sit three or more steps apart along the
+    wall, so the distance clause alone reads the one
+    attachment as two (re-walk #2, gap #3: the step
+    ticked on a bare re-evaluation event, the end face
+    unsewn and hovering at the wall, both inside faces
+    still present). The distance clause therefore runs
+    only after _dead_end_cap has had its say: a capped
+    end with no shared topology at the landing is a
+    dead end, and a dead end vetoes the tick however
+    far apart the approach's own verts measure. A real
+    join - F-faces sewn corner to corner, a bridge, a
+    weld - shares topology at the landing by
+    construction, so the veto never sees it.
+
+    Round 4 corrects that last claim: round 3's veto
+    DID see real joins - its face-shaped scan mistook
+    a mid-descent tube face for the cap and vetoed the
+    walked mug's finished bridge (fix round 4's
+    diagnosis has the measurements). The veto's
+    question is unchanged - is the far end attached
+    to the wall, or merely resting on it? - but
+    _dead_end_cap now answers it at the tube's two
+    ends, the only places the answer lives."""
+    prof = _radius_profile(obj)
+    if prof is None:
+        return False
+    r_body = prof[0]
+    rs = prof[4]
+    line = 1.15 * r_body
+    wall_side = set()
+    for poly in obj.data.polygons:
+        prs = [rs[i] for i in poly.vertices]
+        if max(prs) > line and min(prs) < line:
+            wall_side.update(i for i in poly.vertices
+                             if rs[i] < line)
+    if len(wall_side) < 4:
+        return False
+    adj = {}
+    for edge in obj.data.edges:
+        a, b = edge.vertices
+        if rs[a] < line and rs[b] < line:
+            adj.setdefault(a, set()).add(b)
+            adj.setdefault(b, set()).add(a)
+    targets = set(wall_side)
+    if _dead_end_cap(obj, targets, rs, prof[5],
+                     r_body, line):
+        return False
+    for start in wall_side:
+        dist = {start: 0}
+        frontier = [start]
+        while frontier:
+            nxt = []
+            for g in frontier:
+                for h in adj.get(g, ()):
+                    if h not in dist:
+                        dist[h] = dist[g] + 1
+                        nxt.append(h)
+            frontier = nxt
+        reached = targets & set(dist)
+        unreached = targets - reached
+        if unreached and any(rs[t] < r_body - 0.010
+                             for t in unreached):
+            return True
+        if any(dist[t] >= 3 for t in reached):
+            return True
+    return False
+
+
+def _join_closed(obj):
+    """The handle is JOINED, not merely touching. Step 2's
+    check never tested the join at all (gap 2.14) - a
+    handle grown and never joined satisfied every graded
+    condition.
+
+    Round 2 (re-walk M3): the read this replaces failed
+    on ANY boundary loop that was not the mouth. That
+    revoked the tick mid-procedure by design: the card's
+    own bridge route OPENS the joint first (delete both
+    inside faces, then Bridge Edge Loops), and the card's
+    main method ends by deleting those same two faces.
+    Worse, its flip side never required a join at all - a
+    capped handle hanging in mid-air has the mouth as its
+    only loop and passed (the hole behind the Apply false
+    tick). The join is now tested positively, in every
+    state the procedure legitimately passes through:
+
+    - Open loops are accepted only as the joint's own
+      pair: two rims at the handle, pulled together (gap
+      at most 0.02) - the bridge route staged, or a join
+      opened exactly where the handle lands. A lone hole,
+      or two holes that are not a pair at the handle (the
+      walked scene kept two, 0.125 m apart on different
+      sides of the mug), still fails.
+    - With no open loops, the handle must prove it came
+      back (_handle_returns): sewn, bridged, welded and
+      embedded ends all pass; the capped handle floating
+      in air finally fails."""
+    prof = _radius_profile(obj)
+    if prof is None:
+        return False
+    r_body, height, z_min, z_max, rs, zs = prof
+    verts = obj.data.vertices
+    # Open rims, grouped by shared verts rather than
+    # walked edge by edge: where a learner's faces
+    # overlap (his grown tube doubles a face along the
+    # root rim), one rim edge can carry two faces and
+    # still border the hole, and an edge-walk reads the
+    # rim as a broken path of three. The verts are the
+    # rim either way.
+    uses = {}
+    for poly in obj.data.polygons:
+        for a, b in poly.edge_keys:
+            key = (a, b) if a < b else (b, a)
+            uses[key] = uses.get(key, 0) + 1
+    bedges = [k for k, n in uses.items() if n < 2]
+    by_vert = {}
+    for ei, (a, b) in enumerate(bedges):
+        by_vert.setdefault(a, []).append(ei)
+        by_vert.setdefault(b, []).append(ei)
+    comps = []
+    seen = set()
+    for ei in range(len(bedges)):
+        if ei in seen:
+            continue
+        comp = set()
+        stack = [ei]
+        while stack:
+            j = stack.pop()
+            if j in seen:
+                continue
+            seen.add(j)
+            a, b = bedges[j]
+            comp.add(a)
+            comp.add(b)
+            stack.extend(by_vert.get(a, ()))
+            stack.extend(by_vert.get(b, ()))
+        comps.append(comp)
+    open_rims = []
+    for comp in comps:
+        mouth = min(zs[i] for i in comp) \
+            > z_max - 0.20 * height \
+            and max(rs[i] for i in comp) < 1.2 * r_body
+        if not mouth:
+            open_rims.append(comp)
+    if not open_rims:
+        return _handle_returns(obj)
+    got = _proud_cluster(obj)
+    if got is None:
+        return False
+    arc, centre = _wedge(got[0])
+
+    def in_wedge(comp):
+        cx = sum(verts[i].co.x for i in comp) / len(comp)
+        cy = sum(verts[i].co.y for i in comp) / len(comp)
+        diff = (math.atan2(cy, cx) - centre) % (2 * math.pi)
+        if diff > math.pi:
+            diff -= 2 * math.pi
+        return abs(diff) <= arc / 2 + math.radians(40)
+
+    def gap(a, b):
+        pa = [verts[i].co for i in a]
+        pb = [verts[i].co for i in b]
+        return min((x - y).length for x in pa for y in pb)
+
+    for comp in open_rims:
+        if not in_wedge(comp):
+            return False
+        if not any(other is not comp
+                   and gap(comp, other) <= 0.02
+                   for other in open_rims):
+            return False
+    return True
+
+
+def _containers(context, skip=(), objects=None):
+    """Every cup/mug-shaped mesh in the scene, minus the
+    pieces other finders have already claimed. With
+    objects given, that list is graded instead of the
+    live scene, with the very same tests."""
+    out = []
+    for obj in (context.scene.objects if objects is None
+                else objects):
+        if obj.type != "MESH" or obj in skip:
+            continue
+        if _is_container(obj):
+            out.append(obj)
+    return out
+
+
+def _find_mug(context):
+    """The mug: the container that has grown a handle. (While
+    it is still the plain cup, this returns None - by design:
+    Part 2 is what turns the cup into the mug.)"""
+    for obj in _containers(context):
+        if _has_handle(obj):
+            return obj
+    return None
+
+
+def _find_plate(context, dough=None):
+    """The plate: a wide, flat mesh the donut rests in -
+    wider than the donut, far thinner than it is wide,
+    centred under it. (His stays named "Circle" until
+    Part 8; shape is the only honest way to find it.)"""
+    if dough is None:
+        dough = _find_dough(context)
+    named = _scene_obj(context, "Plate")
     if named is not None and named.type == "MESH":
         return named
-    skip = {"Icing", "Sprinkles", "Plate", "Table", "Mug", "Cup",
-            "Coffee Foam", "Mug Coffee", "Mug Handle"}
+    if dough is None:
+        return None
+    d_center = dough.matrix_world.translation
+    d_size = max(dough.dimensions.x, dough.dimensions.y)
     for obj in context.scene.objects:
-        if obj.type != "MESH" or obj.name in skip:
+        if obj.type != "MESH" or obj is dough:
             continue
-        if obj.name.startswith("Sprinkle"):
+        w = max(obj.dimensions.x, obj.dimensions.y)
+        h = obj.dimensions.z
+        if w <= 0 or h <= 0:
             continue
-        if len(obj.data.vertices) < 300:
+        if not (1.05 * d_size < w < 3.4 * d_size):
             continue
-        if min(math.hypot(v.co.x, v.co.y)
-               for v in obj.data.vertices) > 0.25:
-            return obj
+        if h > 0.28 * w:
+            continue
+        c = obj.matrix_world.translation
+        if math.hypot(c.x - d_center.x, c.y - d_center.y) \
+                > 0.35 * d_size:
+            continue
+        top = c.z + h / 2
+        if top > d_center.z + 0.02:
+            continue  # the donut rests IN it, not under it
+        return obj
+    return None
+
+
+def _find_table(context, dough=None):
+    """The table: the big flat thing at the bottom of the
+    set, many times wider than the donut and barely thick.
+    (His stays named "Plane" until Part 8.)"""
+    if dough is None:
+        dough = _find_dough(context)
+    named = _scene_obj(context, "Table")
+    if named is not None and named.type == "MESH":
+        return named
+    if dough is None:
+        return None
+    d_size = max(dough.dimensions.x, dough.dimensions.y)
+    best = None
+    for obj in context.scene.objects:
+        if obj.type != "MESH" or obj is dough:
+            continue
+        w = max(obj.dimensions.x, obj.dimensions.y)
+        if w < 2.6 * d_size:
+            continue
+        if obj.dimensions.z > 0.06 * w:
+            continue
+        if best is None or w > max(best.dimensions.x,
+                                   best.dimensions.y):
+            best = obj
+    return best
+
+
+def _find_foam(context, mug=None):
+    """The coffee foam: a small mesh of its own sitting
+    inside the mug's rim, up at the top of the mug - his is
+    separated from the mug's own rim loop in Part 6 and
+    named "Foam"."""
+    if mug is None:
+        mug = _find_mug(context)
+    named = _scene_obj(context, "Foam")
+    if named is not None and named.type == "MESH" \
+            and named is not mug:
+        return named
+    if mug is None:
+        return None
+    from mathutils import Vector
+    m_center = mug.matrix_world.translation
+    m_top = m_center.z + mug.dimensions.z / 2
+    m_r = max(mug.dimensions.x, mug.dimensions.y) / 2
+    for obj in context.scene.objects:
+        if obj.type != "MESH" or obj is mug:
+            continue
+        if len(obj.data.vertices) > 3000:
+            continue
+        # Judge by the geometry's world box, not the object
+        # origin: a separated piece keeps the mug's own
+        # origin, so its origin sits at mug-centre while
+        # its surface rides up at the rim.
+        corners = [obj.matrix_world @ Vector(corner)
+                   for corner in obj.bound_box]
+        lo = Vector((min(c.x for c in corners),
+                     min(c.y for c in corners),
+                     min(c.z for c in corners)))
+        hi = Vector((max(c.x for c in corners),
+                     max(c.y for c in corners),
+                     max(c.z for c in corners)))
+        c = (lo + hi) / 2
+        if math.hypot(c.x - m_center.x, c.y - m_center.y) \
+                > 0.6 * m_r:
+            continue
+        if abs(c.z - (m_top - 0.12 * mug.dimensions.z)) \
+                > 0.22 * mug.dimensions.z:
+            continue
+        w = max(hi.x - lo.x, hi.y - lo.y)
+        if w > 1.15 * 2 * m_r:
+            continue
+        return obj
     return None
 
 
@@ -1272,130 +2097,334 @@ def _sss_weight(obj):
     return best
 
 
-def _build_dough_ring(context):
-    """His dough: a PLUMP ring - fat tube, squashed a little,
-    smoothed and subdivided - not the thin default torus."""
-    bpy.ops.mesh.primitive_torus_add(
-        major_radius=1.0, minor_radius=0.42,
-        major_segments=64, minor_segments=24)
-    obj = context.object
-    obj.name = "Dough"
-    obj.scale = (1.0, 1.0, 0.82)
-    for poly in obj.data.polygons:
-        poly.use_smooth = True
-    mod = obj.modifiers.new("Smoother", "SUBSURF")
-    mod.levels = 2
-    return obj
+def _sss_recipe(obj):
+    """His subsurface recipe, read off an object's materials:
+    (weight, radius, scale) of the strongest-SSS material, or
+    None. His recipe, stated in Part 4 and restated in Parts
+    5, 7 and 8: Weight 1, Radius (1, 1, 1), amount by Scale."""
+    if obj is None or obj.type != "MESH":
+        return None
+    best = None
+    for mat in obj.data.materials:
+        if mat is None or not mat.use_nodes or mat.node_tree is None:
+            continue
+        bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf is None or "Subsurface Weight" not in bsdf.inputs:
+            continue
+        weight = float(bsdf.inputs["Subsurface Weight"]
+                       .default_value)
+        radius = None
+        if "Subsurface Radius" in bsdf.inputs:
+            radius = tuple(float(c) for c in
+                           bsdf.inputs["Subsurface Radius"]
+                           .default_value[:3])
+        scale = None
+        if "Subsurface Scale" in bsdf.inputs:
+            scale = float(bsdf.inputs["Subsurface Scale"]
+                          .default_value)
+        if best is None or weight > best[0]:
+            best = (weight, radius, scale)
+    return best
 
 
-def _build_icing(context, dough):
-    """His real method (Part 3): the icing is the TOP of the
-    dough itself, separated off, pulled down into drips, given
-    thickness (Solidify, his 0.025), and shrink-wrapped onto
-    the dough so it hugs instead of floating."""
-    import bmesh
-    icing = dough.copy()
-    icing.data = dough.data.copy()
-    context.scene.collection.objects.link(icing)
-    icing.name = "Icing"
-    icing.data.name = "Icing"
-    bm = bmesh.new()
-    bm.from_mesh(icing.data)
-    bm.faces.ensure_lookup_table()
-    under = [f for f in bm.faces if f.calc_center_median().z < -0.02]
-    bmesh.ops.delete(bm, geom=under, context="FACES")
-    # Drips: the rim verts are pulled down the dough's side by an
-    # uneven amount - long drips in places, short in others.
-    rng = random.Random(4)
-    p1, p2, p3 = (rng.uniform(0, 6.28), rng.uniform(0, 6.28),
-                  rng.uniform(0, 6.28))
-    bm.verts.ensure_lookup_table()
-    for v in bm.verts:
-        if abs(v.co.z) < 0.09:
-            a = math.atan2(v.co.y, v.co.x)
-            wave = (math.sin(a * 3 + p1) * 0.5
-                    + math.sin(a * 7 + p2) * 0.3
-                    + math.sin(a * 13 + p3) * 0.2)
-            drip = (max(0.0, wave) ** 1.5) * 0.34
-            v.co.z -= drip
-    bm.to_mesh(icing.data)
-    bm.free()
-    for poly in icing.data.polygons:
-        poly.use_smooth = True
-    for mod in list(icing.modifiers):
-        icing.modifiers.remove(mod)
-    hug = icing.modifiers.new("Hug the Dough", "SHRINKWRAP")
-    hug.target = dough
-    hug.wrap_method = "NEAREST_SURFACEPOINT"
-    hug.offset = 0.012
-    thick = icing.modifiers.new("Icing Thickness", "SOLIDIFY")
-    thick.thickness = 0.025
-    sub = icing.modifiers.new("Smoother", "SUBSURF")
-    sub.levels = 2
-    icing.scale = (1.015, 1.015, 0.835)
+def _recipe_ok(obj):
+    """True when the object's food glow is his recipe: weight
+    all the way up and the radius corrected to (1, 1, 1) -
+    not the red-tinted skin default he warns about."""
+    recipe = _sss_recipe(obj)
+    if recipe is None:
+        return False
+    weight, radius, _scale = recipe
+    if weight < 0.99:
+        return False
+    if radius is None:
+        return False
+    return all(abs(c - 1.0) < 0.05 for c in radius)
+
+
+def _set_active(context, obj):
     bpy.ops.object.select_all(action="DESELECT")
-    icing.select_set(True)
-    context.view_layer.objects.active = icing
-    return icing
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
 
 
-def _colour_dough(context, dough):
-    """Golden baked dough WITH the pale fry line around its
-    middle - and subsurface up, so it reads as food."""
-    golden = bpy.data.materials.get("Buddy Dough") or \
-        bpy.data.materials.new("Buddy Dough")
-    _principled(golden, (0.52, 0.28, 0.09, 1.0),
-                roughness=0.5, subsurface=0.3)
-    pale = bpy.data.materials.get("Buddy Fry Line") or \
-        bpy.data.materials.new("Buddy Fry Line")
-    _principled(pale, (0.78, 0.55, 0.28, 1.0),
-                roughness=0.55, subsurface=0.3)
-    dough.data.materials.clear()
-    dough.data.materials.append(golden)
-    dough.data.materials.append(pale)
-    for poly in dough.data.polygons:
-        c = poly.center
-        radial = math.hypot(c.x, c.y)
-        if radial > 1.0 and abs(c.z) < 0.055:
-            poly.material_index = 1
+def _apply_modifier(context, obj, name):
+    """Apply one modifier for real, the way his Apply clicks
+    do - the stack above it is evaluated into the mesh."""
+    _set_active(context, obj)
+    bpy.ops.object.modifier_apply(modifier=name)
 
 
-def _tour_step_first_cup(context):
-    # The new series teaches the whole workshop on a cup first -
-    # and only when the scene is EXACTLY Blender's untouched
-    # starter set is the starter trio cleared.
-    objs = list(context.scene.objects)
-    if {o.name for o in objs} <= {"Cube", "Camera", "Light"}:
-        bpy.ops.object.select_all(action="SELECT")
-        bpy.ops.object.delete()
-    import bmesh
-    bpy.ops.mesh.primitive_cylinder_add(
-        radius=0.40, depth=0.95, vertices=32,
-        location=(1.95, 0.60, 0.06))
-    cup = context.object
-    cup.name = "Cup"
-    # The opening (his 17:57 move): the top face goes away.
-    bm = bmesh.new()
-    bm.from_mesh(cup.data)
-    bm.faces.ensure_lookup_table()
-    top = [f for f in bm.faces if f.calc_center_median().z > 0.40]
-    bmesh.ops.delete(bm, geom=top, context="FACES")
-    bm.to_mesh(cup.data)
-    bm.free()
-    for poly in cup.data.polygons:
-        poly.use_smooth = True
-    walls = cup.modifiers.new("Cup Walls", "SOLIDIFY")
-    walls.thickness = 0.035
-    sub = cup.modifiers.new("Smoother", "SUBSURF")
-    sub.levels = 2
-    # His last move of Part 1 (27:11): save the file.
-    if not bpy.data.filepath:
-        bpy.ops.wm.save_as_mainfile(
-            filepath=_home("blender_buddy_my_donut.blend"))
+def _ensure_mod_order(context, obj, want):
+    """Force the modifier stack into the given top-to-bottom
+    order (his drags, made deterministic): try Blender's own
+    move buttons first; if that fails, rebuild the stack -
+    safe because this runs before anything is applied."""
+    names = [m.name for m in obj.modifiers]
+    if names == want:
+        return
+    _set_active(context, obj)
+    try:
+        for _ in range(len(want) * 2):
+            names = [m.name for m in obj.modifiers]
+            if names == want:
+                return
+            for i, name in enumerate(want):
+                if names.index(name) != i:
+                    while names.index(name) > i:
+                        bpy.ops.object.modifier_move_up(
+                            modifier=name)
+                        names = [m.name for m in obj.modifiers]
+                    break
+    except Exception:
+        pass
+    if [m.name for m in obj.modifiers] == want:
+        return
+    keep = {m.name: m for m in obj.modifiers}
+    for m in list(obj.modifiers):
+        obj.modifiers.remove(m)
+    for name in want:
+        src = keep[name]
+        new = obj.modifiers.new(src.name, src.type)
+        for prop in src.bl_rna.properties:
+            if prop.is_readonly or prop.identifier == "name":
+                continue
+            try:
+                setattr(new, prop.identifier,
+                        getattr(src, prop.identifier))
+            except Exception:
+                continue
+
+
+def _mod_inputs(mod):
+    """A geometry-nodes modifier's inputs, read by the NAME
+    his UI shows (never by socket identifier - those are an
+    implementation detail that shifts between versions).
+    Returns {name: input-property}."""
+    out = {}
+    grp = getattr(mod, "node_group", None)
+    if grp is None:
+        return out
+    try:
+        inputs = mod.properties.inputs
+    except Exception:
+        return out
+    for item in grp.interface.items_tree:
+        if getattr(item, "in_out", None) != "INPUT":
+            continue
+        try:
+            out[item.name] = getattr(inputs, item.identifier)
+        except Exception:
+            continue
+    return out
+
+
+def _set_mod_input(mod, name, value):
+    prop = _mod_inputs(mod).get(name)
+    if prop is None:
+        return False
+    prop.value = value
+    return True
+
+
+def _try_unwrap(context, obj):
+    """A real U -> Unwrap (Angle Based), his method where the
+    build needs one. Falls back to leaving the primitive UVs
+    if the operator won't run in this context."""
+    try:
+        _set_active(context, obj)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.unwrap(method="ANGLE_BASED")
+        bpy.ops.object.mode_set(mode="OBJECT")
+        return True
+    except Exception:
+        try:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception:
+            pass
+        return False
+
+
+def _make_texture_set(name, rgb, seed, rough_mid):
+    """Three small photo-like maps drawn in pixels here - a
+    mottled colour map, a roughness map (data), and a normal
+    map (data) - plus a displacement height map for the dough.
+    No downloads; they stand in for his Poliigon textures
+    (the audit is explicit that the real sets are external
+    assets - these are labelled stand-ins, not his surfaces).
+    Saved as files and packed, so they travel with the scene."""
+    folder = os.path.join(tempfile.gettempdir(),
+                          "buddy_donut_textures")
+    os.makedirs(folder, exist_ok=True)
+    rng = random.Random(seed)
+    size = 256
+
+    def octave(cells_n, amp):
+        grid = [[rng.uniform(-amp, amp) for _ in range(cells_n)]
+                for _ in range(cells_n)]
+
+        def sample(u, v):
+            gx = u * cells_n
+            gy = v * cells_n
+            x0 = int(gx) % cells_n
+            y0 = int(gy) % cells_n
+            x1 = (x0 + 1) % cells_n
+            y1 = (y0 + 1) % cells_n
+            fx = gx - int(gx)
+            fy = gy - int(gy)
+            sx = fx * fx * (3.0 - 2.0 * fx)
+            sy = fy * fy * (3.0 - 2.0 * fy)
+            top = grid[y0][x0] * (1 - sx) + grid[y0][x1] * sx
+            bot = grid[y1][x0] * (1 - sx) + grid[y1][x1] * sx
+            return top * (1 - sy) + bot * sy
+
+        return sample
+
+    # One surface, three readings of it: the same smooth
+    # mottling drives the colour, the roughness and the bump,
+    # the way a real photo set describes one material. (An
+    # earlier version's hard 8-pixel cells printed across the
+    # dough as checkerboard facets.)
+    o1 = octave(9, 0.13)
+    o2 = octave(27, 0.06)
+    o3 = octave(81, 0.02)
+
+    def noise(u, v):
+        return o1(u, v) + o2(u, v) + o3(u, v)
+
+    def build(kind):
+        img = bpy.data.images.get(f"{name} {kind}")
+        if img is not None and img.size[0] != size:
+            bpy.data.images.remove(img)
+            img = None
+        if img is None:
+            img = bpy.data.images.new(f"{name} {kind}", size, size)
+        px = []
+        for y in range(size):
+            v = y / size
+            for x in range(size):
+                n = noise(x / size, v)
+                if kind == "Colour":
+                    px.extend((max(0.0, rgb[0] * (1 + n)),
+                               max(0.0, rgb[1] * (1 + n)),
+                               max(0.0, rgb[2] * (1 + n)), 1.0))
+                elif kind == "Roughness":
+                    vv = max(0.05, min(0.95, rough_mid + n))
+                    px.extend((vv, vv, vv, 1.0))
+                elif kind == "Displacement":
+                    # A height map's swing is multiplied by
+                    # the Displacement Scale (his stated 0.12)
+                    # in metres. A photographic height map
+                    # sits near mid-grey almost everywhere,
+                    # with sparse pores; a uniform noise
+                    # stand-in displaces EVERY point hard
+                    # (spikes through the icing shell, a
+                    # toothed shadow edge). Shape the
+                    # stand-in's histogram the same way -
+                    # quadratic falloff: typical points
+                    # barely move, rare cells dip as pores.
+                    shaped = math.copysign(
+                        (abs(n) / 0.21) ** 2, n) * 0.21
+                    vv = max(0.0, min(1.0,
+                                      0.5 + shaped * 0.30))
+                    px.extend((vv, vv, vv, 1.0))
+                else:  # Normal: mostly flat, gently bumpy
+                    px.extend((0.5 + n * 0.35, 0.5 + n * 0.25,
+                               1.0, 1.0))
+        # Colour space FIRST: changing it afterwards throws the
+        # pixels away (measured on 4.2.5 and 5.3 - the buffer
+        # resets to black), which silently rendered every
+        # textured surface black.
+        want = "sRGB" if kind == "Colour" else "Non-Color"
+        if img.colorspace_settings.name != want:
+            img.colorspace_settings.name = want
+        img.pixels.foreach_set(px)
+        img.filepath_raw = os.path.join(
+            folder, f"buddy_{name.lower().replace(' ', '_')}_"
+                    f"{kind.lower()}.png")
+        img.save()
+        try:
+            img.pack()
+        except Exception:
+            pass
+        return img
+
+    return {"colour": build("Colour"), "rough": build("Roughness"),
+            "normal": build("Normal"), "disp": build("Displacement")}
+
+
+def _apply_pbr(obj, tex, sss=None, displacement=None,
+               map_scale=None):
+    """Wire a texture set into the object's material the way
+    Part 5 teaches: colour into Base Color (the only sRGB
+    picture), roughness as Non-Color data, a Normal Map node
+    into the Normal socket. sss, when given, is his recipe as
+    (weight, radius, scale). displacement, when given, is the
+    Displacement node's Scale with the height map plugged
+    into the Material Output - his dough treatment."""
+    mat = bpy.data.materials.get(f"Buddy {obj.name} Surface")
+    if mat is None:
+        mat = bpy.data.materials.new(f"Buddy {obj.name} Surface")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    for node in list(nt.nodes):
+        nt.nodes.remove(node)
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (300, 0)
+    out.location = (560, 0)
+    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    if sss is not None:
+        weight, radius, scale = sss
+        if "Subsurface Weight" in bsdf.inputs:
+            bsdf.inputs["Subsurface Weight"].default_value = weight
+        if radius is not None and "Subsurface Radius" in bsdf.inputs:
+            bsdf.inputs["Subsurface Radius"].default_value = \
+                tuple(radius)
+        if scale is not None and "Subsurface Scale" in bsdf.inputs:
+            bsdf.inputs["Subsurface Scale"].default_value = scale
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    mapping = nt.nodes.new("ShaderNodeMapping")
+    if map_scale is not None:
+        mapping.inputs["Scale"].default_value = \
+            (map_scale, map_scale, map_scale)
+    nt.links.new(coord.outputs["UV"], mapping.inputs["Vector"])
+
+    def tex_node(image, loc):
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.image = image
+        node.location = loc
+        nt.links.new(mapping.outputs["Vector"], node.inputs["Vector"])
+        return node
+
+    col = tex_node(tex["colour"], (0, 160))
+    nt.links.new(col.outputs["Color"], bsdf.inputs["Base Color"])
+    rgh = tex_node(tex["rough"], (0, -80))
+    nt.links.new(rgh.outputs["Color"], bsdf.inputs["Roughness"])
+    nrm = tex_node(tex["normal"], (0, -320))
+    nmap = nt.nodes.new("ShaderNodeNormalMap")
+    nmap.location = (240, -320)
+    nt.links.new(nrm.outputs["Color"], nmap.inputs["Color"])
+    nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+    if displacement is not None and tex.get("disp") is not None:
+        dsp = tex_node(tex["disp"], (0, -560))
+        dnode = nt.nodes.new("ShaderNodeDisplacement")
+        dnode.location = (300, -560)
+        dnode.inputs["Scale"].default_value = displacement
+        nt.links.new(dsp.outputs["Color"], dnode.inputs["Height"])
+        nt.links.new(dnode.outputs["Displacement"],
+                     out.inputs["Displacement"])
+        mat.displacement_method = "BOTH"
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
+    return mat
 
 
 def _reference_image(context):
-    """A small stand-in for the cup reference photo he links
+    """A small stand-in for the mug reference photo he links
     from the series page - a plain mug silhouette, drawn in
     pixels here (no downloads)."""
     img = bpy.data.images.get("Cup Reference")
@@ -1417,307 +2446,977 @@ def _reference_image(context):
     return img
 
 
+def _ring_verts(bm, z_target, tol=0.004):
+    """Verts of the cup cage sitting on one height ring."""
+    return [v for v in bm.verts if abs(v.co.z - z_target) < tol]
+
+
+def _scale_ring(bm, z_target, factor, tol=0.004):
+    for v in _ring_verts(bm, z_target, tol):
+        v.co.x *= factor
+        v.co.y *= factor
+
+
+def _subdivide_verticals(bm, z_lo, z_hi):
+    """One loop cut (Ctrl+R): the vertical edges that SPAN
+    the middle of the given height band are cut once;
+    returns the new ring's height (the cut edges' midpoint).
+    Span, not containment - a band edge falling mid-edge
+    must not silently skip the cut."""
+    import bmesh
+    z_target = (z_lo + z_hi) / 2
+    bm.edges.ensure_lookup_table()
+    edges = [e for e in bm.edges
+             if abs(e.verts[0].co.z - e.verts[1].co.z)
+             > 3 * math.hypot(e.verts[0].co.x - e.verts[1].co.x,
+                              e.verts[0].co.y - e.verts[1].co.y)
+             and min(e.verts[0].co.z, e.verts[1].co.z) < z_target
+             < max(e.verts[0].co.z, e.verts[1].co.z)]
+    if not edges:
+        return None
+    z_mid = sum((e.verts[0].co.z + e.verts[1].co.z) / 2
+                for e in edges) / len(edges)
+    bmesh.ops.subdivide_edges(bm, edges=edges, cuts=1)
+    bm.verts.ensure_lookup_table()
+    return z_mid
+
+
+def _slide_ring(bm, z_from, z_to, tol=0.004):
+    for v in _ring_verts(bm, z_from, tol):
+        v.co.z = z_to
+
+
+def _tour_step_first_cup(context):
+    import bmesh
+    # Part 1, his order: the splash goes, he learns to move,
+    # deletes the default CUBE ONLY - his Camera and Light
+    # stay in the scene for the whole series (the camera makes
+    # Part 4's first render; the lamp becomes Part 8's sun).
+    cube = _scene_obj(context, "Cube")
+    if cube is not None:
+        bpy.data.objects.remove(cube, do_unlink=True)
+    # The donut comes FIRST in this part (06:41), before the
+    # cup: Shift+A -> Mesh -> Torus, sized in the operator
+    # panel (F9 brings it back): Major Radius 0.1, Minor
+    # Radius dragged to about 0.057, Major Segments 48,
+    # Minor Segments 18, then right-click -> Shade Smooth.
+    if _scene_obj(context, "Torus") is None \
+            and _find_dough(context) is None:
+        bpy.ops.mesh.primitive_torus_add(
+            major_radius=DONUT_MAJOR, minor_radius=DONUT_MINOR,
+            major_segments=48, minor_segments=18,
+            location=(0, 0, 0))
+        donut = context.object
+        for poly in donut.data.polygons:
+            poly.use_smooth = True
+    # Then the cup (10:27): Cylinder, Radius 0.13, Depth
+    # dragged to about mug height (UNSTATED - 0.24 picked),
+    # Vertices 14 on purpose (a Subsurf is coming). Moved
+    # behind the donut with G.
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=CUP_RADIUS, depth=CUP_DEPTH, vertices=14,
+        location=(0.23, 0.19, CUP_DEPTH / 2))
+    cup = context.object
+    bm = bmesh.new()
+    bm.from_mesh(cup.data)
+    # Edit Mode, Face Select: delete the top FACE (17:57) -
+    # faces only, the opening of the cup.
+    bm.faces.ensure_lookup_table()
+    top = [f for f in bm.faces
+           if f.calc_center_median().z > CUP_DEPTH / 2 - 0.001]
+    bmesh.ops.delete(bm, geom=top, context="FACES")
+    # Loop cuts (22:43): one slid up near the rim, one down
+    # near the base, to tighten the Subsurf's shape.
+    z_mid = _subdivide_verticals(bm, -CUP_DEPTH / 2, CUP_DEPTH / 2)
+    if z_mid is not None:
+        _slide_ring(bm, z_mid, CUP_DEPTH / 2 - 0.024)
+    z_low = _subdivide_verticals(bm, -CUP_DEPTH / 2, 0.0)
+    if z_low is not None:
+        _slide_ring(bm, z_low, -CUP_DEPTH / 2 + 0.020)
+    # The bottom face gets an Inset (25:38), dragged by eye -
+    # UNSTATED amount, 0.025 picked.
+    bm.faces.ensure_lookup_table()
+    bottom = [f for f in bm.faces
+              if f.calc_center_median().z < -CUP_DEPTH / 2 + 0.001]
+    if bottom:
+        bmesh.ops.inset_region(bm, faces=bottom, thickness=0.025,
+                               depth=0.0)
+    bm.to_mesh(cup.data)
+    bm.free()
+    for poly in cup.data.polygons:
+        poly.use_smooth = True
+    # Modifiers, in his order: Solidify FIRST (18:47 - this
+    # is the cup's thickness; its value is dragged by eye and
+    # never stated - 0.004 picked, revisited at 26:47), then
+    # Subdivision Surface (20:42; he raises it 1-2-3 on
+    # camera to show the doubling - the resting level is
+    # UNSTATED, 2 picked).
+    walls = cup.modifiers.new("Solidify", "SOLIDIFY")
+    walls.thickness = 0.004
+    sub = cup.modifiers.new("Subdivision", "SUBSURF")
+    sub.levels = 2
+    # His last move of Part 1 (27:11): Save As.
+    if not bpy.data.filepath:
+        bpy.ops.wm.save_as_mainfile(
+            filepath=_home("blender_buddy_my_donut.blend"))
+
+
 def _tour_step_mug_reference(context):
     import bmesh
-    # The reference photo, standing where he puts it - on show
-    # in the scene, lined up behind the mug it teaches.
+    cup = _containers(context)
+    cup = cup[0] if cup else None
+    if cup is None:
+        raise RuntimeError("The cup comes first - that is Part 1.")
+    # The reference photo (his is linked from the series
+    # page): Add -> Image -> Reference, Alt+R clears its
+    # rotation, R X 90 stands it upright, scaled to the mug
+    # by eye against the front view (UNSTATED size).
     img = _reference_image(context)
-    bpy.ops.object.empty_add(type="IMAGE",
-                             location=(1.95, 1.30, 0.35),
-                             rotation=(math.pi / 2, 0, 0))
-    ref = context.object
-    ref.name = "Mug Reference"
-    ref.data = img
-    ref.empty_display_size = 1.1
-    # The mug itself: a cylinder given rings, a profile, an
-    # opening, walls - and a handle joined into it.
-    bpy.ops.mesh.primitive_cylinder_add(
-        radius=0.40, depth=0.95, vertices=48,
-        location=(1.95, 0.60, 0.06))
-    mug = context.object
-    mug.name = "Mug"
+    if not any(o.type == "EMPTY"
+               and o.empty_display_type == "IMAGE"
+               for o in context.scene.objects):
+        bpy.ops.object.empty_add(
+            type="IMAGE", location=(0.23, 0.33, 0.13),
+            rotation=(math.pi / 2, 0, 0))
+        ref = context.object
+        ref.name = "Mug Reference"
+        ref.data = img
+        ref.empty_display_size = 0.30
+    # The same cup is edited IN PLACE for the whole part -
+    # no new cylinder is ever added. The reshaping is by eye
+    # against the photo (every amount UNSTATED): rim loop
+    # scaled in a little, the loop below about halfway toward
+    # it, the mid loop slid to about 20% of the height and
+    # scaled out (the mug's widest point), the bottom face
+    # scaled in, extruded down a touch for the foot, and two
+    # loop cuts bracketing the bottom to tighten the lip.
     bm = bmesh.new()
-    bm.from_mesh(mug.data)
-    bm.edges.ensure_lookup_table()
-    vertical = [e for e in bm.edges
-                if abs(e.verts[0].co.z - e.verts[1].co.z) > 0.5]
-    bmesh.ops.subdivide_edges(bm, edges=vertical, cuts=5)
-    bm.verts.ensure_lookup_table()
-    for v in bm.verts:
-        t = (v.co.z + 0.475) / 0.95
-        f = 0.92 + 0.10 * math.sin(math.pi * max(0.0, min(1.0, t)))
-        if t > 0.92:
-            f *= 1.04          # a slight lip at the rim
-        if t < 0.05:
-            f *= 0.90          # the foot - his bottom lip
-        v.co.x *= f
-        v.co.y *= f
+    bm.from_mesh(cup.data)
+    _scale_ring(bm, CUP_DEPTH / 2, 0.94)
+    _scale_ring(bm, CUP_DEPTH / 2 - 0.024, 0.97)
+    z_mid = _subdivide_verticals(bm, -0.11, 0.10)
+    if z_mid is not None:
+        _slide_ring(bm, z_mid, -CUP_DEPTH / 2 + 0.2 * CUP_DEPTH)
+        _scale_ring(bm, -CUP_DEPTH / 2 + 0.2 * CUP_DEPTH, 1.06)
+    _scale_ring(bm, -CUP_DEPTH / 2, 0.93)
     bm.faces.ensure_lookup_table()
-    top = [f for f in bm.faces if f.calc_center_median().z > 0.40]
-    bmesh.ops.delete(bm, geom=top, context="FACES")
-    bm.to_mesh(mug.data)
+    bottom = [f for f in bm.faces
+              if f.calc_center_median().z < -CUP_DEPTH / 2 + 0.001
+              and len(f.verts) > 4]
+    if bottom:
+        out = bmesh.ops.extrude_face_region(bm, geom=bottom)
+        new_verts = [g for g in out["geom"]
+                     if isinstance(g, bmesh.types.BMVert)]
+        bmesh.ops.translate(bm, verts=new_verts,
+                            vec=(0, 0, -0.010))
+    for _ in range(2):
+        _subdivide_verticals(bm, -CUP_DEPTH / 2 - 0.02,
+                             -CUP_DEPTH / 2 + 0.03)
+    bm.to_mesh(cup.data)
     bm.free()
-    for poly in mug.data.polygons:
+    # The part's pivotal move (15:21): APPLY the Solidify -
+    # so the handle, modelled next, does not get thickened
+    # too. The Subsurf stays live.
+    for mod in list(cup.modifiers):
+        if mod.type == "SOLIDIFY":
+            _apply_modifier(context, cup, mod.name)
+            break
+    _build_handle(context, cup)
+
+
+def _build_handle(context, cup):
+    """The handle, his way (Part 2, 16:44 onwards): one side
+    face of the mug is extruded out and walked around with
+    E / G / R until its end meets the body lower down; the
+    two internal faces are deleted and the joint is closed
+    with Bridge Edge Loops - the faster alternative he shows
+    at 23:36, and the one a script can walk exactly. The
+    path itself is drawn against the photo (UNSTATED)."""
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(cup.data)
+    bm.faces.ensure_lookup_table()
+    # The handle needs joint rows of its own: the cup's
+    # tall middle band is a single face tall, and a handle
+    # joins the body at two heights. Cut the vertical edges
+    # that SPAN each joint height and set the new ring
+    # exactly there - the definition his reshape leaves in
+    # the wall where the handle lands.
+    def cut_at(z_target):
+        bm.edges.ensure_lookup_table()
+        edges = [e for e in bm.edges
+                 if abs(e.verts[0].co.z - e.verts[1].co.z)
+                 > 3 * math.hypot(
+                     e.verts[0].co.x - e.verts[1].co.x,
+                     e.verts[0].co.y - e.verts[1].co.y)
+                 and min(e.verts[0].co.z, e.verts[1].co.z)
+                 < z_target
+                 < max(e.verts[0].co.z, e.verts[1].co.z)]
+        if not edges:
+            return
+        out = bmesh.ops.subdivide_edges(bm, edges=edges, cuts=1)
+        for v in out["geom"]:
+            if isinstance(v, bmesh.types.BMVert):
+                v.co.z = z_target
+        bm.faces.ensure_lookup_table()
+
+    cut_at(-0.02)
+    cut_at(-0.055)
+
+    def face_at(angle, z_lo, z_hi, r_min=0.10, exclude=None):
+        best = None
+        for f in bm.faces:
+            if f is exclude:
+                continue
+            c = f.calc_center_median()
+            r = math.hypot(c.x, c.y)
+            if r < r_min or not (z_lo < c.z < z_hi):
+                continue
+            a = abs((math.atan2(c.y, c.x) - angle + math.pi)
+                    % (2 * math.pi) - math.pi)
+            if a < 0.25 and (best is None or a < best[0]):
+                best = (a, f)
+        return best[1] if best else None
+
+    start = face_at(0.0, 0.0, 0.10)
+    if start is None:
+        bm.free()
+        raise RuntimeError("No side face found for the handle.")
+    # Walk the extrusion out, up, over and down: cumulative
+    # (x, z) steps at his scale - the handle stands about
+    # 0.045 proud of the wall at its widest.
+    path = [(0.020, 0.010), (0.014, 0.006), (0.006, -0.012),
+            (-0.006, -0.022), (-0.014, -0.020), (-0.012, -0.014)]
+    face = start
+    for dx, dz in path:
+        out = bmesh.ops.extrude_face_region(bm, geom=[face])
+        new_verts = [g for g in out["geom"]
+                     if isinstance(g, bmesh.types.BMVert)]
+        bmesh.ops.translate(bm, verts=new_verts, vec=(dx, 0, dz))
+        caps = [g for g in out["geom"]
+                if isinstance(g, bmesh.types.BMFace)
+                and all(v in new_verts for v in g.verts)]
+        if not caps:
+            break
+        face = caps[0]
+    end_center = face.calc_center_median()
+    # The body face the handle's end lands on, lower down.
+    joint = face_at(0.0, end_center.z - 0.03, end_center.z + 0.03,
+                    exclude=face)
+    if joint is not None and joint is not face:
+        end_edges = list(face.edges)
+        joint_edges = list(joint.edges)
+        bmesh.ops.delete(bm, geom=[face, joint], context="FACES")
+        bm.edges.ensure_lookup_table()
+        live = [e for e in end_edges + joint_edges if e.is_valid]
+        try:
+            bmesh.ops.bridge_loops(bm, edges=live)
+        except Exception:
+            pass
+    bm.faces.ensure_lookup_table()
+    # Shade Smooth, and Shift+N - recalculated normals - for
+    # the shading artifacts the join leaves behind.
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    bm.to_mesh(cup.data)
+    bm.free()
+    for poly in cup.data.polygons:
         poly.use_smooth = True
-    walls = mug.modifiers.new("Mug Walls", "SOLIDIFY")
-    walls.thickness = 0.03
-    # The handle: a ring standing on edge, sunk into the wall.
-    bpy.ops.mesh.primitive_torus_add(
-        major_radius=0.17, minor_radius=0.035,
-        major_segments=32, minor_segments=10,
-        location=(2.42, 0.60, 0.12), rotation=(0, math.pi / 2, 0))
-    handle = context.object
-    bpy.ops.object.select_all(action="DESELECT")
-    mug.select_set(True)
-    handle.select_set(True)
-    context.view_layer.objects.active = mug
-    bpy.ops.object.join()
-    mug = context.object
-    mug.name = "Mug"
-    _paint(mug, "Buddy Mug", (0.36, 0.21, 0.13, 1.0), roughness=0.4)
 
 
 def _tour_step_icing_hug(context):
-    # The folded-in mini-step: the plain ring itself. Part 3
-    # assumes it (his series makes it on the way); if it is not
-    # there yet, the reference builds it first.
+    import bmesh
     dough = _find_dough(context)
     if dough is None:
-        dough = _build_dough_ring(context)
-    _build_icing(context, dough)
+        raise RuntimeError("The donut comes first - that is Part 1.")
+    mug = _find_mug(context)
+    # Part 3 opens with housekeeping (0:00): the mug object
+    # is renamed "Mug", the torus "Donut", and the reference
+    # image - its job done - is deleted.
+    if mug is not None:
+        mug.name = "Mug"
+        # The mug moves out of frame (G -> X) while the
+        # donut gets the stage.
+        mug.location.x += 0.55
+    dough.name = "Donut"
+    for obj in list(context.scene.objects):
+        if obj.type == "EMPTY" \
+                and obj.empty_display_type == "IMAGE":
+            bpy.data.objects.remove(obj, do_unlink=True)
+    # The icing: Shift+D duplicates the Donut, Esc leaves the
+    # copy exactly in place; the copy is renamed "Icing".
+    if _scene_obj(context, "Icing") is None:
+        icing = dough.copy()
+        icing.data = dough.data.copy()
+        context.scene.collection.objects.link(icing)
+        icing.name = "Icing"
+    icing = _scene_obj(context, "Icing")
+    bm = bmesh.new()
+    bm.from_mesh(icing.data)
+    # Edit Mode, Vertex Select, X-Ray ON (Alt+Z - without it
+    # the drag-select only catches the visible shell): select
+    # the BOTTOM half and delete FACES - not vertices, or the
+    # middle ring the icing needs would go with them.
+    bm.faces.ensure_lookup_table()
+    under = [f for f in bm.faces if f.calc_center_median().z < -0.001]
+    bmesh.ops.delete(bm, geom=under, context="FACES")
+    # Proportional Editing (O): a rim vertex pulled down (G Z)
+    # drags its neighbours into a wavy, uneven edge; then the
+    # drips - two adjacent rim points extruded (E Z) and
+    # pulled down, all around, varying length and shape.
+    # Amounts are by eye (UNSTATED); the wave and the drip
+    # lengths here are seeded so the reference is stable.
+    rng = random.Random(4)
+    p1, p2, p3 = (rng.uniform(0, 6.28), rng.uniform(0, 6.28),
+                  rng.uniform(0, 6.28))
+
+    def wave(a):
+        return (math.sin(a * 3 + p1) * 0.5
+                + math.sin(a * 7 + p2) * 0.3
+                + math.sin(a * 13 + p3) * 0.2)
+
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    rim = [v for v in bm.verts if abs(v.co.z) < 0.004]
+    for v in rim:
+        a = math.atan2(v.co.y, v.co.x)
+        v.co.z -= max(0.0, wave(a)) * 0.016
+    # One ring up gets a whisper of the same pull - the
+    # proportional falloff.
+    for v in bm.verts:
+        if 0.004 < v.co.z < 0.03:
+            a = math.atan2(v.co.y, v.co.x)
+            v.co.z -= max(0.0, wave(a)) * 0.006
+    # The drips: boundary edges around the rim, extruded
+    # down in runs of two, at seeded spots and lengths.
+    bm.edges.ensure_lookup_table()
+    boundary = [e for e in bm.edges if len(e.link_faces) == 1
+                and abs(e.verts[0].co.z) < 0.02
+                and math.hypot(e.verts[0].co.x,
+                               e.verts[0].co.y) > 0.12]
+    boundary.sort(key=lambda e: math.atan2(
+        (e.verts[0].co + e.verts[1].co).y / 2,
+        (e.verts[0].co + e.verts[1].co).x / 2))
+    n = len(boundary)
+    if n >= 8:
+        step = max(2, n // 14)
+        for i in range(0, n - 1, step):
+            pair = [boundary[i], boundary[i + 1]]
+            length = rng.uniform(0.012, 0.034)
+            out = bmesh.ops.extrude_edge_only(bm, edges=pair)
+            new_verts = [g for g in out["geom"]
+                         if isinstance(g, bmesh.types.BMVert)]
+            bmesh.ops.translate(bm, verts=new_verts,
+                                vec=(0, 0, -length))
+            # A second, shorter pull on some - the dribble
+            # within the drip.
+            bm.edges.ensure_lookup_table()
+            tips = [e for e in bm.edges
+                    if len(e.link_faces) == 1
+                    and all(v in new_verts for v in e.verts)]
+            if tips and rng.random() < 0.6:
+                out = bmesh.ops.extrude_edge_only(bm, edges=tips)
+                new_verts = [g for g in out["geom"]
+                             if isinstance(g, bmesh.types.BMVert)]
+                bmesh.ops.translate(
+                    bm, verts=new_verts,
+                    vec=(0, 0, -length * rng.uniform(0.3, 0.6)))
+    bm.to_mesh(icing.data)
+    bm.free()
+    for poly in icing.data.polygons:
+        poly.use_smooth = True
+    # The modifier stack, added in his order, then put in
+    # its final order: Solidify (Offset = 1 - the one setting
+    # he states here; thickness by eye, UNSTATED, 0.003
+    # picked), Subdivision Surface (viewport Levels = 2),
+    # Shrinkwrap (Target = the Donut) - then Shrinkwrap is
+    # dragged to the TOP of the stack (at the wrong order
+    # the icing Z-fights the dough).
+    for mod in list(icing.modifiers):
+        icing.modifiers.remove(mod)
+    thick = icing.modifiers.new("Solidify", "SOLIDIFY")
+    thick.thickness = 0.003
+    thick.offset = 1.0
+    sub = icing.modifiers.new("Subdivision", "SUBSURF")
+    sub.levels = 2
+    hug = icing.modifiers.new("Shrinkwrap", "SHRINKWRAP")
+    hug.target = dough
+    _ensure_mod_order(context, icing,
+                      ["Shrinkwrap", "Solidify", "Subdivision"])
+    # Solidify's Edge Crease, set so the icing's edge hugs
+    # instead of ballooning (value UNSTATED - full crease).
+    thick.edge_crease_outer = 1.0
+    # Then he APPLIES the modifiers, top to bottom (Ctrl+A
+    # applies the active one): Shrinkwrap, Solidify, Subsurf.
+    # The finished icing carries NO live modifiers - the
+    # snapping is gone, by design.
+    _apply_modifier(context, icing, "Shrinkwrap")
+    _apply_modifier(context, icing, "Solidify")
+    _apply_modifier(context, icing, "Subdivision")
+    # Sculpt Mode: the Inflate/Deflate brush over the drip
+    # heads and edges (thickness variation), the Grab brush
+    # to shape. Amounts by eye (UNSTATED) - this gentle
+    # seeded push along the normals stands in for the brush
+    # pass a script cannot make.
+    bm = bmesh.new()
+    bm.from_mesh(icing.data)
+    rng2 = random.Random(9)
+    for v in bm.verts:
+        r = math.hypot(v.co.x, v.co.y)
+        if v.co.z < 0.005 and r > 0.09:
+            push = rng2.uniform(0.0004, 0.0016)
+            n = v.normal
+            v.co.x += n.x * push
+            v.co.y += n.y * push
+            v.co.z += n.z * push
+    bm.to_mesh(icing.data)
+    bm.free()
+
+
+def _build_plate(context):
+    """The plate, modelled the way Part 4 models it (his
+    Part 3 homework, shown at 00:00): a Circle with an NGON
+    fill, three extrusions walked out and up into a rim,
+    Subdivision Surface at level 2, then Solidify dragged
+    ABOVE the Subsurf. Amounts are by eye (UNSTATED); the
+    proportions are a dinner plate's against his donut."""
+    import bmesh
+    # The circle starts one Solidify thickness ABOVE the
+    # tabletop: the shell grows downward from the floor,
+    # so the plate's underside is what rests on the table.
+    # Start the floor exactly on the tabletop instead and
+    # the two surfaces land coplanar - the render then
+    # shows the table through the well (z-fighting), a
+    # black toothed disc where the plate should read.
+    bpy.ops.mesh.primitive_circle_add(
+        vertices=48, radius=0.235, fill_type="NGON",
+        location=(0, 0, TABLE_TOP + 0.0025))
+    plate = context.object  # his object is named "Circle"
+    bm = bmesh.new()
+    bm.from_mesh(plate.data)
+    # His first two moves - extrude the face in place, then
+    # delete the top face only - net out to exactly this:
+    # the disc stays as the plate's floor and its rim loop
+    # stands free, ready to be walked out into the rim.
+    bm.verts.ensure_lookup_table()
+
+    def rim_loop():
+        zs = [v.co.z for v in bm.verts]
+        z_top = max(zs)
+        return [v for v in bm.verts if abs(v.co.z - z_top) < 1e-6
+                and math.hypot(v.co.x, v.co.y) > 0.01]
+
+    def scale_loop(factor):
+        for v in rim_loop():
+            v.co.x *= factor
+            v.co.y *= factor
+
+    def extrude_loop(dz=0.0):
+        bm.edges.ensure_lookup_table()
+        loop_verts = set(rim_loop())
+        edges = [e for e in bm.edges
+                 if len(e.link_faces) == 1
+                 and all(v in loop_verts for v in e.verts)]
+        out = bmesh.ops.extrude_edge_only(bm, edges=edges)
+        new_verts = [g for g in out["geom"]
+                     if isinstance(g, bmesh.types.BMVert)]
+        if dz:
+            bmesh.ops.translate(bm, verts=new_verts,
+                                vec=(0, 0, dz))
+        bm.verts.ensure_lookup_table()
+        return new_verts
+
+    scale_loop(1.06)          # the lip begins (S, by eye)
+    extrude_loop()
+    scale_loop(1.10)          # a flat rim section
+    extrude_loop(0.016)       # the rim's rise (E, Z, pull up)
+    # A loop cut slid toward the rim to sharpen it.
+    bm.edges.ensure_lookup_table()
+    verticals = [e for e in bm.edges
+                 if abs(e.verts[0].co.z - e.verts[1].co.z) > 0.004]
+    if verticals:
+        bmesh.ops.subdivide_edges(bm, edges=verticals, cuts=1)
+    bm.to_mesh(plate.data)
+    bm.free()
+    for poly in plate.data.polygons:
+        poly.use_smooth = True
+    # Subdivision Surface, Levels = 2 - then Solidify,
+    # dragged above it (final order: Solidify -> Subsurf).
+    # Thickness UNSTATED, 0.0025 picked.
+    sub = plate.modifiers.new("Subdivision", "SUBSURF")
+    sub.levels = 2
+    walls = plate.modifiers.new("Solidify", "SOLIDIFY")
+    walls.thickness = 0.0025
+    _ensure_mod_order(context, plate, ["Solidify", "Subdivision"])
+    return plate
 
 
 def _tour_step_first_picture(context):
-    from mathutils import Vector
     scene = context.scene
     dough = _find_dough(context)
-    icing = _scene_obj(context, "Icing")
+    icing = _find_icing(context, dough)
+    mug = _find_mug(context)
     if dough is None or icing is None:
         raise RuntimeError("The donut comes first - that is Part 3.")
-    # The plate (Part 3's homework) and the table under it.
-    if _scene_obj(context, "Plate") is None:
-        bpy.ops.mesh.primitive_cylinder_add(
-            radius=1.55, depth=0.06, location=(0, 0, -0.38))
-        plate = context.object
-        plate.name = "Plate"
-        _paint(plate, "Buddy Plate", (0.93, 0.93, 0.95, 1.0),
-               roughness=0.35)
-    if _scene_obj(context, "Table") is None:
-        bpy.ops.mesh.primitive_circle_add(
-            vertices=48, radius=7.0, fill_type="NGON",
-            location=(0, 0, -0.415))
-        table = context.object
-        table.name = "Table"
-        _paint(table, "Buddy Table", (0.16, 0.14, 0.13, 1.0),
-               roughness=0.9)
-    # The Lattice: the whole donut bent gently out of round, so
-    # it stops looking computer-perfect (his 8:29 move).
-    if _scene_obj(context, "Lumpy") is None:
-        lat_data = bpy.data.lattices.new("Lumpy")
-        lat_data.points_u = 3
-        lat_data.points_v = 3
-        lat_data.points_w = 2
-        lat = bpy.data.objects.new("Lumpy", lat_data)
+    # The plate (his Part 3 homework, modelled at the top of
+    # Part 4) and the table under everything.
+    plate = _find_plate(context, dough)
+    if plate is None:
+        plate = _build_plate(context)
+    if _find_table(context, dough) is None:
+        # A Plane, scaled up a little (UNSTATED amount): it
+        # is a card - only the top shows. The set is stood on
+        # it: plate's foot and mug's base on its top face.
+        bpy.ops.mesh.primitive_plane_add(
+            size=2, location=(0, 0, TABLE_TOP))
+        table = context.object  # his object is named "Plane"
+        table.scale = (2.4, 2.4, 1.0)
+    # The set, stood on the table: the donut rests in the
+    # plate's well (whose floor stands one shell thickness
+    # over the tabletop - see _build_plate); the mug - out
+    # of frame since Part 3 - comes back in behind the
+    # donut, standing on the table.
+    dough.location.z = (TABLE_TOP + 0.0025 + DONUT_MINOR
+                        + 0.002)
+    icing.location = dough.location
+    if mug is not None:
+        mug.location.x = 0.205
+        mug.location.y = 0.115
+        mug.location.z = TABLE_TOP + 0.124
+    # The Lattice (10:38): select BOTH the Donut and the
+    # Icing -> Lattice Deform Selected (5.0's one-click
+    # path; done longhand here so it runs on any version -
+    # a lattice fitted to the pair, one Lattice modifier on
+    # each). Resolution raised with a division in the middle
+    # (exact U/V/W UNSTATED - 5 x 5 x 3 picked).
+    if _scene_obj(context, "Lattice") is None:
+        lat_data = bpy.data.lattices.new("Lattice")
+        lat_data.points_u = 5
+        lat_data.points_v = 5
+        lat_data.points_w = 3
+        lat = bpy.data.objects.new("Lattice", lat_data)
         scene.collection.objects.link(lat)
-        lat.location = (0, 0, 0)
-        lat.scale = (3.1, 3.1, 1.15)
-        rng = random.Random(7)
+        lat.location = (dough.location.x, dough.location.y,
+                        dough.location.z)
+        lat.scale = (0.37, 0.37, 0.16)
+        # The middle ring of points, scaled IN (Proportional
+        # Editing OFF): the concave fry-line around the
+        # donut's equator. A few single points nudged for
+        # puffy spots - all by eye (UNSTATED amounts).
         for point in lat_data.points:
-            point.co_deform.x += rng.uniform(-0.05, 0.05)
-            point.co_deform.y += rng.uniform(-0.05, 0.05)
-            point.co_deform.z += rng.uniform(-0.03, 0.03)
+            cx, cy, cz = point.co_deform
+            rr = math.hypot(cx, cy)
+            if abs(cz) < 0.01 and rr > 0.18:
+                point.co_deform.x = cx * 0.86
+                point.co_deform.y = cy * 0.86
+        pts = [p for p in lat_data.points
+               if abs(p.co_deform.z) > 0.01]
+        if len(pts) > 4:
+            pts[3].co_deform.z += 0.012
+            pts[7].co_deform.x += 0.010
         for target in (dough, icing):
-            mod = target.modifiers.new("Lumpy", "LATTICE")
+            mod = target.modifiers.new("Lattice", "LATTICE")
             mod.object = lat
-    # Materials with the food setting: subsurface above zero on
-    # both dough and icing.
-    _paint(icing, "Buddy Pink", (0.80, 0.30, 0.47, 1.0),
-           roughness=0.18, subsurface=0.25)
-    _colour_dough(context, dough)
-    # The room, one light, the camera - then the first picture.
-    if scene.world is None:
-        scene.world = bpy.data.worlds.new("World")
-    scene.world.use_nodes = True
-    bg = scene.world.node_tree.nodes.get("Background")
-    if bg is not None:
-        bg.inputs[0].default_value = (0.012, 0.012, 0.016, 1.0)
-        bg.inputs[1].default_value = 0.6
-    if scene.camera is None:
-        bpy.ops.object.camera_add(location=(3.3, -4.4, 1.9))
-        cam = context.object
-        cam.data.lens = 42
-        direction = Vector((0.35, 0.1, -0.05)) - cam.location
-        cam.rotation_euler = direction.to_track_quat(
-            "-Z", "Y").to_euler()
-        scene.camera = cam
-    if not any(o.type == "LIGHT" for o in scene.objects):
-        bpy.ops.object.light_add(type="SUN",
-                                 location=(-3.0, -2.0, 3.0),
-                                 rotation=(0.9, 0.25, -0.65))
-        sun = context.object
-        sun.data.energy = 2.2
-    # The picture is written to a file as well as shown - the
-    # same habit the picture button teaches, and the file is
-    # the proof that survives everywhere.
+        # Applied to both, and the lattice object deleted -
+        # his order, so the deform is baked into both meshes
+        # and neither can drift from the other.
+        _apply_modifier(context, dough, "Lattice")
+        _apply_modifier(context, icing, "Lattice")
+        bpy.data.objects.remove(lat, do_unlink=True)
+    # Render Properties: Eevee Ray Tracing ON (20:48 - he
+    # calls the off default "a mistake"; it is what produces
+    # bounce light and crevice detail from here on).
+    try:
+        scene.eevee.use_raytracing = True
+    except Exception:
+        pass
+    # Basic materials (23:28): icing pink by eye with
+    # Roughness about 0.2 (stated); the mug near-black and
+    # glossy - a placeholder, never full black; the plate
+    # the same idea, slightly shinier; the donut light
+    # brown. Colours by eye (UNSTATED).
+    _paint(icing, "Buddy Pink", (0.88, 0.17, 0.41, 1.0),
+           roughness=0.2)
+    if mug is not None:
+        _paint(mug, "Buddy Mug Placeholder",
+               (0.03, 0.03, 0.03, 1.0), roughness=0.25)
+    _paint(plate, "Buddy Plate Placeholder",
+           (0.55, 0.55, 0.56, 1.0), roughness=0.18)
+    # Subsurface, his recipe (26:59): Weight all the way to
+    # 1 ("this value is supposed to be zero or one"), Radius
+    # dragged across R, G, B to (1, 1, 1) - the (1, 2, 0.1)
+    # default is for skin and makes food look red - and the
+    # amount steered with Scale, by eye (UNSTATED: 0.05 on
+    # the icing, 0.10 on the dough, picked milky/buttery).
+    for obj, mat_name, rgba, rough, scale in (
+            (icing, "Buddy Pink", (0.88, 0.17, 0.41, 1.0), 0.2, 0.05),
+            (dough, "Buddy Dough", (0.55, 0.32, 0.12, 1.0), 0.5, 0.10)):
+        _paint(obj, mat_name, rgba, roughness=rough, subsurface=1.0,
+               sss_radius=(1.0, 1.0, 1.0), sss_scale=scale)
+    # The first picture (16:02) comes from the scene's
+    # ORIGINAL default camera - the one that has been there
+    # since Part 1. He frames it with Lock Camera to View
+    # (18:12): orbit the view itself until the shot sits
+    # right, then uncheck. The framing is by eye (UNSTATED);
+    # the camera's display size is reduced so its icon stops
+    # dominating a small scene (UNSTATED amount).
+    cam = scene.camera
+    if cam is not None:
+        from mathutils import Vector
+        cam.location = (0.40, -0.92, 0.34)
+        cam.rotation_euler = (
+            Vector((0.04, 0.01, -0.02)) - cam.location
+        ).to_track_quat("-Z", "Y").to_euler()
+        cam.data.display_size = 0.1
     path = (scene.render.filepath or "").strip()
     if path in {"", "/tmp", "/tmp/"}:
         scene.render.filepath = _home("blender_buddy_picture.png")
     bpy.ops.render.render(write_still=True)
 
 
-def _make_texture_set(name, rgb, seed, rough_mid):
-    """Three small photo-like maps drawn in pixels here - a
-    mottled colour map, a roughness map (data), and a normal
-    map (data). No downloads; they stand in for his Poliigon
-    textures. Saved as files and packed, so they travel with
-    the scene."""
-    folder = os.path.join(tempfile.gettempdir(),
-                          "buddy_donut_textures")
-    os.makedirs(folder, exist_ok=True)
-    rng = random.Random(seed)
-    size = 128
-    cells = {}
-    for gy in range(16):
-        for gx in range(16):
-            cells[(gx, gy)] = rng.uniform(-0.16, 0.16)
+def _lift_icing_over_displacement(dough, icing):
+    """Lift the icing shell along its own vertex normals by
+    just over the dough material's true displacement peak.
 
-    def cell_noise(x, y):
-        return cells[(x // 8, y // 8)]
-
-    def build(kind):
-        img = bpy.data.images.get(f"{name} {kind}")
-        if img is None:
-            img = bpy.data.images.new(f"{name} {kind}", size, size)
-        px = []
-        for y in range(size):
-            for x in range(size):
-                n = cell_noise(x, y) + rng.uniform(-0.03, 0.03)
-                if kind == "Colour":
-                    px.extend((max(0.0, rgb[0] * (1 + n)),
-                               max(0.0, rgb[1] * (1 + n)),
-                               max(0.0, rgb[2] * (1 + n)), 1.0))
-                elif kind == "Roughness":
-                    v = max(0.05, min(0.95, rough_mid + n))
-                    px.extend((v, v, v, 1.0))
-                else:  # Normal: mostly flat, gently bumpy
-                    px.extend((0.5 + n * 0.6, 0.5 + n * 0.4, 1.0, 1.0))
-        # Colours space FIRST: changing it afterwards throws the
-        # pixels away (measured on 4.2.5 and 5.3 - the buffer
-        # resets to black), which silently rendered every
-        # textured surface black.
-        want = "sRGB" if kind == "Colour" else "Non-Color"
-        if img.colorspace_settings.name != want:
-            img.colorspace_settings.name = want
-        img.pixels.foreach_set(px)
-        img.filepath_raw = os.path.join(
-            folder, f"buddy_{name.lower().replace(' ', '_')}_"
-                    f"{kind.lower()}.png")
-        img.save()
-        try:
-            img.pack()
-        except Exception:
-            pass
-        return img
-
-    return {"colour": build("Colour"), "rough": build("Roughness"),
-            "normal": build("Normal")}
-
-
-def _apply_pbr(obj, tex, subsurface=0.0):
-    """Wire a texture set into the object's material the way
-    Part 5 teaches: colour into Base Color, roughness as data,
-    a Normal Map node into the Normal socket."""
-    mat = bpy.data.materials.get(f"Buddy {obj.name} Surface")
-    if mat is None:
-        mat = bpy.data.materials.new(f"Buddy {obj.name} Surface")
-    mat.use_nodes = True
-    nt = mat.node_tree
-    for node in list(nt.nodes):
-        nt.nodes.remove(node)
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.location = (300, 0)
-    out.location = (560, 0)
-    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    if subsurface > 0 and "Subsurface Weight" in bsdf.inputs:
-        bsdf.inputs["Subsurface Weight"].default_value = subsurface
-    coord = nt.nodes.new("ShaderNodeTexCoord")
-    mapping = nt.nodes.new("ShaderNodeMapping")
-    nt.links.new(coord.outputs["UV"], mapping.inputs["Vector"])
-
-    def tex_node(image, loc):
-        node = nt.nodes.new("ShaderNodeTexImage")
-        node.image = image
-        node.location = loc
-        nt.links.new(mapping.outputs["Vector"], node.inputs["Vector"])
-        return node
-
-    col = tex_node(tex["colour"], (0, 160))
-    nt.links.new(col.outputs["Color"], bsdf.inputs["Base Color"])
-    rgh = tex_node(tex["rough"], (0, -80))
-    nt.links.new(rgh.outputs["Color"], bsdf.inputs["Roughness"])
-    nrm = tex_node(tex["normal"], (0, -320))
-    nmap = nt.nodes.new("ShaderNodeNormalMap")
-    nmap.location = (240, -320)
-    nt.links.new(nrm.outputs["Color"], nmap.inputs["Color"])
-    nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-    obj.data.materials.clear()
-    obj.data.materials.append(mat)
+    The frame round's first recommendation, folded in: the
+    dough's render-time displacement rises through the
+    icing, which Part 3 shrinkwrapped onto the UNDISPLACED
+    dough - dough-coloured patches on the finished donut in
+    every engine, proven by control renders in
+    demo/checks/FRAME_RESTART_LOG.md. The peak is computed
+    from the height picture's real range and the
+    Displacement node's Scale - never a guessed number -
+    so the relief peaks stay under the icing's skin while
+    the hug reads unchanged. Returns the lift used (0.0
+    when there is nothing to clear)."""
+    peak = 0.0
+    for mat in dough.data.materials:
+        if mat is None or not mat.use_nodes \
+                or mat.node_tree is None:
+            continue
+        for node in mat.node_tree.nodes:
+            if node.type != "DISPLACEMENT":
+                continue
+            try:
+                scale = float(
+                    node.inputs["Scale"].default_value)
+                mid = float(
+                    node.inputs["Midlevel"].default_value) \
+                    if "Midlevel" in node.inputs else 0.5
+            except Exception:
+                continue
+            img = None
+            for link in node.inputs["Height"].links:
+                if link.from_node.type == "TEX_IMAGE":
+                    img = link.from_node.image
+            if img is None:
+                continue
+            px = list(img.pixels)
+            if px:
+                peak = max(peak, scale * (max(px[0::4]) - mid))
+    if peak <= 0 or icing is None:
+        return 0.0
+    lift = peak * 1.15 + 0.0005
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(icing.data)
+    for v in bm.verts:
+        n = v.normal
+        sx, sy, sz = n.x * lift, n.y * lift, n.z * lift
+        # Never let the lift push a point TOWARD the ring's
+        # axis. On the shell's hole-facing wall the normals
+        # point inward; shoving those points at the axis buys
+        # no clearance (the dough's relief is hidden inside
+        # the hole there) and it narrows the hole until the
+        # shape test that finds the icing by its ring stops
+        # recognising it. The outward and upward parts of
+        # the step stay - the relief pokes through there.
+        r = math.hypot(v.co.x, v.co.y)
+        if r > 1e-6:
+            radial = (sx * v.co.x + sy * v.co.y) / r
+            if radial < 0.0:
+                sx -= radial * v.co.x / r
+                sy -= radial * v.co.y / r
+        v.co.x += sx
+        v.co.y += sy
+        v.co.z += sz
+    bm.to_mesh(icing.data)
+    bm.free()
+    return lift
 
 
 def _tour_step_real_surfaces(context):
     dough = _find_dough(context)
-    icing = _scene_obj(context, "Icing")
-    plate = _scene_obj(context, "Plate")
-    table = _scene_obj(context, "Table")
+    icing = _find_icing(context, dough)
+    plate = _find_plate(context, dough)
+    table = _find_table(context, dough)
+    mug = _find_mug(context)
     if None in (dough, icing, plate, table):
         raise RuntimeError("The scene comes first - that is Part 4.")
+    # The table, wired BY HAND (00:00-15:55) - the one
+    # surface he builds node by node: the concrete set from
+    # poliigon.com/donut (a stand-in set here), colour into
+    # Base Color, the normal picture through a Normal Map
+    # node, the roughness picture into Roughness - every map
+    # but the colour set to Non-Color. (The tiling repeat is
+    # the stand-in's own - his capture is a 30 x 30 cm tile.)
     _apply_pbr(table, _make_texture_set(
-        "Table Wood", (0.30, 0.20, 0.13), 21, 0.8))
+        "Table Concrete", (0.62, 0.60, 0.57), 41, 0.75),
+        map_scale=6.0)
+    # The plate (18:08) gets its ceramic through the
+    # Poliigon add-on in the video; nothing shows until it
+    # is unwrapped (U -> Unwrap, Angle Based) - so: unwrap
+    # first, then the surface. (Stand-in set here.)
+    _try_unwrap(context, plate)
     _apply_pbr(plate, _make_texture_set(
-        "Plate Ceramic", (0.90, 0.90, 0.92), 22, 0.3))
-    _apply_pbr(dough, _make_texture_set(
+        "Plate Ceramic", (0.80, 0.79, 0.80), 22, 0.3))
+    # The icing (21:25): the glaze set goes on; then he
+    # repairs what the add-on overrode - the Base Color
+    # texture is disconnected (its colour is negligible),
+    # and the subsurface is set BY HAND again: pink by eye,
+    # Weight 1, Radius (1, 1, 1), Scale by eye (UNSTATED -
+    # the Part 4 setting, 0.05, kept).
+    _try_unwrap(context, icing)
+    glaze = _make_texture_set(
+        "Icing Glaze", (0.88, 0.17, 0.41), 24, 0.2)
+    mat = _apply_pbr(icing, glaze,
+                     sss=(1.0, (1.0, 1.0, 1.0), 0.05))
+    nt = mat.node_tree
+    bsdf = nt.nodes.get("Principled BSDF")
+    for link in list(bsdf.inputs["Base Color"].links):
+        nt.links.remove(link)
+    bsdf.inputs["Base Color"].default_value = \
+        (0.88, 0.17, 0.41, 1.0)
+    # The unlinked colour picture's node is then removed
+    # outright: a picture node feeding nothing pretends the
+    # surface is textured when it is a flat hand-set colour
+    # (frame round's third recommendation). The roughness
+    # and normal pictures stay wired - those are his
+    # recipe, and the surface check reads them.
+    for node in list(nt.nodes):
+        if node.type == "TEX_IMAGE" \
+                and node.image is glaze["colour"]:
+            nt.nodes.remove(node)
+    # The donut (27:39): the scanned-donut set (a stand-in
+    # here), then displacement - the height map into the
+    # Material Output's Displacement socket, the material's
+    # setting to "Displacement and Bump", a Subdivision
+    # Surface at viewport 3 / render 3 to carry the detail,
+    # and the Displacement Scale tuned down 0.2 -> 0.15 ->
+    # 0.12 (stated), stopping when the dough no longer
+    # clips through the icing. Subsurface set by hand again:
+    # Weight 1, Radius (1, 1, 1), Scale by eye (UNSTATED -
+    # 0.10 kept, "buttery").
+    mat = _apply_pbr(dough, _make_texture_set(
         "Dough Crumb", (0.55, 0.32, 0.12), 23, 0.55),
-        subsurface=0.3)
-    _apply_pbr(icing, _make_texture_set(
-        "Icing Glaze", (0.82, 0.32, 0.48), 24, 0.2),
-        subsurface=0.25)
+        sss=(1.0, (1.0, 1.0, 1.0), 0.10), displacement=0.12)
+    if not any(m.type == "SUBSURF" for m in dough.modifiers):
+        sub = dough.modifiers.new("Subdivision", "SUBSURF")
+        sub.levels = 3
+        sub.render_levels = 3
+    # With the displacement live, the icing gets its
+    # clearance lift - the dough's relief peaks must never
+    # poke through the shell Part 3 shrinkwrapped onto the
+    # undisplaced dough (see _lift_icing_over_displacement).
+    _lift_icing_over_displacement(dough, icing)
+    # The mug is explicitly deferred - "the final object to
+    # texture is our mug, and I'm going to do that in the
+    # next part." Nothing touches it here.
+    _ = mug
 
 
 def _tour_step_unwrap_mug(context):
     import bmesh
-    mug = _scene_obj(context, "Mug")
+    mug = _find_mug(context)
+    table = _find_table(context)
     if mug is None:
         raise RuntimeError("The mug comes first - that is Part 2.")
-    # Seams: one line of edges down the back of the mug and the
-    # ring of edges around its rim - the cuts his unwrap uses.
+    # The mug's texture arrives (00:00): "Rustic Gold
+    # Ceramic" through the add-on (a stand-in set here). It
+    # lands half-right on the primitive UVs - the handle's
+    # UVs are garbage - which is the part's problem to solve.
+    _apply_pbr(mug, _make_texture_set(
+        "Mug Ceramic", (0.36, 0.21, 0.10), 26, 0.35))
+    # Mug material cleanup (his order comes after the
+    # unwrap, but the tree is simplest tended now): the
+    # Roughness map is disconnected and roughness steered
+    # with the slider (value UNSTATED - 0.3 picked).
+    mat = mug.data.materials[0]
+    nt = mat.node_tree
+    bsdf = nt.nodes.get("Principled BSDF")
+    for link in list(bsdf.inputs["Roughness"].links):
+        nt.links.remove(link)
+    bsdf.inputs["Roughness"].default_value = 0.3
+    # The Subsurf's On Cage display goes ON, so the cage
+    # doesn't hide mesh while unwrapping; Live Unwrap is on
+    # in his UI (a display preference - nothing to build).
+    for mod in mug.modifiers:
+        if mod.type == "SUBSURF":
+            mod.show_on_cage = True
+    # The seams (Ctrl+E -> Mark Seam), in his layout: the
+    # ring at the handle's top joint, the ring at its bottom
+    # joint (the handle becomes its own island), a vertical
+    # line just beside the handle (hidden), the loop inside
+    # the mug at its base, a vertical line down the inside,
+    # and the loop around the underside. The build finds
+    # them by shape - the layout is his, the search is by
+    # the same landmarks he names.
     bm = bmesh.new()
     bm.from_mesh(mug.data)
+    verts = list(bm.verts)
+    zs = [v.co.z for v in verts]
+    z_min, z_max = min(zs), max(zs)
+    height = z_max - z_min
+    rs = {v: math.hypot(v.co.x, v.co.y) for v in verts}
+    r_max = max(rs.values())
+    # The handle lives outside the wall (r beyond the body's
+    # own radius); its joints are where it leaves and lands.
+    handle = [v for v in verts if rs[v] > 1.12 * 0.13]
+    h_angles = [math.atan2(v.co.y, v.co.x) for v in handle]
+    a_handle = sum(h_angles) / len(h_angles) if h_angles else 0.0
+
+    def ang_gap(v, target):
+        return abs((math.atan2(v.co.y, v.co.x) - target
+                    + math.pi) % (2 * math.pi) - math.pi)
+
     bm.edges.ensure_lookup_table()
     for e in bm.edges:
-        a, b = e.verts[0].co, e.verts[1].co
-        mid = (a + b) / 2
-        vertical = abs(a.z - b.z) > 0.05 and \
-            math.hypot(a.x - b.x, a.y - b.y) < 0.05
-        back = math.atan2(mid.y, mid.x) > 2.6 or \
-            math.atan2(mid.y, mid.x) < -2.6
-        rim = a.z > 0.40 and b.z > 0.40 and abs(a.z - b.z) < 0.05
-        if (vertical and back) or rim:
+        a, b = e.verts
+        mid = (a.co + b.co) / 2
+        r_mid = math.hypot(mid.x, mid.y)
+        seam = False
+        # Handle joint rings: edges among handle verts near
+        # the handle's top and bottom ends.
+        if a in handle and b in handle:
+            if mid.z > z_min + 0.62 * height \
+                    or mid.z < z_min + 0.30 * height:
+                seam = True
+        # The hidden vertical beside the handle (outer wall),
+        # and its twin down the inside.
+        vertical = abs(a.co.z - b.co.z) > 0.004 \
+            and math.hypot(a.co.x - b.co.x,
+                           a.co.y - b.co.y) < 0.004
+        if vertical and ang_gap(a, a_handle) > 0.15 \
+                and ang_gap(a, a_handle) < 0.45:
+            seam = True
+        # The loops: inside base, and the underside.
+        ring = abs(a.co.z - b.co.z) < 0.002
+        if ring and mid.z < z_min + 0.06 * height:
+            seam = True
+        if ring and mid.z > z_max - 0.03 * height \
+                and r_mid < 0.85 * r_max:
+            seam = True
+        if seam:
             e.seam = True
     bm.to_mesh(mug.data)
     bm.free()
-    if not mug.data.uv_layers:
-        mug.data.uv_layers.new(name="UVMap")
-    # The coffee itself: a foam disc just inside the rim, with
-    # a material of its own.
-    if _scene_obj(context, "Coffee Foam") is None:
-        bpy.ops.mesh.primitive_circle_add(
-            vertices=32, radius=0.34, fill_type="NGON",
-            location=(1.95, 0.60, 0.49))
-        foam = context.object
-        foam.name = "Coffee Foam"
-        _paint(foam, "Buddy Foam", (0.92, 0.85, 0.72, 1.0),
-               roughness=0.5)
+    # U -> Unwrap (Live Unwrap has been updating all along).
+    _try_unwrap(context, mug)
+    # The table's colour surgery (21:52) - where the finale's
+    # dark counter is actually made: an RGB Curves node
+    # between the colour texture and the Principled (pull
+    # the shadows down, lift the top slightly - the pale
+    # concrete goes dark and contrasty), then a Hue
+    # Saturation Value node dropping the saturation until
+    # the yellow-green cast is gone. Both shapes UNSTATED.
+    if table is not None and table.data.materials:
+        tmat = table.data.materials[0]
+        if tmat is not None and tmat.use_nodes:
+            nt = tmat.node_tree
+            tbsdf = nt.nodes.get("Principled BSDF")
+            links = list(tbsdf.inputs["Base Color"].links)
+            if links:
+                src = links[0].from_socket
+                for link in links:
+                    nt.links.remove(link)
+                curves = nt.nodes.new("ShaderNodeRGBCurve")
+                curves.location = (120, 200)
+                comp = curves.mapping.curves[3]
+                comp.points[0].location = (0.0, 0.0)
+                comp.points[1].location = (1.0, 1.0)
+                comp.points.new(0.30, 0.16)
+                comp.points.new(0.70, 0.74)
+                curves.mapping.update()
+                hsv = nt.nodes.new("ShaderNodeHueSaturation")
+                hsv.location = (220, 200)
+                hsv.inputs["Saturation"].default_value = 0.55
+                nt.links.new(src, curves.inputs["Color"])
+                nt.links.new(curves.outputs["Color"],
+                             hsv.inputs["Color"])
+                nt.links.new(hsv.outputs["Color"],
+                             tbsdf.inputs["Base Color"])
+    # The coffee foam (25:05), built from the mug itself -
+    # not a new primitive: the mug's inner rim loop is
+    # duplicated in place and Separated (P) into its own
+    # object, "Foam"; the ring is filled (F), inset (I),
+    # its centre lowered (G Z - the meniscus whose raised
+    # edge catches light), and inset once more. Amounts by
+    # eye (UNSTATED).
+    if _find_foam(context, mug) is None:
+        bm = bmesh.new()
+        bm.from_mesh(mug.data)
+        bm.verts.ensure_lookup_table()
+        top_z = max(v.co.z for v in bm.verts)
+        rim = [v for v in bm.verts
+               if v.co.z > top_z - 0.02
+               and 0.08 < math.hypot(v.co.x, v.co.y) < 0.121]
+        rim.sort(key=lambda v: math.atan2(v.co.y, v.co.x))
+        coords = [tuple(v.co) for v in rim]
+        bm.free()
+        if len(coords) >= 8:
+            n = len(coords)
+            fmesh = bpy.data.meshes.new("Foam")
+            fmesh.from_pydata(
+                coords, [(i, (i + 1) % n) for i in range(n)],
+                [list(range(n))])
+            fmesh.update()
+            foam = bpy.data.objects.new("Foam", fmesh)
+            context.scene.collection.objects.link(foam)
+            foam.matrix_world = mug.matrix_world.copy()
+            bm = bmesh.new()
+            bm.from_mesh(fmesh)
+            bm.faces.ensure_lookup_table()
+            # A lone filled ring is all boundary, so the
+            # inset must explicitly include the boundary
+            # (the UI's default); bmesh otherwise leaves it
+            # untouched and returns only its new side faces.
+            bmesh.ops.inset_region(
+                bm, faces=list(bm.faces), thickness=0.012,
+                depth=0.0, use_boundary=True)
+            bm.faces.ensure_lookup_table()
+            # The inset's centre is the remaining face whose
+            # middle sits closest to the mug's axis.
+            inner = min(
+                bm.faces,
+                key=lambda f: math.hypot(
+                    f.calc_center_median().x,
+                    f.calc_center_median().y),
+                default=None)
+            if inner is not None:
+                iverts = list(inner.verts)
+                bmesh.ops.translate(bm, verts=iverts,
+                                    vec=(0, 0, -0.006))
+                bmesh.ops.inset_region(bm, faces=[inner],
+                                       thickness=0.008, depth=0.0)
+            bm.to_mesh(fmesh)
+            bm.free()
+            for poly in fmesh.polygons:
+                poly.use_smooth = True
+            # Its texture: the "Coffee Foam Atlas" (nine
+            # designs on one sheet; a bubbly stand-in set
+            # here). UVs from the top view, the island scaled
+            # down over ONE of the nine designs - his pick
+            # was "that one at the top"; the learner chooses.
+            uv = fmesh.uv_layers.new(name="UVMap")
+            xs = [c[0] for c in coords]
+            ys = [c[1] for c in coords]
+            span = max(max(xs) - min(xs), max(ys) - min(ys), 1e-6)
+            for loop in fmesh.loops:
+                co = fmesh.vertices[loop.vertex_index].co
+                uv.data[loop.index].uv = (
+                    0.345 + (co.x - min(xs)) / span * 0.30,
+                    0.675 + (co.y - min(ys)) / span * 0.30)
+            _apply_pbr(foam, _make_texture_set(
+                "Foam Atlas", (0.80, 0.70, 0.55), 27, 0.5))
 
 
 def _scatter_group():
@@ -1743,6 +3442,8 @@ def _scatter_group():
 
 
 def _tour_step_scatter(context):
+    import bmesh
+    from mathutils import Vector
     grp = _scatter_group()
     if grp is None:
         raise RuntimeError(
@@ -1750,106 +3451,529 @@ def _tour_step_scatter(context):
             "tools, and this copy of Blender does not have it. "
             "This step waits for Blender 5.0 or newer - every "
             "other step works on what you have.")
-    icing = _scene_obj(context, "Icing")
+    dough = _find_dough(context)
+    icing = _find_icing(context, dough)
     if icing is None:
         raise RuntimeError("Sprinkles need the icing first - "
                            "that is Part 3.")
-    # Three sprinkle variants in their own collection - a rod,
-    # a ball, a disc - each with its own bright colour.
-    coll = bpy.data.collections.get("Sprinkle Types")
+    # One sprinkle (00:00): the 3D cursor is planted on the
+    # donut's top first (new objects are born at the cursor
+    # - the part's first lesson). The sprinkle itself is a
+    # Cylinder - he rejects spheres: Radius dragged to
+    # nearly nothing then a touch back, Depth lengthened,
+    # Vertices = 6 (both amounts UNSTATED: 0.0016 / 0.02
+    # picked at his scale), a Subdivision Surface, loop cuts
+    # near both ends to round the caps, Shade Smooth, and
+    # the name "Sprinkle" (F2).
+    if _scene_obj(context, "Sprinkle") is None:
+        top = dough.matrix_world.translation.z \
+            + dough.dimensions.z / 2
+        context.scene.cursor.location = (
+            dough.matrix_world.translation.x + 0.03,
+            dough.matrix_world.translation.y, top + 0.004)
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.0016, depth=0.02, vertices=6,
+            location=context.scene.cursor.location)
+        spr = context.object
+        spr.name = "Sprinkle"
+        bm = bmesh.new()
+        bm.from_mesh(spr.data)
+        edges = [e for e in bm.edges
+                 if abs(e.verts[0].co.z - e.verts[1].co.z) > 0.01]
+        bmesh.ops.subdivide_edges(bm, edges=edges, cuts=2)
+        bm.to_mesh(spr.data)
+        bm.free()
+        for poly in spr.data.polygons:
+            poly.use_smooth = True
+        sub = spr.modifiers.new("Subdivision", "SUBSURF")
+        sub.levels = 1
+    # The variants (04:23): duplicate the sprinkle several
+    # times and twist, bend and resize each BY HAND into
+    # variants - his count on screen is six sharing the
+    # material later. (The deformations here are seeded
+    # stand-ins for hand work - the shapes are the learner's
+    # modelling practice in the real part.)
+    variants = [_scene_obj(context, "Sprinkle")]
+    rng = random.Random(21)
+    for i in range(5):
+        src = variants[0]
+        if _scene_obj(context, f"Sprinkle.{i + 1:03d}") is None:
+            dup = src.copy()
+            dup.data = src.data.copy()
+            context.scene.collection.objects.link(dup)
+            dup.location = src.location + Vector(
+                (0.03 * (i + 1), 0.012 * (i % 3), 0))
+            dup.rotation_euler = (
+                rng.uniform(-0.5, 0.5), rng.uniform(0, 3.14),
+                rng.uniform(0, 6.28))
+            dup.scale = (rng.uniform(0.85, 1.1),
+                         rng.uniform(0.85, 1.1),
+                         rng.uniform(0.8, 1.25))
+        variants.append(_scene_obj(
+            context, f"Sprinkle.{i + 1:03d}"))
+    variants = [v for v in variants if v is not None]
+    # Origins to geometry (24:09's companion move, done
+    # while they're all in hand): instances spawn from
+    # their origins, and centred origins intersect less.
+    _set_active(context, variants[0])
+    for v in variants:
+        v.select_set(True)
+    try:
+        bpy.ops.object.origin_set(type="ORIGIN_GEOMETRY",
+                                  center="BOUNDS")
+    except Exception:
+        pass
+    # All variants into a NEW Collection named "Sprinkles"
+    # (M -> Move to Collection), then the collection is
+    # UNCHECKED - hidden from viewport and render; the
+    # scatter still reads it.
+    coll = bpy.data.collections.get("Sprinkles")
     if coll is None:
-        coll = bpy.data.collections.new("Sprinkle Types")
+        coll = bpy.data.collections.new("Sprinkles")
         context.scene.collection.children.link(coll)
-
-    def variant(name, build, rgba, spot):
-        obj = _scene_obj(context, name)
-        if obj is not None:
-            return obj
-        build(spot)
-        obj = context.object
-        obj.name = name
-        for parent in list(obj.users_collection):
-            parent.objects.unlink(obj)
-        coll.objects.link(obj)
-        _paint(obj, f"Buddy {name}", rgba, roughness=0.35)
-        return obj
-
-    def build_rod(spot):
-        from mathutils import Matrix
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            segments=12, ring_count=8, radius=1.0, location=spot)
-        context.object.data.transform(
-            Matrix.Diagonal((0.085, 0.017, 0.017, 1.0)))
-
-    variant("Sprinkle Rod", build_rod,
-            (0.35, 0.75, 0.70, 1.0), (4.5, 3.5, 0))
-    variant("Sprinkle Ball",
-            lambda s: bpy.ops.mesh.primitive_ico_sphere_add(
-                subdivisions=2, radius=0.022, location=s),
-            (0.95, 0.62, 0.72, 1.0), (4.8, 3.5, 0))
-    variant("Sprinkle Disc",
-            lambda s: bpy.ops.mesh.primitive_cylinder_add(
-                radius=0.032, depth=0.012, vertices=16, location=s),
-            (0.62, 0.52, 0.85, 1.0), (5.1, 3.5, 0))
-    # The painted guide: a vertex group, weight on the icing's
-    # top, nothing on its underside - painted the way he paints
-    # it, here computed from the icing's own shape.
-    vg = icing.vertex_groups.get("Sprinkles")
+    for v in variants:
+        for parent in list(v.users_collection):
+            parent.objects.unlink(v)
+        coll.objects.link(v)
+    coll.hide_viewport = True
+    coll.hide_render = True
+    # One material for ALL the sprinkles, named "Sprinkles"
+    # (Ctrl+L -> Link -> Materials in the video; assigned
+    # directly here). The colours are randomized PER
+    # INSTANCE in its node tree - Object Info's Random into
+    # a Color Ramp set to CONSTANT (one flat colour per
+    # sprinkle, never a gradient): aqua the primary, then
+    # purple, pink, white, yellow, pastel, saturation under
+    # 100%. Roughness "a little bit shiny" (UNSTATED - 0.35
+    # picked); subsurface his recipe with the Scale "really
+    # low" (UNSTATED - 0.02 picked; Part 8 retunes it to
+    # the stated 0.08).
+    mat = bpy.data.materials.get("Sprinkles")
+    if mat is None:
+        mat = bpy.data.materials.new("Sprinkles")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    for node in list(nt.nodes):
+        nt.nodes.remove(node)
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    out.location = (560, 0)
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (340, 0)
+    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    bsdf.inputs["Roughness"].default_value = 0.35
+    if "Subsurface Weight" in bsdf.inputs:
+        bsdf.inputs["Subsurface Weight"].default_value = 1.0
+    if "Subsurface Radius" in bsdf.inputs:
+        bsdf.inputs["Subsurface Radius"].default_value = \
+            (1.0, 1.0, 1.0)
+    if "Subsurface Scale" in bsdf.inputs:
+        bsdf.inputs["Subsurface Scale"].default_value = 0.02
+    info = nt.nodes.new("ShaderNodeObjectInfo")
+    info.location = (0, 120)
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.location = (170, 120)
+    ramp.color_ramp.interpolation = "CONSTANT"
+    stops = [(0.00, (0.45, 0.85, 0.80, 1.0)),
+             (0.55, (0.45, 0.85, 0.80, 1.0)),
+             (0.62, (0.60, 0.40, 0.85, 1.0)),
+             (0.72, (0.95, 0.55, 0.70, 1.0)),
+             (0.82, (0.97, 0.96, 0.94, 1.0)),
+             (0.92, (0.95, 0.85, 0.35, 1.0)),
+             (1.00, (0.95, 0.85, 0.35, 1.0))]
+    els = ramp.color_ramp.elements
+    els[0].position, els[0].color = stops[0]
+    els[1].position, els[1].color = stops[-1]
+    for pos, col in stops[1:-1]:
+        el = els.new(pos)
+        el.color = col
+    nt.links.new(info.outputs["Random"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    for v in variants:
+        v.data.materials.clear()
+        v.data.materials.append(mat)
+    # The painted mask (12:44): Weight Paint mode on the
+    # icing, Front Faces Only on, the top painted red
+    # (weight 1) where sprinkles belong, softer at the
+    # edges. It writes into a VERTEX GROUP - his keeps the
+    # default name "Group". (Painted here by the icing's
+    # own shape: full weight on top, a soft falloff down
+    # the sides, none underneath.)
+    vg = icing.vertex_groups.get("Group")
     if vg is None:
-        vg = icing.vertex_groups.new(name="Sprinkles")
-    top = [v.index for v in icing.data.vertices if v.co.z > 0.05]
-    if top:
-        vg.add(top, 1.0, "REPLACE")
-    # The modifier itself - Blender 5.0's own scatter, pointed
-    # at the collection, mixing variants, masked by the group.
+        vg = icing.vertex_groups.new(name="Group")
+    zs = [v.co.z for v in icing.data.vertices]
+    z_top = max(zs)
+    z_bot = min(zs)
+    full = []
+    soft = []
+    for v in icing.data.vertices:
+        t = (v.co.z - z_bot) / max(z_top - z_bot, 1e-6)
+        if t > 0.62:
+            full.append(v.index)
+        elif t > 0.38:
+            soft.append((v.index, (t - 0.38) / 0.24 * 0.85))
+    if full:
+        vg.add(full, 1.0, "REPLACE")
+    for i, w in soft:
+        vg.add([i], w, "REPLACE")
+    # His standing colour choice for the series' renders,
+    # set in this part (33:34): Colour Management Look -
+    # Medium High Contrast, stored under whichever spelling
+    # this Blender's enum uses.
+    _set_series_look(context.scene)
+    # The modifier (08:35): Scatter on Surface on the
+    # Icing. Every setting below is his, written through the
+    # group's own input names and read back by the check:
+    # Instancing Type Collection -> "Sprinkles", Pick
+    # Instance ON, Reset Transform (its default ON state is
+    # what his button press restores), Alignment Axis Y,
+    # Randomize ON with Rotation Y = 360 degrees and X "a
+    # little bit" (UNSTATED - 0.35 rad picked), Surface
+    # Offset raised "very, very slightly" (UNSTATED - 0.0008
+    # picked), the painted "Group" wired as the DISTRIBUTION
+    # MASK attribute - not the Density input (his warning),
+    # Density Method = Density at Density = 900 (stated),
+    # Distribution Method = Poisson Disk with a Minimum
+    # Distance (UNSTATED - 0.012 picked) and a cycled Seed
+    # (UNSTATED - 3 picked).
     if not any(m.type == "NODES" and m.node_group is grp
                for m in icing.modifiers):
         mod = icing.modifiers.new("Scatter on Surface", "NODES")
         mod.node_group = grp
+        _set_mod_input(mod, "Instance Type", "Collection")
+        _set_mod_input(mod, "Collection", coll)
+        _set_mod_input(mod, "Pick Instance", True)
+        _set_mod_input(mod, "Alignment Axis", "Y")
+        _set_mod_input(mod, "Randomize", True)
+        _set_mod_input(mod, "Randomize Rotation",
+                       (0.35, 6.2832, 0.0))
+        _set_mod_input(mod, "Surface Offset", 0.0008)
+        _set_mod_input(mod, "Masking", True)
+        _set_mod_input(mod, "Density Method", "Density")
+        _set_mod_input(mod, "Density", 900.0)
+        _set_mod_input(mod, "Distribution Method", "Poisson Disk")
+        _set_mod_input(mod, "Minimum Distance", 0.012)
+        _set_mod_input(mod, "Seed", 3)
+        mask = _mod_inputs(mod).get("Distribution Mask")
+        if mask is not None:
+            try:
+                mask.type = "ATTRIBUTE"
+            except Exception:
+                pass
+            mask.attribute_name = "Group"
+
+
+def _set_series_look(scene):
+    """His standing Colour Management Look for the series'
+    renders - Medium High Contrast, set in Part 7 (33:34).
+    The enum's spelling differs across Blender versions
+    ('AgX - Medium High Contrast' on 5.x, the bare name on
+    4.2), and the built scene must store it on either: the
+    shipped demo scene carried NO look because the one
+    spelling the build tried silently failed on the other
+    version (frame round's fifth recommendation)."""
+    for name in ("AgX - Medium High Contrast",
+                 "Medium High Contrast"):
         try:
-            inp = mod.properties.inputs
-            inp.Socket_6.value = "Collection"   # Instance Type
-            inp.Socket_7.value = coll           # Collection
-            inp.Socket_17.value = True          # Pick Instance
-            inp.Socket_30.value = "Amount"      # Density Method
-            inp.Socket_31.value = 140           # Amount
-            inp.Socket_39.value = True          # Randomize
-            inp.Socket_35.value = (0.0, 0.0, 6.283)  # spin freely
-            inp.Socket_29.value = True          # Masking on
-            inp.Socket_2.attribute_name = "Sprinkles"  # the mask
+            scene.view_settings.look = name
+            return
         except Exception:
-            pass  # the modifier + group are the proof; the
-            # values are defaults a learner can match by hand
+            continue
+
+
+def _park_out_of_frame(context, obj):
+    """Move a window blocker sideways - along the camera's
+    own right - until every corner of it projects outside
+    the scene camera's frame.
+
+    His blockers are never IN frame (that is the trick);
+    the build shipped them bare and never checked the
+    frame, and the finale render wore one as a pale slab
+    in the corner (frame round's fourth recommendation).
+    The blockers keep their height, their tilt and their
+    place in the sun's path - only the sideways step
+    changes - so the sliver of light they leave is the
+    same sliver, seen from a camera they no longer
+    photobomb. They still render and still cast: only
+    their position moves."""
+    from mathutils import Vector
+    from bpy_extras.object_utils import world_to_camera_view
+    scene = context.scene
+    cam = scene.camera
+    if cam is None:
+        return
+    context.view_layer.update()
+    right = cam.matrix_world.to_3x3() @ Vector((1, 0, 0))
+    right.z = 0.0
+    if right.length < 1e-6:
+        return
+    right.normalize()
+
+    def span():
+        corners = [obj.matrix_world @ Vector(c)
+                   for c in obj.bound_box]
+        xs = [world_to_camera_view(scene, cam, c).x
+              for c in corners]
+        return min(xs), max(xs)
+
+    lo, hi = span()
+    if lo >= 1.03 or hi <= -0.03:
+        return  # already clear of the frame
+    direction = 1.0 if (lo + hi) / 2 >= 0.5 else -1.0
+    for _ in range(80):
+        obj.location += right * (0.02 * direction)
+        context.view_layer.update()
+        lo, hi = span()
+        if lo >= 1.03 or hi <= -0.03:
+            break
+
+
+def _parent_keep(context, child, parent):
+    """Ctrl+P -> Object (Keep Transform): the child keeps
+    exactly where it sits in the world, now riding with the
+    parent."""
+    if child is None or parent is None or child is parent:
+        return
+    context.view_layer.update()
+    inv = parent.matrix_world.inverted()
+    child.parent = parent
+    child.matrix_parent_inverse = inv
 
 
 def _tour_step_final_picture(context):
+    from mathutils import Vector
     scene = context.scene
-    # The finale's lighting build: the sun from Part 4 stays,
-    # and two purpose-placed lights join it - a warm key and a
-    # cool rim - so the picture is lit in layers.
-    if _scene_obj(context, "Key Light") is None:
-        bpy.ops.object.light_add(type="AREA",
-                                 location=(2.5, -2.5, 3.0),
-                                 rotation=(0.85, 0.0, 0.65))
-        key = context.object
-        key.name = "Key Light"
-        key.data.energy = 250
-        key.data.shape = "DISK"
-        key.data.size = 2.0
-        key.data.color = (1.0, 0.95, 0.88)
-    if _scene_obj(context, "Rim Light") is None:
-        bpy.ops.object.light_add(type="POINT",
-                                 location=(-3.0, 2.5, 2.0))
-        rim = context.object
-        rim.name = "Rim Light"
-        rim.data.energy = 15
-    rim = _scene_obj(context, "Rim Light")
-    rim.data.color = (0.75, 0.85, 1.0)
-    if scene.camera is None:
-        bpy.ops.object.camera_add(location=(3.3, -4.4, 1.9))
-        scene.camera = context.object
-    if scene.render.engine == "CYCLES":
-        scene.cycles.samples = 64
+    dough = _find_dough(context)
+    icing = _find_icing(context, dough)
+    mug = _find_mug(context)
+    plate = _find_plate(context, dough)
+    table = _find_table(context, dough)
+    foam = _find_foam(context, mug)
+    if None in (dough, icing, mug, plate, table):
+        raise RuntimeError("The whole set comes first - "
+                           "that is Parts 1-7.")
+    # Housekeeping first (00:15): parenting, Ctrl+P ->
+    # Object (Keep Transform) four times - Icing rides the
+    # Donut, the Donut rides the Plate, the Foam rides the
+    # Mug, and the Plate and Mug ride the table.
+    _parent_keep(context, icing, dough)
+    _parent_keep(context, dough, plate)
+    _parent_keep(context, foam, mug)
+    _parent_keep(context, plate, table)
+    _parent_keep(context, mug, table)
+    # And the renames arrive HERE, in the finale: the plane
+    # becomes "Table", the plate object becomes "Plate".
+    table.name = "Table"
+    plate.name = "Plate"
+    # The sun (02:11): the scene's ORIGINAL lamp - there
+    # since Part 1 - is renamed "Sun" and its type changed
+    # to SUN. Strength about 10 ("I keep this around 10").
+    # Its Temperature (the Kelvin slider, a 4.5+ feature) is
+    # warmed until it looks right - no number is stated
+    # (UNSTATED: 4200 K, an early-morning warmth, picked -
+    # and only set where the running Blender has the
+    # slider). Rotation: early-morning light, from the
+    # frame's right (UNSTATED angle).
+    sun = next((o for o in scene.objects if o.type == "LIGHT"
+                and o.name in ("Light", "Sun")), None)
+    if sun is None:
+        sun = next((o for o in scene.objects
+                    if o.type == "LIGHT"), None)
+    sun.name = "Sun"
+    sun.data.type = "SUN"
+    sun.data.energy = 10.0
+    if hasattr(sun.data, "use_temperature"):
+        sun.data.use_temperature = True
+        sun.data.temperature = 4200.0
+    sun_dir = Vector((-0.62, 0.18, -0.55)).normalized()
+    sun.rotation_euler = sun_dir.to_track_quat(
+        "-Z", "Y").to_euler()
+    # The window trick (05:28): two blocker PLanes the sun
+    # shines between, leaving only a sliver across the set.
+    # Blocker 1: Shift+A -> Plane, moved to the light's
+    # side, R -> X -> Ctrl-held -> exactly 90 degrees.
+    # Blocker 2: Shift+D, R -> Z -> 90 degrees. Sizes and
+    # positions are worked by eye until the sliver sits
+    # right (UNSTATED - placed for this set, at his scale).
+    blockers = []
+    for i, (loc, rot, scl) in enumerate((
+            ((0.56, -0.02, 0.40), (math.pi / 2, 0, 0), 0.30),
+            ((0.58, 0.10, 0.52), (math.pi / 2, 0, math.pi / 2),
+             0.24))):
+        name = "Blocker" if i == 0 else "Blocker.001"
+        if _scene_obj(context, name) is None:
+            bpy.ops.mesh.primitive_plane_add(
+                size=2, location=loc, rotation=rot)
+            blk = context.object
+            blk.name = name
+            blk.scale = (scl, scl, scl)
+            # A single-face plane is a shy shadow-caster in
+            # Eevee; a whisper of thickness makes its shadow
+            # reliable (the frame round's own scene fix).
+            thick = blk.modifiers.new("Solidify", "SOLIDIFY")
+            thick.thickness = 0.002
+        blockers.append(_scene_obj(context, name))
+    # Restaging inside the light (07:26): the mug goes
+    # further back, in the table's plane (G -> Shift+Z in
+    # the video; the set positions are by eye, UNSTATED).
+    # It is also turned a little, so the handle reads from
+    # the camera instead of hiding behind the body - a mug
+    # whose handle cannot be seen reads as a plain cup.
+    mug.location.x = 0.25
+    mug.location.y = 0.155
+    mug.rotation_euler.z = -0.6
+    # Organisation (08:16): lights and blockers into a new
+    # Collection named "Lighting" (M -> Move to Collection).
+    coll = bpy.data.collections.get("Lighting")
+    if coll is None:
+        coll = bpy.data.collections.new("Lighting")
+        scene.collection.children.link(coll)
+    # The sky (08:49): the sun duplicated (Shift+D), named
+    # "Sky", its type changed to POINT. The temperature tint
+    # is cleared and a soft blue, slightly purple colour set
+    # by eye (UNSTATED - (0.58, 0.62, 1.0) picked). Position
+    # high, at window height (UNSTATED). Its Radius is
+    # increased "by a lot" - the sky is a dome-sized light,
+    # so its shadows must be very soft (UNSTATED amount -
+    # 0.5 picked at his scale; the property Blender keeps
+    # it in is the light's shadow soft size).
+    if _scene_obj(context, "Sky") is None:
+        sky = sun.copy()
+        sky.data = sun.data.copy()
+        scene.collection.objects.link(sky)
+        sky.name = "Sky"
+        sky.data.type = "POINT"
+        sky.data.energy = 10.0
+        if hasattr(sky.data, "use_temperature"):
+            sky.data.use_temperature = False
+        sky.data.color = (0.58, 0.62, 1.0)
+        sky.data.shadow_soft_size = 0.5
+        sky.location = (0.15, 0.25, 0.62)
+        sky.rotation_euler = (0, 0, 0)
+    sky = _scene_obj(context, "Sky")
+    # The bounce (13:23): the Sky duplicated again, named
+    # "Indoor Bounce", colour cleared to default white and
+    # Power back to the default 10 (both stated - they are
+    # the defaults he returns to). Positioned off to the
+    # dark side, as if bounced off a cafe wall (UNSTATED).
+    if _scene_obj(context, "Indoor Bounce") is None:
+        bounce = sky.copy()
+        bounce.data = sky.data.copy()
+        scene.collection.objects.link(bounce)
+        bounce.name = "Indoor Bounce"
+        bounce.data.color = (1.0, 1.0, 1.0)
+        bounce.data.energy = 10.0
+        bounce.location = (-0.50, -0.18, 0.28)
+    bounce = _scene_obj(context, "Indoor Bounce")
+    for obj in [sun, sky, bounce] + blockers:
+        if obj is None:
+            continue
+        for parent in list(obj.users_collection):
+            parent.objects.unlink(obj)
+        coll.objects.link(obj)
+    # Camera (15:05): Lock Camera to View ON, pulled closer
+    # (a tighter framing on the donut), then unchecked. The
+    # amount is by eye from the Part 4 framing (UNSTATED) -
+    # no lens change is made or stated, so the lens stays.
+    cam = scene.camera
+    if cam is not None:
+        cam.location = (0.33, -0.74, 0.27)
+        cam.rotation_euler = (
+            Vector((0.045, 0.015, -0.01)) - cam.location
+        ).to_track_quat("-Z", "Y").to_euler()
+    # With the camera placed, the blockers are parked out
+    # of its frame (see _park_out_of_frame) - in the video
+    # they never appear; in the shipped build one stood in
+    # the finale render as a pale slab.
+    for blk in blockers:
+        if blk is not None:
+            _park_out_of_frame(context, blk)
+    # The Eevee quality pass (15:36): shadow Steps to 16 -
+    # the MAXIMUM ("the default value right here for steps
+    # is wrong... it should be maxed out"). Samples, read
+    # aloud as they stand: viewport 16, render 64.
+    try:
+        scene.eevee.shadow_step_count = 16
+        scene.eevee.taa_samples = 16
+        scene.eevee.taa_render_samples = 64
+    except Exception:
+        pass
+    # Material retune under the new light (stated values):
+    # Icing Subsurface Scale 0.03; Sprinkles 0.08 (he tries
+    # 0.06 first, settles on 0.08).
+    for obj, want in ((icing, 0.03),):
+        for mat in obj.data.materials:
+            if mat is None or not mat.use_nodes:
+                continue
+            bsdf = mat.node_tree.nodes.get("Principled BSDF")
+            if bsdf is not None \
+                    and "Subsurface Scale" in bsdf.inputs:
+                bsdf.inputs["Subsurface Scale"].default_value = want
+    smat = bpy.data.materials.get("Sprinkles")
+    if smat is not None and smat.use_nodes:
+        bsdf = smat.node_tree.nodes.get("Principled BSDF")
+        if bsdf is not None and "Subsurface Scale" in bsdf.inputs:
+            bsdf.inputs["Subsurface Scale"].default_value = 0.08
+    # The Light Probe Volume (20:17): Shift+Right-click the
+    # donut (cursor there), Shift+A -> Light Probe ->
+    # Volume; scaled to encapsulate the set, its points
+    # just above the table; Resolution 4 (stated - "I
+    # probably only need about three. No, I'll go four");
+    # Bake Light Cache. (The shuffle of individual points
+    # - one on the plate's edge, one inside the donut - is
+    # a viewport edit the bake here stands in for.)
+    if not any(o.type == "LIGHT_PROBE" for o in scene.objects):
+        context.scene.cursor.location = \
+            dough.matrix_world.translation
+        try:
+            bpy.ops.object.lightprobe_add(
+                type="VOLUME",
+                location=dough.matrix_world.translation)
+            probe = context.object
+            probe.name = "Light Probe Volume"
+            probe.scale = (0.45, 0.45, 0.17)
+            probe.location.z -= 0.01
+            probe.data.resolution_x = 4
+            probe.data.resolution_y = 4
+            probe.data.resolution_z = 4
+            _set_active(context, probe)
+            # The bake itself needs a live GPU context: on
+            # a headless machine the attempt aborts the
+            # whole process natively (no Python error to
+            # catch), so the reference build only presses
+            # Bake in an interactive session. The probe and
+            # its stated resolution are the graded state.
+            if not bpy.app.background:
+                try:
+                    bpy.ops.object.lightprobe_cache_bake()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    # Depth of Field (22:30): camera DOF ON, Focus Object =
+    # the Icing (picked in the Outliner when the probe
+    # volume intercepts clicks). The F-Stop: no number is
+    # stated (UNSTATED - Blender's own 2.8 stands).
+    if cam is not None:
+        cam.data.dof.use_dof = True
+        cam.data.dof.focus_object = icing
+    # Sun -> Shadow -> Jitter ON (24:36) - the benefit is in
+    # the render; viewport jitter stays off (his warning).
+    sun.data.use_shadow_jitter = True
+    try:
+        scene.eevee.use_shadow_jitter_viewport = False
+    except Exception:
+        pass
+    # The comparison renders (25:25): Eevee and Cycles in
+    # different slots, flipped between with J. (His Cycles
+    # setup starts in Preferences -> System -> Render
+    # Devices -> GPU - a machine setting the build cannot
+    # make for anyone.) The build renders once, through the
+    # tour's own engine, as the keepsake. The scene's saved
+    # end state also carries his standing Look (set in
+    # Part 7) - stored here too, so the finale file reads
+    # right on either Blender spelling.
+    _set_series_look(scene)
     scene.render.filepath = _home("blender_buddy_donut_final.png")
     bpy.ops.render.render(write_still=True)
 
@@ -1866,58 +3990,327 @@ def _check_picture(context):
     return _render_proof(context)
 
 
-def _check_first_cup(context):
-    # Part 1's tick is the save: the work exists as a file.
-    return _check_saved(context)
-
-
-def _check_mug_reference(context):
-    has_ref = any(
-        o.type == "EMPTY" and o.empty_display_type == "IMAGE"
-        for o in context.scene.objects)
-    if not has_ref:
+def _walls_evidence(obj):
+    """The cup has real walls: either the Solidify modifier
+    is still live on it (Part 1's state), or its thickness
+    has been baked into the cage (Part 2 applies it) - an
+    inner wall of verts running at a second, smaller radius
+    through the middle of the height. A one-layer tube that
+    never met Solidify has neither."""
+    if any(m.type == "SOLIDIFY" for m in obj.modifiers):
+        return True
+    prof = _radius_profile(obj)
+    if prof is None:
         return False
-    cup = _scene_obj(context, "Cup")
-    base = len(cup.data.vertices) if (
-        cup is not None and cup.type == "MESH") else 100
-    for obj in context.scene.objects:
-        if obj.type != "MESH" or obj is cup:
+    r_body, height, z_min, z_max, rs, zs = prof
+    # A true second surface RUNS the cup's height: ask for
+    # a run of inner-radius verts spanning a real stretch
+    # of it - not a height window (a handle arcing above
+    # the rim stretches the mesh's height and shifts every
+    # window off the cup), and not a bare count (one ring
+    # squeezed inward is a shaping choice, not a wall: its
+    # inner-radius verts all sit at one height, span ~0).
+    inner = [z for r, z in zip(rs, zs)
+             if 0.55 * r_body < r < 0.99 * r_body]
+    if len(inner) < 8:
+        return False
+    return max(inner) - min(inner) >= 0.35 * height
+
+
+def _inset_evidence(obj):
+    """The bottom face was inset: somewhere in the bottom
+    band there is a FACE that is the inset's inner face -
+    flat, low, and wholly inside the wall's radius, its
+    centre well inside too. That is the shape an inset
+    leaves and nothing else does:
+
+    - the untouched cap is a single face whose verts sit
+      ON the rim (radius = the wall's) - rejected;
+    - a triangle-fan cap has a centre vert but its rim
+      verts are on the wall too - rejected;
+    - pressing I and dragging NOWHERE (thickness 0, the
+      re-walk's exact state) leaves the inner face exactly
+      on the rim - rejected: the old read counted the
+      bottom plane's FACE COUNT instead, and the ring of
+      quads the I key creates instantly satisfied it, so
+      step 1 ticked at the bare keystroke;
+    - the baked inner cap of a cup whose walls were
+      applied with no inset ever made sits at the wall
+      minus one thickness (about 0.96x) - rejected;
+    - a real inset, dragged even a centimetre, puts its
+      inner face at 0.85x the wall or less - accepted,
+      and it survives the Part 2 apply in the cage."""
+    prof = _radius_profile(obj)
+    if prof is None:
+        return False
+    r_body, height, z_min, z_max, rs, zs = prof
+    verts = obj.data.vertices
+    for poly in obj.data.polygons:
+        fz = [verts[i].co.z for i in poly.vertices]
+        if max(fz) > z_min + 0.10 * height:
             continue
-        if len(obj.data.vertices) > max(base * 2, base + 60):
+        if max(fz) - min(fz) > 0.02 * height:
+            continue
+        if max(rs[i] for i in poly.vertices) >= 0.90 * r_body:
+            continue
+        if math.hypot(poly.center.x, poly.center.y) \
+                < 0.85 * r_body:
             return True
     return False
 
 
+def _ring_levels(obj):
+    """How many distinct heights the wall's rings sit at.
+    His Part 1 cup has four: the base, the cut near the
+    base, the cut near the rim, the rim itself. A cup with
+    one loop cut - or none - is not the shape he leaves."""
+    prof = _radius_profile(obj)
+    if prof is None:
+        return 0
+    r_body, height, z_min, z_max, rs, zs = prof
+    levels = {}
+    for r, z in zip(rs, zs):
+        if r > 0.88 * r_body:
+            key = round((z - z_min) / (0.02 * height))
+            levels[key] = levels.get(key, 0) + 1
+    return sum(1 for n in levels.values() if n >= 6)
+
+
+def _part1_cup_ok(cup):
+    """Part 1's end state on ONE container, clause by
+    clause - every clause is a thing his procedure does
+    and the old check never asked for (gap 1.17: the tick
+    fired with no Solidify, no Subsurf, no inset and one
+    misplaced loop cut). The clauses are written to
+    survive Part 2: the walls count live or baked, the
+    Subsurf he never applies stays live, and the inset
+    ring and cut rings persist in the cage he reshapes."""
+    if not _walls_evidence(cup):
+        return False
+    if not any(m.type == "SUBSURF" for m in cup.modifiers):
+        return False
+    if not _inset_evidence(cup):
+        return False
+    return _ring_levels(cup) >= 4
+
+
+_SAVED_PART1 = {"key": None, "ok": False}
+
+
+def _grade_saved_part1(context):
+    """Grade the scene exactly as it stands at a save -
+    or at a load, where the live scene IS the file's
+    content and nothing has been edited yet - and bind
+    the verdict to the file as it lies on disk, keyed on
+    (path, mtime, size). A save is a faithful write of
+    the scene at that moment, so the verdict describes
+    the stored file exactly, with no re-read: Blender
+    refuses to library-load the file that is currently
+    open ("Cannot load from the current blend file"), so
+    the two moments the file's content is known for
+    certain are the moments it is written and read."""
+    ok = False
+    try:
+        if _find_dough(context) is not None:
+            ok = any(_part1_cup_ok(cup)
+                     for cup in _containers(context))
+    except Exception:
+        ok = False
+    key = None
+    path = bpy.data.filepath
+    if path:
+        try:
+            st = os.stat(path)
+            key = (path, st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = None
+    _SAVED_PART1.update(key=key, ok=ok)
+
+
+@bpy.app.handlers.persistent
+def _buddy_grade_save(*_args):
+    try:
+        _grade_saved_part1(bpy.context)
+    except Exception:
+        pass
+
+
+def _saved_part1_ok(context):
+    """The saved file holds the ring and the finished cup
+    - the tick text's actual claim. The old step-1 check
+    read only that A path existed (_check_saved), so a
+    stale save of the unfinished probe scene ticked the
+    step the moment the live mesh caught up (re-walk M1).
+    The verdict comes from _grade_saved_part1, captured
+    at the save itself (a save_post handler) and keyed to
+    the file on disk: any later save re-grades, and a
+    file whose key was never graded earns a verdict only
+    when nothing is unsaved - the one state where the
+    live scene provably equals the file's content."""
+    path = bpy.data.filepath
+    if not path:
+        return False
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    key = (path, st.st_mtime_ns, st.st_size)
+    if _SAVED_PART1["key"] != key:
+        if bpy.data.is_dirty:
+            return False
+        _grade_saved_part1(context)
+        if _SAVED_PART1["key"] != key:
+            return False
+    return _SAVED_PART1["ok"]
+
+
+def _check_first_cup(context):
+    # Part 1's end state, as his procedure leaves it: the
+    # file saved (his last move of the part), the donut ring
+    # made, and the cup standing open beside it - with its
+    # walls, its smoother, its inset and its two loop cuts,
+    # the whole procedure the card teaches. (The old check
+    # ticked on the save alone, then on shape alone; both
+    # false passes are closed here. Round 2: the save is
+    # graded too - the file's stored scene must hold the
+    # finished cup, not just exist; see _saved_part1_ok.)
+    if not _check_saved(context):
+        return False
+    if _find_dough(context) is None:
+        return False
+    if not any(_part1_cup_ok(cup)
+               for cup in _containers(context)):
+        return False
+    return _saved_part1_ok(context)
+
+
+def _check_mug_reference(context):
+    # Part 2's end state: the cup ITSELF has become the mug
+    # - a container with a handle grown from its own wall
+    # AND JOINED BACK ON (the join is graded: boundary
+    # edges may form only the mouth - gap 2.14), its
+    # Solidify applied away (his pivotal 15:21 move, before
+    # the handle grows) - and no plain, unworked cup is
+    # still standing next to it (a second "mug" mesh built
+    # beside an untouched cup is not his procedure and must
+    # not tick). The reference photo itself is deleted in
+    # Part 3, so its presence is not graded here - the
+    # modelled mug is the proof.
+    containers = _containers(context)
+    if not containers:
+        return False
+    handled = [o for o in containers if _has_handle(o)]
+    plain = [o for o in containers if not _has_handle(o)]
+    if not handled or plain:
+        return False
+    mug = handled[0]
+    if any(m.type == "SOLIDIFY" for m in mug.modifiers):
+        return False
+    return _join_closed(mug)
+
+
 def _check_icing_hug(context):
+    # Part 3's FINISHED state: his icing after the applies
+    # and the sculpt pass - a closed solid shell (the
+    # Solidify is IN the mesh, not on it), its rim pulled
+    # into uneven drips, sitting exactly on the dough, with
+    # NO live Shrinkwrap or Solidify left. The half-done
+    # state - modifiers still live, no drips - must not
+    # tick: that was the old check's certified stopping
+    # point, and it is exactly where he tells you to keep
+    # going.
     dough = _find_dough(context)
     if dough is None:
         return False
-    icing = _scene_obj(context, "Icing")
+    icing = _find_icing(context, dough)
     if icing is None:
         return False
-    if not any(m.type == "SOLIDIFY" for m in icing.modifiers):
+    if any(m.type in ("SHRINKWRAP", "SOLIDIFY")
+           for m in icing.modifiers):
         return False
-    return any(m.type == "SHRINKWRAP" and m.target is dough
-               for m in icing.modifiers)
+    # A closed solid: no edge belongs to just one face.
+    edge_uses = {}
+    for poly in icing.data.polygons:
+        for a, b in poly.edge_keys:
+            key = (a, b) if a < b else (b, a)
+            edge_uses[key] = edge_uses.get(key, 0) + 1
+    if any(n < 2 for n in edge_uses.values()):
+        return False
+    # Drips: the rim's low verts are uneven - some pulled
+    # well down, most not.
+    verts = icing.data.vertices
+    zs = [v.co.z for v in verts]
+    z_span = max(zs) - min(zs)
+    if z_span <= 0:
+        return False
+    # A skin, not a second whole donut: the state this
+    # step STARTS from - a plain duplicate of the dough -
+    # reaches all the way around the dough's underside
+    # (its lowest point IS the dough's lowest point,
+    # fraction 0), but the shell his procedure leaves -
+    # bottom half deleted, drips pulled down the OUTSIDE
+    # - stays in the dough's top reaches: the reference
+    # build's deep drips bottom out at 0.115 of the
+    # dough's height (0.050 after Part 5's displacement
+    # reshapes the dough under it), the walked icing at
+    # 0.237. Without
+    # this, the duplicate alone satisfied every clause
+    # here - it is closed, carries no live modifiers,
+    # and a whole tube's own z-spread reads as drips -
+    # so step 3 could tick before any icing work existed
+    # (re-walk M3's counter flips began at the
+    # duplicate). Both rings share an origin in every
+    # taught state, so local heights compare directly.
+    dzs = [v.co.z for v in dough.data.vertices]
+    if min(zs) < min(dzs) + 0.025 * (max(dzs) - min(dzs)):
+        return False
+    rim_low = [v.co.z for v in verts
+               if math.hypot(v.co.x, v.co.y) > 0.11]
+    if not rim_low:
+        return False
+    dipped = sum(1 for z in rim_low
+                 if z < max(zs) - 0.72 * z_span)
+    shallow = sum(1 for z in rim_low
+                  if z > max(zs) - 0.45 * z_span)
+    if dipped < 3 or shallow < 3:
+        return False
+    # It hugs: the icing's centre rides with the dough's.
+    gap = (icing.matrix_world.translation
+           - dough.matrix_world.translation).length
+    return gap < 0.35 * DONUT_MINOR + 0.02
 
 
 def _check_first_picture(context):
-    if _scene_obj(context, "Plate") is None:
-        return False
-    if _scene_obj(context, "Table") is None:
-        return False
+    # Part 4's end state: the donut resting on a plate on a
+    # table (found by role - his are still named "Circle"
+    # and "Plane" here), Eevee ray tracing ON (the switch
+    # he calls a mistaken default), the food glow set to his
+    # recipe on BOTH dough and icing (Weight 1, Radius
+    # (1, 1, 1) - not any epsilon above zero), and a first
+    # render made.
     dough = _find_dough(context)
-    icing = _scene_obj(context, "Icing")
+    icing = _find_icing(context, dough)
     if dough is None or icing is None:
         return False
-    if _sss_weight(icing) <= 0 or _sss_weight(dough) <= 0:
+    if _find_plate(context, dough) is None:
+        return False
+    if _find_table(context, dough) is None:
+        return False
+    try:
+        if not context.scene.eevee.use_raytracing:
+            return False
+    except Exception:
+        pass
+    if not _recipe_ok(icing) or not _recipe_ok(dough):
         return False
     return _render_proof(context)
 
 
 def _pbr_pattern(mat):
-    """(photo wired into the material, a data map present, a
-    Normal Map node present) for one material's node recipe."""
+    """(photo wired toward the Principled, a data map among
+    the feeding pictures, a Normal Map node in the feed) for
+    one material's node recipe - read per surface, never
+    pooled across objects."""
     if mat is None or not mat.use_nodes or mat.node_tree is None:
         return False, False, False
     nt = mat.node_tree
@@ -1941,379 +4334,1004 @@ def _pbr_pattern(mat):
             continue
         if node in feeding:
             wired = True
-        if node.image.colorspace_settings.name != "sRGB":
-            noncolor = True
-    normal = any(n.type == "NORMAL_MAP" for n in nt.nodes)
+            if node.image.colorspace_settings.name != "sRGB":
+                noncolor = True
+    normal = any(n.type == "NORMAL_MAP" and n in feeding
+                 for n in nt.nodes)
     return wired, noncolor, normal
 
 
-def _check_real_surfaces(context):
-    targets = []
-    for name in ("Table", "Plate", "Icing"):
-        obj = _scene_obj(context, name)
-        if obj is not None and obj.type == "MESH":
-            targets.append(obj)
-    dough = _find_dough(context)
-    if dough is not None:
-        targets.append(dough)
-    if len(targets) < 4:
+def _surface_ok(obj, need_colour=True):
+    """One surface wearing his Part 5 recipe: a photo wired
+    in, at least one Non-Color data map feeding the
+    Principled, and a Normal Map node in the feed. For the
+    icing, whose colour picture he disconnects in his
+    repair, need_colour is False."""
+    if obj is None:
         return False
-    wired_objects = 0
-    any_noncolor = False
-    any_normal = False
-    for obj in targets:
-        obj_wired = False
-        for mat in obj.data.materials:
-            wired, noncolor, normal = _pbr_pattern(mat)
-            obj_wired = obj_wired or wired
-            any_noncolor = any_noncolor or noncolor
-            any_normal = any_normal or normal
-        if obj_wired:
-            wired_objects += 1
-    return (wired_objects >= 3 and any_noncolor and any_normal)
-
-
-def _check_unwrap_mug(context):
-    mug = _scene_obj(context, "Mug")
-    if mug is None or mug.type != "MESH":
-        return False
-    if not any(e.use_seam for e in mug.data.edges):
-        return False
-    foam = _scene_obj(context, "Coffee Foam")
-    if foam is None or foam.type != "MESH":
-        return False
-    return len(foam.data.materials) > 0 and \
-        foam.data.materials[0] is not None
-
-
-def _check_scatter(context):
-    icing = _scene_obj(context, "Icing")
-    if icing is None:
-        return False
-    if not any(m.type == "NODES" and m.node_group is not None
-               and "Scatter on Surface" in m.node_group.name
-               for m in icing.modifiers):
-        return False
-    variants = False
-    for coll in bpy.data.collections:
-        if coll is context.scene.collection:
+    for mat in obj.data.materials:
+        wired, noncolor, normal = _pbr_pattern(mat)
+        if not (wired and noncolor and normal):
             continue
-        small = [o for o in coll.objects
-                 if o.type == "MESH" and len(o.data.vertices) < 2000]
-        if len(small) >= 2:
-            variants = True
-    if not variants:
-        return False
-    for vg in icing.vertex_groups:
-        for v in list(icing.data.vertices)[:600]:
-            try:
-                if vg.weight(v.index) > 0.0:
-                    return True
-            except RuntimeError:
+        if not need_colour:
+            return True
+        bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        # The colour picture may reach Base Color through
+        # the colour-surgery nodes he adds in Part 6 (RGB
+        # Curves, then Hue/Saturation) - follow the chain
+        # back instead of demanding a direct wire.
+        stack = [link.from_node
+                 for link in bsdf.inputs["Base Color"].links]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node in seen:
                 continue
+            seen.add(node)
+            if node.type == "TEX_IMAGE":
+                return True
+            for sock in node.inputs:
+                stack.extend(link.from_node
+                             for link in sock.links)
     return False
 
 
+def _check_real_surfaces(context):
+    # Part 5's end state, per surface (his recipe is
+    # per-surface - the old check pooled its clauses across
+    # objects, so one wired surface carried three bare
+    # ones): table, plate and dough fully wired; the icing
+    # wired with its colour picture disconnected and the
+    # subsurface re-set by hand (his repair); the dough
+    # carrying his displacement treatment.
+    dough = _find_dough(context)
+    icing = _find_icing(context, dough)
+    plate = _find_plate(context, dough)
+    table = _find_table(context, dough)
+    if None in (dough, icing, plate, table):
+        return False
+    if not _surface_ok(table):
+        return False
+    if not _surface_ok(plate):
+        return False
+    if not _surface_ok(icing, need_colour=False):
+        return False
+    if not _recipe_ok(icing):
+        return False
+    if not _surface_ok(dough):
+        return False
+    # The dough's displacement: a Displacement node (or a
+    # texture) feeding the Material Output's Displacement
+    # socket, the material set to use it, and a Subdivision
+    # Surface at level 3 to carry the detail (his stated
+    # levels: viewport 3, render 3).
+    disp_ok = False
+    for mat in dough.data.materials:
+        if mat is None or not mat.use_nodes \
+                or mat.node_tree is None:
+            continue
+        if mat.displacement_method not in ("DISPLACEMENT", "BOTH"):
+            continue
+        for node in mat.node_tree.nodes:
+            if node.type != "OUTPUT_MATERIAL":
+                continue
+            if any(link.from_node.type in ("DISPLACEMENT",
+                                           "TEX_IMAGE")
+                   for link in node.inputs["Displacement"].links):
+                disp_ok = True
+    if not disp_ok:
+        return False
+    return any(m.type == "SUBSURF" and m.levels >= 3
+               and m.render_levels >= 3
+               for m in dough.modifiers)
+
+
+def _check_unwrap_mug(context):
+    # Part 6's end state: the mug wearing his seam layout
+    # (a real set of seams - joints, hidden side line,
+    # inside base, underside - not one stray edge), and the
+    # foam sitting inside its rim with a material of its
+    # own - the foam found by where it sits, under his name
+    # for it ("Foam") or by its place in the mug.
+    mug = _find_mug(context)
+    if mug is None:
+        return False
+    seams = sum(1 for e in mug.data.edges if e.use_seam)
+    if seams < 10:
+        return False
+    if not mug.data.uv_layers:
+        return False
+    foam = _find_foam(context, mug)
+    if foam is None:
+        return False
+    if not foam.data.materials or foam.data.materials[0] is None:
+        return False
+    # His foam is built from the rim and inset - it has a
+    # raised edge and a lowered middle, never one flat
+    # plane. A plain disc dropped in must not tick.
+    fzs = [v.co.z for v in foam.data.vertices]
+    return max(fzs) - min(fzs) > 0.002
+
+
+def _check_scatter(context):
+    # Part 7's end state, read off the modifier itself (by
+    # input NAME - the check verifies the wiring, the way
+    # the panel would show it): Scatter on Surface on the
+    # icing, instancing from the Sprinkles collection with
+    # Pick Instance on, Density Method = Density at his
+    # stated 900, Poisson Disk distribution, and the painted
+    # vertex group wired as the Distribution Mask ATTRIBUTE
+    # - with real paint in it (full weight somewhere, soft
+    # somewhere, none somewhere). The variants in that
+    # collection share ONE material whose colours come from
+    # Object Info's Random through a CONSTANT Color Ramp -
+    # his system, not a fixed colour per shape.
+    icing = _scene_obj(context, "Icing")
+    if icing is None:
+        dough = _find_dough(context)
+        icing = _find_icing(context, dough)
+    if icing is None:
+        return False
+    mod = next((m for m in icing.modifiers
+                if m.type == "NODES" and m.node_group is not None
+                and "Scatter on Surface" in m.node_group.name),
+               None)
+    if mod is None:
+        return False
+    inputs = _mod_inputs(mod)
+    if not inputs:
+        return False
+
+    def val(name):
+        prop = inputs.get(name)
+        return getattr(prop, "value", None) if prop else None
+
+    if val("Instance Type") != "Collection":
+        return False
+    coll = val("Collection")
+    if coll is None:
+        return False
+    variants = [o for o in coll.objects if o.type == "MESH"]
+    if len(variants) < 2:
+        return False
+    if val("Pick Instance") is not True:
+        return False
+    if val("Density Method") != "Density":
+        return False
+    density = val("Density")
+    if density is None or abs(float(density) - 900.0) > 1.0:
+        return False
+    if val("Distribution Method") != "Poisson Disk":
+        return False
+    mask = inputs.get("Distribution Mask")
+    if mask is None or getattr(mask, "type", None) != "ATTRIBUTE":
+        return False
+    group_name = getattr(mask, "attribute_name", "")
+    vg = icing.vertex_groups.get(group_name)
+    if vg is None:
+        return False
+    weights = []
+    for v in icing.data.vertices:
+        try:
+            weights.append(vg.weight(v.index))
+        except RuntimeError:
+            weights.append(0.0)
+    if not weights or max(weights) < 0.9 or min(weights) > 0.05:
+        return False
+    if not any(0.05 < w < 0.95 for w in weights):
+        return False
+    # One shared material, Object Info Random -> Color Ramp
+    # (Constant) -> Base Color.
+    mats = []
+    for v in variants:
+        if v.data.materials and v.data.materials[0] is not None:
+            mats.append(v.data.materials[0])
+    if not mats or any(m is not mats[0] for m in mats):
+        return False
+    nt = mats[0].node_tree
+    if nt is None:
+        return False
+    ramp = next((n for n in nt.nodes if n.type == "VALTORGB"),
+                None)
+    if ramp is None or ramp.color_ramp.interpolation != "CONSTANT":
+        return False
+    info = next((n for n in nt.nodes if n.type == "OBJECT_INFO"),
+                None)
+    if info is None:
+        return False
+    return any(link.from_node == ramp
+               for bsdf in nt.nodes if bsdf.type == "BSDF_PRINCIPLED"
+               for link in bsdf.inputs["Base Color"].links)
+
+
 def _check_final_picture(context):
-    lights = [o for o in context.scene.objects if o.type == "LIGHT"]
+    # Part 8's end state - his rig, structurally: the
+    # original lamp become a SUN at about 10 (his stated
+    # strength), two blocker planes standing in its light
+    # (single-face meshes, not horizontal - the table is a
+    # plane too, and it lies flat), a blue POINT "sky", a
+    # white POINT "bounce" at the default 10 he returns to,
+    # a Light Probe Volume at resolution 4 (stated), shadow
+    # Steps at the stated maximum 16, the camera's depth of
+    # field focused on the icing, the parenting he does
+    # first (icing on donut, donut on plate, foam on mug,
+    # plate and mug on the table), the SSS scales he retunes
+    # (icing 0.03, sprinkles 0.08), and a fresh render.
+    dough = _find_dough(context)
+    icing = _find_icing(context, dough)
+    mug = _find_mug(context)
+    plate = _find_plate(context, dough)
+    table = _find_table(context, dough)
+    foam = _find_foam(context, mug)
+    if None in (dough, icing, mug, plate, table, foam):
+        return False
+    suns = [o for o in context.scene.objects
+            if o.type == "LIGHT" and o.data.type == "SUN"]
+    if not any(8.0 <= s.data.energy <= 12.0 for s in suns):
+        return False
+    points = [o for o in context.scene.objects
+              if o.type == "LIGHT" and o.data.type == "POINT"]
 
-    def deliberate(light):
+    def is_blue(light):
         c = light.data.color
-        return max(abs(c[0] - 1.0), abs(c[1] - 1.0),
-                   abs(c[2] - 1.0)) > 0.02
+        return c[2] > c[0] and c[2] > c[1] + 0.02
 
-    if not (len(lights) >= 2 or any(deliberate(l) for l in lights)):
+    def is_white(light):
+        c = light.data.color
+        return max(c) - min(c) < 0.05
+
+    if not any(is_blue(p) for p in points):
+        return False
+    if not any(is_white(p) and 7.0 <= p.data.energy <= 13.0
+               for p in points):
+        return False
+    blockers = 0
+    for obj in context.scene.objects:
+        if obj.type != "MESH" or len(obj.data.polygons) != 1:
+            continue
+        if obj is table:
+            continue
+        normal = obj.data.polygons[0].normal
+        world_n = (obj.matrix_world.to_3x3() @ normal)
+        if abs(world_n.normalized().z) < 0.5:
+            blockers += 1
+    if blockers < 2:
+        return False
+    probes = [o for o in context.scene.objects
+              if o.type == "LIGHT_PROBE"
+              and getattr(o.data, "type", "") == "VOLUME"]
+    if not probes:
+        return False
+    if getattr(probes[0].data, "resolution_x", None) != 4:
+        return False
+    try:
+        if context.scene.eevee.shadow_step_count != 16:
+            return False
+    except Exception:
+        pass
+    if icing.parent is not dough or dough.parent is not plate:
+        return False
+    if foam.parent is not mug:
+        return False
+    if plate.parent is not table or mug.parent is not table:
+        return False
+    recipe = _sss_recipe(icing)
+    if recipe is None or recipe[2] is None \
+            or not (0.02 <= recipe[2] <= 0.045):
+        return False
+    smat = bpy.data.materials.get("Sprinkles")
+    if smat is not None and smat.use_nodes:
+        bsdf = smat.node_tree.nodes.get("Principled BSDF")
+        if bsdf is not None and "Subsurface Scale" in bsdf.inputs:
+            if not (0.06 <= float(bsdf.inputs["Subsurface Scale"]
+                                  .default_value) <= 0.10):
+                return False
+    cam = context.scene.camera
+    if cam is None or not cam.data.dof.use_dof:
+        return False
+    if cam.data.dof.focus_object is not icing:
         return False
     return _render_proof(context)
 
 
+# --- the eight steps ------------------------------------------------
+
 TOUR_STEPS = [
-    {"title": "Your first cup, saved",
-     "skill": "Moving around, adding a shape, Edit Mode, your "
-              "first modifier - and saving",
-     "how": "Part 1 of the new series ('Blender Donut Tutorial "
-            "Part 1 (2026)'): before any donut exists, he "
-            "teaches the whole workshop on a coffee cup - then "
-            "saves the file.",
-     "teach": [
-         "1. Watch Part 1 first. He starts with moving around "
-         "(from 1:30): hold the middle mouse button and drag to "
-         "orbit; scroll to zoom. Everything else stands on this.",
-         "2. Adding things is at 6:02, Shade Smooth at 9:32 - "
-         "right-click the shape and pick Shade Smooth when your "
-         "cup looks faceted.",
-         "3. The cup itself starts at 10:27. At 15:42 he enters "
-         "Edit Mode (Tab) - working on the skin, not the whole "
-         "thing - and at 17:57 he deletes the top face in Edit "
-         "Mode to open the cup's mouth.",
-         "4. Modifiers arrive at 18:27: the wrench tab, Add "
-         "Modifier, Subdivision Surface (20:40) makes the cup "
-         "smooth; loop cuts (22:43) and the Inset tool (24:31) "
-         "shape it, and at 26:47 he gives the cup's walls real "
-         "thickness.",
-         "5. At 27:11 he saves - Ctrl+S, a name, Save Blender "
-         "File. Do the same now: this step ticks the moment "
-         "your work exists as a saved file."],
-     "missing": "Not saved yet: this step is done when your "
-                "scene - cup and all - is saved as a .blend "
-                "file (Ctrl+S).",
-     "video": {"url": "https://www.youtube.com/watch?v=-tbSCMbJA6o",
-               "label": "Watch Part 1 - Blender Donut Tutorial "
-                        "Part 1"},
-     "tools": ["make_smoother", "loop_cut", "inset_face",
-               "save_work"],
-     "run": _tour_step_first_cup, "check": _check_first_cup},
-    {"title": "The mug with a handle, built from the photo",
-     "skill": "Reference images: modelling a real thing by "
-              "looking at it, not from memory",
-     "how": "Part 2 ('Blender Basic Modelling Tutorial'): he "
-            "models a realistic coffee mug from a reference "
-            "photo - the photo he links from the series page.",
-     "teach": [
-         "1. Watch Part 2. At 0:00 he makes the case for "
-         "reference; at 3:25 he adds the photo (Shift+A, Image, "
-         "Reference) and works with it on show in the scene.",
-         "2. At 7:31 he builds the mug's large forms against "
-         "the photo; the bottom lip is at 10:18. Model what the "
-         "photo shows, not what you remember a mug looks like.",
-         "3. The handle is modelled at 13:25 and joined into "
-         "itself at 20:54; at 23:36 he fixes the shading "
-         "artifacts the join leaves behind - grey smudges are "
-         "normal there, and fixable.",
-         "4. Honest note: no measurement can judge your handle "
-         "- it counts when it looks like the photo's handle to "
-         "you. This step ticks on the photo being in your scene "
-         "and your mug having grown well past the plain Part 1 "
-         "cup."],
-     "missing": "This step is done when the reference photo is "
-                "in your scene as a visible image, and your mug "
-                "has grown into a real modelled mug - well beyond "
-                "the plain practice cup.",
-     "video": {"url": "https://www.youtube.com/watch?v=K1UyEdmSttQ",
-               "label": "Watch Part 2 - Basic Modelling"},
-     "tools": ["start_shaping", "inset_face", "look_smooth"],
-     "run": _tour_step_mug_reference, "check": _check_mug_reference},
-    {"title": "Icing that drips and hugs the donut",
-     "skill": "Edit Mode selection, Solidify, and the "
-              "Shrinkwrap modifier",
-     "how": "Part 3 ('Blender Basic Organic Modelling "
-            "Tutorial'): the icing is the donut's own top - "
-            "thickened, pulled into drips, and shrink-wrapped "
-            "onto the dough so it hugs.",
-     "teach": [
-         "1. First the ring itself, if you don't have it yet: "
-         "Shift+A, Mesh, Torus; right-click, Shade Smooth; the "
-         "wrench tab, Add Modifier, Subdivision Surface at "
-         "level 2. His Part 3 opens (0:00) by naming objects - "
-         "rename yours Dough, and the copy below Icing.",
-         "2. At 3:16 he duplicates the dough; at 4:08 he "
-         "selects half of it - the top - in Edit Mode (Tab, "
-         "then select by faces). The top is the icing; delete "
-         "the rest of the copy.",
-         "3. At 7:35, thickness: with Icing picked, the wrench "
-         "tab, Add Modifier, Solidify - his thickness is about "
-         "0.025. At 13:03 he pulls the rim down into runoff "
-         "drips with proportional editing (the O key).",
-         "4. At 14:26, the hug: Add Modifier, Deform, "
-         "Shrinkwrap, and set its Target to the Dough. The "
-         "icing now clings to the donut instead of floating "
-         "above it.",
-         "5. Stuck mid-part? His chapter at 5:46 is literally "
-         "called the Unstuck Yourself Guide - it is the "
-         "video's own rescue page."],
-     "missing": "This step is done when a ring of dough exists "
-                "and the piece named Icing has both a Solidify "
-                "modifier and a Shrinkwrap modifier aimed at "
-                "the dough.",
-     "video": {"url": "https://www.youtube.com/watch?v=9OA2asQdi_U",
-               "label": "Watch Part 3 - Basic Organic Modelling"},
-     "tools": ["give_thickness", "wrap_onto", "start_shaping"],
-     "run": _tour_step_icing_hug, "check": _check_icing_hug},
-    {"title": "A lumpy donut, its first picture, and skin like food",
-     "skill": "Staging a set, the Lattice, materials with "
-              "subsurface - and the first render",
-     "how": "Part 4 ('Blender Basic Materials Tutorial'): the "
-            "plate arrives, a lattice makes the donut lumpy, "
-            "real materials go on - and the setting that makes "
-            "it read as food is turned on.",
-     "teach": [
-         "1. Watch Part 4. It opens (0:00) modelling the plate "
-         "- that was Part 3's homework - and the donut rests "
-         "on it.",
-         "2. At 8:29 he bends the donut out of round with a "
-         "Lattice: perfect circles read as computer-made, so "
-         "the whole donut gets gently deformed before anyone "
-         "looks closely.",
-         "3. At 16:03 comes your first render - F12 - with "
-         "camera control at 17:02. It will look grey and plain: "
-         "that is correct at this point, the colour has not "
-         "happened yet. If it comes out black, suspect the "
-         "light first, not your donut.",
-         "4. Basic materials arrive at 23:30 (the checker-ball "
-         "tab): the icing gets its glossy pink, the dough its "
-         "baked golden. Then SSS at 26:30 - Subsurface Weight "
-         "above zero on both: light sinks into the surface and "
-         "glows a little, like real icing and crumb, instead "
-         "of bouncing off like plastic.",
-         "5. The table is added last (29:35) - the big flat "
-         "shape everything sits on. This step ticks when the "
-         "plate, the table, the subsurface and a render are "
-         "all in your scene, whichever order you did them."],
-     "missing": "This step is done when the donut sits on a "
-                "plate on a table, both dough and icing have "
-                "Subsurface Weight above zero, and a render "
-                "exists.",
-     "video": {"url": "https://www.youtube.com/watch?v=5Xlu2zwbJd0",
-               "label": "Watch Part 4 - Basic Materials"},
-     "tools": ["give_colour", "take_picture", "camera_here"],
-     "run": _tour_step_first_picture,
-     "check": _check_first_picture},
-    {"title": "Real surfaces from photo textures",
-     "skill": "Image textures: colour, roughness and bump "
-              "working together as one recipe",
-     "how": "Part 5 ('Blender Basic Texturing Tutorial'): he "
-            "textures the table, plate, donut and icing with "
-            "photo textures - and a real surface turns out to "
-            "be three pictures doing three different jobs.",
-     "teach": [
-         "1. Watch Part 5 - his chapter at 2:34 ('What are PBR "
-         "Textures?') is the whole idea in four minutes. Open "
-         "the Shader Editor - the screen of boxes and wires. "
-         "Each surface is a recipe hanging off the Principled "
-         "BSDF, the one big node everything feeds into.",
-         "2. The colour photo (an Image Texture node) plugs "
-         "into Base Color. It is the only picture that is "
-         "actually colour, so its Colour Space stays sRGB.",
-         "3. A second picture plugs into Roughness - where the "
-         "surface is shiny, where it is dull. Set its Colour "
-         "Space to Non-Color: it is data, not colour, and "
-         "leaving it on sRGB is the classic 'looks wrong and "
-         "nobody says why'.",
-         "4. A third picture feeds a Normal Map node, and that "
-         "plugs into the Principled's Normal socket - fine "
-         "bumps faked from a photo. Also Non-Color. (He "
-         "textures the icing at 21:37 and the donut at 27:42.)",
-         "5. Buddy's tick looks for exactly this recipe - a "
-         "photo wired into the material, at least one "
-         "Non-Color data map, and a Normal Map node - across "
-         "your table, plate, dough and icing."],
-     "missing": "This step is done when your table, plate, "
-                "dough and icing wear photo textures wired into "
-                "their materials - with at least one Non-Color "
-                "data map and a Normal Map node in the recipe.",
-     "video": {"url": "https://www.youtube.com/watch?v=h30ZJQrb4s8",
-               "label": "Watch Part 5 - Basic Texturing"},
-     "tools": ["give_colour", "paint_picture"],
-     "run": _tour_step_real_surfaces,
-     "check": _check_real_surfaces},
-    {"title": "Unwrap the mug so its pattern sits right",
-     "skill": "Seams and UV unwrapping: choosing where a "
-              "shape's wrapping paper is cut",
-     "how": "Part 6 ('Blender Basic UV Unwrapping Tutorial'): "
-            "the mug gets a pattern - and a pattern only lands "
-            "straight if you first choose where the mug's skin "
-            "is cut to lay it flat.",
-     "teach": [
-         "1. Watch Part 6. To wrap a flat picture around a "
-         "mug, Blender needs a flat map of its skin - the UV "
-         "map. You choose the cuts: pick the mug, Tab into "
-         "Edit Mode, select edges, and Mark Seam (right-click "
-         "menu, or Ctrl+E). Down the back and around the rim "
-         "is where a real mug's glaze line runs.",
-         "2. Then select everything (A) and press U, then "
-         "Unwrap. The mug's skin flattens into the UV Editor. "
-         "Seams in the wrong place make the pattern stretch - "
-         "Buddy can see your seams, but only your eye can "
-         "judge the flattening.",
-         "3. At 25:02 he creates the coffee foam: a flat disc "
-         "just inside the mug's rim, with a material of its "
-         "own, so the mug reads as full instead of hollow. "
-         "(The handle gets its own island in the unwrap at "
-         "2:54 - that is why it was joined the way it was.)"],
-     "missing": "This step is done when your mug has seams "
-                "marked on its edges and a coffee-foam disc "
-                "sits inside the mug's rim with a material of "
-                "its own. Whether the pattern sits straight is "
-                "your eye's call - no tick can see that.",
-     "video": {"url": "https://www.youtube.com/watch?v=yxAqN8TzFbo",
-               "label": "Watch Part 6 - Basic UV Unwrapping"},
-     "tools": ["start_shaping", "paint_it"],
-     "run": _tour_step_unwrap_mug, "check": _check_unwrap_mug},
-    {"title": "Sprinkles by the hundred, none by hand",
-     "skill": "The Scatter on Surface modifier: making "
-              "Blender place the copies for you",
-     "how": "Part 7 ('How to Scatter in Blender 5.0'): "
-            "Blender 5.0's new Scatter on Surface modifier "
-            "covers the icing in sprinkles - you model two or "
-            "three, it places the hundred.",
-     "teach": [
-         "1. Watch Part 7. At 0:18 he explains the 3D cursor - "
-         "the red-and-white target is where new things are "
-         "born. At 0:51 he models one sprinkle; at 5:21 he "
-         "makes the sprinkle variants - a few shapes, gathered "
-         "into one Collection.",
-         "2. At 7:23 he adds the Scatter on Surface modifier "
-         "to the icing (wrench tab, Add Modifier) and points "
-         "it at the sprinkle collection, with Pick Instance on "
-         "so it mixes the variants instead of cloning one.",
-         "3. At 12:44 he controls where it scatters: the "
-         "icing's painted vertex group becomes the modifier's "
-         "Distribution Mask, so sprinkles land where the "
-         "icing shows and nowhere else. Paint it in Weight "
-         "Paint mode - red is 'sprinkles here'.",
-         "4. At 18:19 he fixes intersections (sprinkles sunk "
-         "too deep - lift them with the Surface Offset), and "
-         "at 24:04 the colours get randomized.",
-         "5. This modifier is new in Blender 5.0. On an older "
-         "Blender it simply is not there, and this one step "
-         "waits until you are on 5.0 or newer."],
-     "missing": "This step is done when the icing carries a "
-                "Scatter on Surface modifier, a collection "
-                "holds at least two sprinkle shapes, and the "
-                "icing has a painted vertex group guiding them.",
-     "video": {"url": "https://www.youtube.com/watch?v=_-QsGTL7pS0",
-               "label": "Watch Part 7 - How to Scatter in "
-                        "Blender 5.0"},
-     "tools": [],
-     "run": _tour_step_scatter, "check": _check_scatter},
-    {"title": "Light it like a photo, render it twice",
-     "skill": "Lighting for realism - and the two render "
-              "engines, Eevee and Cycles",
-     "how": "The finale ('The Basics of Lighting and "
-            "Rendering in Blender'): he lights the donut for "
-            "realism, then renders it in both of Blender's "
-            "engines so you can see what each one does.",
-     "teach": [
-         "1. Watch the finale. His own summary of it: you "
-         "learn to add lights for realism. The method is one "
-         "light at a time, looking at what each one changes - "
-         "a single flat light is exactly why a render looks "
-         "like plastic.",
-         "2. Build the light in layers: a strong main light "
-         "from one side to shape the donut, a gentler light to "
-         "lift the shadows, and the room's own light (the "
-         "World) kept in check. This step ticks when your "
-         "scene holds a real setup - more than one light, or "
-         "one light you have deliberately aimed and coloured "
-         "- and a fresh render exists.",
-         "3. Then render it twice: Render Properties, Render "
-         "Engine - once with Eevee (fast, a little less true), "
-         "once with Cycles (slow, honest light), F12 each "
-         "time, and compare the two pictures side by side.",
-         "4. Which one looks like food is your eye's decision. "
-         "That judgment is the whole craft of this part - no "
-         "tick can grade it, and Buddy won't pretend to."],
-     "missing": "This step is done when your scene is lit on "
-                "purpose - more than one light, or one "
-                "deliberately set - and a fresh render exists. "
-                "The rest, whether it looks like a photo, is "
-                "your eye: that is the real finish.",
-     "video": {"url": "https://www.youtube.com/watch?v=WobATxh3i-g",
-               "label": "Watch Part 8 - Lighting and Rendering "
-                        "(the finale)"},
-     "tools": ["add_sun", "add_lamp", "take_picture", "save_work"],
-     "run": _tour_step_final_picture,
-     "check": _check_final_picture},
+    {
+        "id": "first_cup",
+        "package": "donut",
+        "title": "Part 1 - Your first donut and cup",
+        "how": "A plain ring and a plain cup. Everything in this series is built from these.",
+        "video": {"url": "https://www.youtube.com/watch?v=-tbSCMbJA6o", "label": "Watch Part 1 on YouTube"},
+        "skill": "First shapes: adding a ring and a tube, the little Add panel that vanishes (and F9, the key that brings it back), opening a cup, loop cuts, inset, and your first two modifiers - Solidify and Subdivision Surface",
+        "missing": "The saved file holding the ring and the finished cup: top opened, walls from the Solidify effect, the Subdivision smoother still on it, the bottom inset, and the two loop cuts in place. Saving alone does not tick it - the cup has to be built.",
+        "tools": ["add_ring", "add_tube", "loop_cut", "inset_face", "give_thickness", "make_smoother", "save_work"],
+        "teach": [
+            "Part 1 of the Donut Tutorial (2026) builds the two shapes everything else stands on. Open Blender and press play - Buddy keeps your place while you work. First, moving around, because he teaches it before anything else: hold the middle mouse button and drag to orbit around the scene; hold Shift and the middle button to pan sideways; scroll to zoom. Press Numpad . (the dot on the number pad) and the view jumps to the picked thing - he uses it constantly. Mouse without a middle button: Preferences, Input, tick Emulate 3-Button Mouse, and Alt+left-drag orbits instead.",
+            "DELETE THE CUBE. Click the cube so it is outlined orange, then press X. X is Blender's delete key - a small menu asks you to confirm, so click Delete. Only the cube goes: the Camera and the Light that start in the scene STAY - the series uses both later (the camera takes Part 4's first picture; the lamp becomes Part 8's sun). The cube is just the starter block Blender opens with, and the donut starts cleaner without it. Wrong click somewhere? Ctrl+Z undoes your last move - it works everywhere in Blender, and it will rescue you all series long.",
+            "MAKE THE DOUGH RING. Shift+A opens the Add menu (Shift+A is 'add something'), then Mesh, then Torus. That ring is your dough. Before you click anything else, find the small 'Add Torus' panel at the bottom left of the screen - it holds this shape's settings, and it VANISHES at your next click. If it goes, press F9: F9 brings back the last tool's settings panel. In that panel: Major Segments 48 and Minor Segments 18 (segments are the ring's slices - more slices, smoother ring). Major Radius: type 0.1 m - his donut is built at real scale, 10 cm, not the giant 1-metre default. Minor Radius: drag to about 0.057 m, holding Shift while you drag for fine steps - that is the dough tube's thickness. Type the sizes here, in this panel: there is no shrink step coming later, so what you type is what you get.",
+            "MAKE IT LOOK LIKE DOUGH. Right-click the ring and choose Shade Smooth: the ring's flat facets melt into one smooth surface. That is the whole trick - almost every shape in this series gets smoothed this way.",
+            "MAKE THE CUP. Shift+A, Mesh, Cylinder - and in its vanishing panel (F9 brings it back): Radius 0.13 m. Vertices: 14. That low number is on purpose: a rounding effect coming later in THIS part - Subdivision Surface - will smooth the 14 sides into a curve, and fewer corners now means a cleaner curve then. Depth: he never types it - drag until the cylinder stands about as tall as a mug beside the donut.",
+            "MOVE THE CUP OUT OF THE WAY. Press G (G is grab - it moves the picked thing, following your mouse) and slide the cup behind the donut, then click to place it. His two shapes stand side by side from here, not on top of each other. (Pressing X, Y or Z right after G locks the move to that one direction.)",
+            "OPEN THE TOP. Press Tab. Tab switches between Object Mode - moving whole things - and Edit Mode, where you change a shape's own faces and points; you need Edit Mode now. Press 3 for Face Select (the three icons at the top left of the 3D window: 1 picks points, 2 picks edges, 3 picks faces). Click the cylinder's top face so it highlights. Press X - the delete key again - and this time choose Faces from the menu. Why Faces: it removes only that top surface and leaves the rim ring standing; choosing Vertices would take the rim's corner points with it and tear the top of the wall away. The cup is open at the top now, like a real cup.",
+            "GIVE THE CUP ITS WALLS. Press Tab back to Object Mode first - Tab flips between the two modes, and you have been in Edit Mode since opening the top. The next two moves are effects stacked onto the whole object at once, and Object Mode is the mode for whole-object moves; the loop cuts after them will send you back into Edit Mode. With the cup picked, click the wrench tab on the right - the Modifiers tab. A modifier is a live effect stacked on a shape: it changes how the shape looks and behaves while the shape underneath stays simple, and you can change or remove it at any time. Click Add Modifier, Generate, Solidify. Solidify turns the one-layer tube into a tube with real thickness - an inside and an outside. Drag its Thickness slider by eye until the wall reads like a real cup's wall; he never states a number, so match the video. NOW CHECK IT LANDED: the list in the Modifiers tab should show 'Solidify'. If the list is empty, the effect is not on the cup - click the cup once so it is outlined orange, then add it again. (This step's own Thickness tool in Buddy's tools above does the same add and tells you when it lands.)",
+            "MAKE IT CURVY. Add Modifier again: Generate, Subdivision Surface. This is the great smoother of Blender - it chops every face into smaller faces and rounds the result, and it is what turns the 14-sided tube into a believable cup. He raises its Levels Viewport 1, then 2, then 3 on camera just to show the rounding doubling each time; where it should rest he never says. Buddy's suggestion: leave it at 2 - smooth to look at, light on your computer.",
+            "TWO LOOP CUTS. Press Tab back into Edit Mode. A loop cut is a new ring of edges around a shape, and its job here is control: the smoother wants to round EVERYTHING, and a ring near an edge holds that edge crisp. Press Ctrl+R (Ctrl+R is loop cut), hover over the cup's side until a yellow ring appears around it, click once, then slide the ring up close to the rim and click again to set it. That is ONE ring. Now a second, separate Ctrl+R, slid down near the base. One at a time, far apart - the rim ring guards the lip, the base ring guards the foot. (The mouse wheel during Ctrl+R adds extra rings, but they slide together as a bunch - that is not this move.)",
+            "SHAPE THE BOTTOM. Still in Edit Mode, still in Face Select (3): orbit underneath the cup (middle-drag) and click its bottom face. Press I - I is Inset Faces. A smaller face appears inside the bottom, ringed by new faces; drag until that inner face is about the size of his in the video. This inset is the base detail - it is what makes the underside read as a made object instead of a flat disc once the smoother rounds it. (It does not thicken anything - the walls came from Solidify. This one shapes the bottom.)",
+            "ONE REFINEMENT HE MAKES. Near the end he clicks the Solidify in the Modifiers list and drags Thickness once more - chunkier, then thinner - settling where the wall looks right against the now-smoothed cup. The effects being live is the whole point: nothing is final until you say so.",
+            "SAVE. Shift+Ctrl+S is Save As. Give the file a name YOU choose - he leaves the name to you (his own ends in a number he bumps up as he works) - and save it somewhere you will find it. Guru ends every part by saving; so do you. Buddy ticks this step when the saved file holds the ring and the finished cup: open top, walls from Solidify, the Subdivision smoother still on it, its bottom inset, and the two loop cuts in place. One thing before you save: you are still in Edit Mode - the loop cuts and the inset all happened there - so press Tab back to Object Mode first, then save. Tab swaps between the two modes, and your last Edit Mode changes only settle into the shape itself as you Tab out of it; a save taken from inside Edit Mode can leave Buddy reading the cup as it was before those changes, so the step looks stuck even though your work is done.",
+        ],
+        "check": _check_first_cup,
+        "run": _tour_step_first_cup,
+    },
+    {
+        "id": "mug_reference",
+        "package": "donut",
+        "title": "Part 2 - The cup becomes a mug",
+        "how": "The reference photo moves in, the cup is reshaped against it, and a handle grows out of its own side.",
+        "video": {"url": "https://www.youtube.com/watch?v=K1UyEdmSttQ", "label": "Watch Part 2 on YouTube"},
+        "skill": "Working from a photo: reshaping a profile by eye with Alt+click loop selection and GG slides, extruding a handle out of the cup's own wall, and joining it back with hand-built faces",
+        "missing": "The cup itself becomes a mug - a handle grown from its own wall and joined back on, with no open holes left at the joint - its walls made permanent, and no plain, unworked cup still standing beside it.",
+        "tools": ["pull_face", "look_smooth", "save_work"],
+        "teach": [
+            "Part 2 turns your plain cup into a coffee mug. Everything in this part happens to the cup you already have - the mug IS the cup, reshaped. Nothing new is modelled beside it.",
+            "BRING IN THE PHOTO. Get a photo of a real mug to copy from - his is a handmade mug, and the link to it sits in the description under Part 2's video on YouTube (the series page links it too). Any clear, side-on photo of a handled mug works - the photo is a shape to copy, not an ingredient. You are still in Edit Mode from Part 1's inset, so press Tab back to Object Mode first: in Edit Mode the Shift+A menu offers only mesh shapes - the Image entry this move needs lives in the Object Mode Add menu, and hunting for it in the wrong menu reads exactly like it does not exist. Add it his way: Shift+A, then Image, then Reference; pick the file, and a flat picture stands in your scene. Pictures arrive lying at whatever angle the file had, so first press Alt+R: R is rotate, and Alt+R clears a thing's rotation back to zero - which is why the next turn lands exact. Then press R, then X, then type 90 and press Enter: R starts a rotate, X locks it to the tipping axis, and 90 stands the picture upright.",
+            "FIT THE PHOTO TO THE CUP. Press Numpad 1 for the Front view, and if the view is in Perspective, press Numpad 5 to switch it to Orthographic - in a flat front view, sizes compare honestly, nothing shrinking with distance. Ignore the picture frame's own size: the frame (Blender calls it an Empty) arrives 5 metres tall, and only the mug INSIDE the picture matters. Press S (S is scale) and shrink the picture until the pictured mug stands the same height as your cup. Then click your cup, press G, and stand it beside the photo with the rims level - this comparison is what you shape against.",
+            "RESHAPE THE CUP - THE METHOD (from about 5:00 in the video). Tab into Edit Mode. Press 2 for Edge Select (the middle of the three icons at the top left: 1 points, 2 edges, 3 faces). Alt+click a ring of edges: Alt+click selects a whole LOOP at once - an entire ring in one click - which is why he never picks edges one by one. Alt+click the top ring and press S (scale) to pull it in slightly, toward the photo's lip. Alt+click the ring below it and S it about halfway toward the first - his words are 'about halfway', because this is shaping by eye, not measuring. Now press G twice - GG - on the middle ring: that is edge slide, walking a ring up or down the wall without disturbing the shape around it. Slide it up to about 20% of the mug's height - the photo's widest point, its belly - and S it outward to meet the photo's curve. Keep going in the same rhythm - Alt+click a ring, GG to slide it, S to size it - until your cup's outline sits on the photo's outline.",
+            "THE BOTTOM AND THE FOOT. Press 3 for Face Select and click the bottom face; S it in a little - the base is narrower than the belly. Then press E and click straight away: E is extrude, pulling new shape out of the picked face, and this small drop becomes the mug's foot - the lip a real mug stands on. Guard it with two rings: Ctrl+R (loop cut) right at the very bottom, then Ctrl+R again just above it - rings near an edge hold that edge crisp while the smoother rounds everything else.",
+            "MAKE THE WALLS PERMANENT. Tab back to Object Mode first - the reshaping left you in Edit Mode, and Apply only works in Object Mode: in Edit Mode the Apply entry sits greyed out, and its own tooltip tells you this operation is not allowed from Edit mode. In Object Mode, find the Solidify effect in the Modifiers tab (the wrench) and click its dropdown arrow, then Apply (about 15:21). Applying bakes a live effect into the shape itself - the walls become real mesh. This has to happen BEFORE the handle grows: leave Solidify live and it would thicken the handle too. The Subdivision smoother stays live - he never applies that one. IF SOLIDIFY IS NOT IN THE LIST: Part 1's walls never landed on your cup. Add it now - Add Modifier, Generate, Solidify - give it a sensible thickness, and Apply it here. The mug ends up the same either way.",
+            "GROW THE HANDLE OUT OF THE CUP (about 16:44). The handle is not a new object - it is the cup's own wall, pulled out and walked around. Tab into Edit Mode, then press 3 for Face Select - you are in Object Mode (the walls were just made permanent there), and Face Select only exists in Edit Mode. Choose ONE face on the cup's side, dead centre at the height where a handle starts. Pick it from the Right view (Numpad 3): that view looks straight at the wall the handle leaves from, so the face sitting squarely in the middle of that wall is unmistakable. Then check the choice in the Top view (Numpad 7): it should sit squarely on the side the handle leaves from. Then work in the Front view (Numpad 1). Dead centre matters more than it looks: a face even ONE segment around the curve starts the handle at an angle, and every move after this one travels in the screen's flat plane, so each new segment lands a little further sideways than the last - by the end, the handle's end passes BESIDE the wall instead of meeting it, and no amount of pulling makes it land. If the end is not coming home, do not wrestle a wrong start: Ctrl+Z back to before the first E and pick the dead-centre face. Press E to extrude that face outward; press G (grab) and move the new segment up a little; press R (rotate) and turn it to follow the mug's slant. Add a ring near the handle's base - Ctrl+R - and GG-slide its top edge down a little to thin the handle where it leaves the cup: for that cut, hover the mouse over the HANDLE itself, over one of its long edges, so the yellow preview ring circles the handle - the same hover move as the cup's own rings in Part 1 - and do it from the Right view (Numpad 3) or a three-quarter orbit, not the flat Front view: from the front, the handle's long edges squash flat against the cup on screen and the preview ring has nothing clear to land on. The cut follows whatever your mouse is over, so if the preview ring wraps the cup instead, slide the mouse onto the handle before you click. Then keep walking: E to pull out the next segment, G to place it, R to turn it, over and down in small steps, until the end of the handle comes back to the cup's wall lower down - the loop in the photo. (His speed trick once the rhythm feels slow: Ctrl+right-click drops the next segment where your cursor is.)",
+            "JOIN IT BACK ON - HIS WAY (about 21:37 to 23:31). Ctrl+R a ring around the cup's body exactly at the height where the handle's end will land - hover over the cup's WALL so the yellow preview ring circles the cup, not the handle; the cut follows your mouse - and pull the handle's end face out until it touches the body. Judge that last approach from the Right view (Numpad 3) - looking straight at the wall the handle lands on - or orbit to a three-quarter view (hold the middle mouse button down and drag): in the flat Front view you have been working in, the end and the wall overlap on screen, and touching and hovering look exactly the same. Now build the joint BY HAND, the way he does it, and it is built POINT TO POINT: press 1 for Vertex Select - points, the first of the three icons at the top left. That switch is the whole move: in Face Select a click takes a whole face, never one corner point, so the sewing below cannot even start there - and F pressed on a crowd like that makes one big many-sided face (an n-gon) sprawled across the joint, not a sewn side. Before you pick a single point, CHANGE WHAT YOU ARE LOOKING AT: in the Front view, the end face's four corner points stack into just two spots on screen - the front pair hides the back pair - so two of the four corners cannot be clicked at all. Orbit to a three-quarter view (middle mouse button held down, drag) or press Numpad 3 for the Right view, looking at the wall from the handle's side, until all four corners of the end stand apart on screen. Then press Alt+Z: X-Ray. X-Ray makes the mesh see-through FOR SELECTING, so the far corners - the ones hidden behind the end face from where you sit - can be clicked through the surface. Part 3's icing step leans on this same X-Ray trick to catch the far side of the ring; here it is what makes the back two corners pickable at all. Now look at the BODY side of the joint before you pick a single point: the ring you just cut runs straight through the patch of body the end covers, so that patch is TWO body faces now - one above the ring, one below it - and the outline of the patch has SIX points, not four: a top pair (the top corners of the upper face), a middle pair (the ring's own two points, where the two faces meet), and a bottom pair (the bottom corners of the lower face). The sew joins the handle end's four corners to those six points, in SIX new faces. THE TOP FIRST: click the end's two top corner points, then Shift+click the body's top pair - FOUR points picked in all - and press F: F makes a face from the picked points, and that face sews the top shut. Why four: two points can only make an edge, a line with no surface on it, and a face is what closes the gap. THE BOTTOM NEXT: the end's two bottom corner points, then Shift+click the body's bottom pair, and F again - the same four-point move at the patch's other end. EACH SIDE then takes TWO faces, and the ring's point on that side is why: it sits halfway down the side of the patch, and one straight face from the end's top corner to its bottom corner would jump clean past it, leaving that point joined to nothing with a slit of open hole beside it. The side's first face: click the end's top corner point on that side, then Shift+click the body's top point on that side, the ring's point on that side, and the end's bottom corner point on that side - four points - and press F. What is still open on that side is now a three-cornered gap, so the side's second face takes only THREE points: the end's bottom corner point, the ring's point once more, and the body's bottom point on that side - press F, and a triangle closes it; a triangle is a proper face, not a shortcut. Build the same two faces on the other side, and the joint is sewn the whole way round - six new faces, and every point of the patch joined to something. Shift+click is the picker throughout this step: it adds ONE thing to your selection. Never Ctrl+click here: Ctrl+click selects the whole shortest PATH between the two clicked points - it would grab a swath of handle and wall faces, and the delete below would destroy them. Last, press 3 for Face Select again, and delete the THREE faces now hidden INSIDE the joint - the handle's end face and the two body faces the end covers, the one above the JOIN ring and the one below it: they sit inside the sewn joint where you cannot see them, which is the other thing X-Ray is for - still see-through, click the end face through the surface, Shift+click both body faces it covers, X, then Faces. Press Alt+Z once more to turn X-Ray off now the joint is done. Faces, because the rim edges around them must stay - your six new faces hang from them. Both body faces, never just one: leave either behind and it keeps an edge along the ring with no face on its other side - a slit of open hole hidden inside the finished joint, and the step will not pass it. (The video also shows a faster alternative at the end: with the end pulled to the body, press 3 for Face Select, delete both of those inside faces FIRST (click one, Shift+click the other, X, Faces), then press 2 for Edge Select and pick the two open rims edge by edge with Shift+clicks - a one-face hole has no ring to click; its four edges are picked by hand - then Edge, Bridge Edge Loops, and Blender sews them. It only works when both rims have the SAME number of edges, which is why the hand-built join is his main method.)",
+            "TIGHTEN AND SMOOTH. Where the handle meets the cup, the smoother can pinch: add a Ctrl+R ring near each attachment and GG-slide edges until the join reads clean - small rings near a join hold its shape the way the rim rings held the cup's lip. Then the shading: still in Edit Mode, press A (A is select all), then Shift+N - that recalculates which way every face points, Blender's fix for dark, inside-out-looking patches after a join. If black patches remain, press A then Shift+N once more NOW, while you are still in Edit Mode - both keys speak to the mesh being edited, so after the next move they do nothing at all. Then Tab back to Object Mode, right-click the mug, Shade Smooth.",
+            "SAVE (Ctrl+S). Buddy ticks this step when the cup itself has become the mug: a handle grown from its own wall AND joined back on - a handle ending in open holes does not tick, and neither does a separate mug modelled beside an untouched cup. (His homework, if you want it: model a saucer with these same moves - he shows his at the start of Part 4.)",
+        ],
+        "check": _check_mug_reference,
+        "run": _tour_step_mug_reference,
+    },
+    {
+        "id": "icing_hug",
+        "package": "donut",
+        "title": "Part 3 - Icing that hugs the donut",
+        "how": "A copy of the dough becomes the icing: shrink-wrapped on, thickened, dripped, applied, and sculpted.",
+        "video": {"url": "https://www.youtube.com/watch?v=9OA2asQdi_U", "label": "Watch Part 3 on YouTube"},
+        "skill": "Copying and modifier order: duplicate-in-place, the stack in his order - Shrinkwrap, Solidify, Subdivision Surface - applying modifiers top to bottom, and a first sculpting pass",
+        "missing": "A finished icing shell sitting on the dough: drips at its rim, all three modifiers applied away, and the file saved. Live Shrinkwrap or Solidify still showing means the part is half done.",
+        "tools": ["copy_it", "wrap_onto", "give_thickness", "make_smoother", "start_sculpting", "save_work"],
+        "teach": [
+            "Part 3 puts the icing on. Guru does not model it from nothing - he copies the dough and turns the copy into icing, which is why it fits perfectly.",
+            "TIDY FIRST. In the Outliner (the list of things, top right) double-click the cup's name and rename it Mug; rename the ring Donut (F2 does the same on a picked thing). Click the reference photo and press X, Delete - its job is done. Then click the Mug, press G, then X, and slide it sideways, well out of the shot: the icing work needs the donut alone in frame. (G then X is move, locked to the sideways direction - the mug keeps its height and depth while it slides.)",
+            "COPY THE DOUGH. Click the Donut and press Shift+D - duplicate: an exact copy appears, following your mouse. Press Esc straight away, so the copy stays exactly where the original is instead of sliding away. Press F2 and name the copy Icing. You now have two identical rings occupying the same space; the copy becomes the icing.",
+            "TAKE THE BOTTOM OFF. Press Numpad 1 (Front view) and Tab into Edit Mode on the Icing. Press 1 for Vertex Select - points now (1 is the first of the three icons at the top left). Press Alt+Z: X-Ray. X-Ray makes the mesh see-through FOR SELECTING, so a drag catches the far side too - without it, a drag-select catches only the points you can see, and the far side's bottom survives as a thin fin sticking through your finished icing. Drag a box over the whole bottom half of the ring - both sides, thanks to X-Ray. Press X, then Faces. Why Faces and not Vertices: deleting vertices would eat the middle ring of points too - the ring the icing's edge hangs from - while Faces removes only the bottom surfaces and leaves every point standing. Press Alt+Z again to switch X-Ray off. What remains is a curved shell - the top skin of the donut.",
+            "GIVE IT A SKIN - Solidify first, before any shaping (from about 11:29). You are still in Edit Mode from taking the bottom off, and you can stay right there: the Modifiers tab works the same in either mode, and the wavy edge after this needs Edit Mode anyway. Click the Icing, Modifiers tab (the wrench), Add Modifier, Generate, Solidify. Set Offset to 1: Offset chooses which way the new thickness grows, and at 1 it grows OUTWARD, away from the dough - at the default it grows inward and swallows the surface the icing has to show, the classic 'something's broken' of this part. Thickness itself: drag by eye; he never states a number in this part. Then, on the Solidify's header, click the monitor icon - its viewport display - OFF while you edit: with it on, the thickened skin hides the very points you are about to pull. You are only hiding the preview; the effect still lands when it is applied.",
+            "THE WAVY EDGE. This is point work, so you need Edit Mode: you are still in it from taking the bottom off and adding the skin - stay there. (If you Tabbed out somewhere along the way, press Tab to come back - the rim points below can only be picked in Edit Mode.) Turn Proportional Editing ON (the target-like button in the top bar of the 3D window, or press O): when you move one point, its neighbours follow with a soft falloff - which is what makes waves instead of spikes. Click a point on the shell's rim, press G, then Z - G moves, Z locks the move straight up and down - and pull the point down a little. The white circle around your cursor is the falloff's reach: scroll the mouse wheel (or press Page Up / Page Down) to grow or shrink it - a bigger circle makes a wider, lazier wave. Shrink the circle right down FIRST, until it is only a little wider than the one wave you are about to pull: it can take nine or ten Page Down presses to get there from the size the circle opens with, so do not count presses - the endpoint is the instruction, and the circle on screen tells you when you are there. At the size it opens with, the circle can cover the whole shell, and a single pull then drags everything at once as one lump instead of a wave. Work around the rim, varying the pulls - he works by eye (about 8:24 to 10:45), and the unevenness is the look.",
+            "THE RUNOFF DRIPS. Click TWO neighbouring rim points - click one, then Shift+click the next (Shift+click adds one point to the selection). Press E, then Z: E pulls new surface out of the picked points, Z keeps it dropping straight down. Pull down into a drip and click to set it. Repeat all around - little dribbles everywhere, varying the length and shape as you go. Machine-even drips read as fake; the variety is the realism.",
+            "SMOOTH IT, THEN GLUE IT ON. Add Modifier, Generate, Subdivision Surface - the smoother rounds the drip blocks into droplets. Then Add Modifier, Deform, Shrinkwrap: Shrinkwrap glues a shape onto another one - set its Target to Donut (click the Target box and pick Donut from the list). NOW ARRANGE THE STACK: drag Shrinkwrap by its grip strip to the TOP, so the list reads top to bottom: Shrinkwrap, Solidify, Subdivision Surface. Order is not decoration - each effect feeds the next. Wrap first and the thickness grows a clean shell on the wrapped skin; shrinkwrap after thickening and the icing fights the dough for the same space - that flickering where two surfaces coincide.",
+            "FINISH THE STACK. On the Subdivision Surface, set Levels Viewport to 2 - the preview smoothness he works at. On the Solidify, find Edge Data and raise the Crease values - Blender lists the crease as three numbers, Inner, Outer and Rim; raise all three together. The crease tells the smoother to hold the icing's edge tight against the dough instead of ballooning off it. How far is by eye - he never states a value; raise it until the edge sits ON the dough. Then, with proportional editing still on, pull a few rim points back UP a touch (G, then Z, as before) - spots where the dough peeks through make the icing read as poured, not printed.",
+            "APPLY ALL THREE - about 13:30, and this is the step everyone skips. You have to be in Object Mode for this: if the wavy edge and the drips left you in Edit Mode, press Tab first - in Edit Mode every Apply sits greyed out, the same trap as Part 2's walls. In Object Mode, starting from the TOP of the stack, click each modifier's dropdown and Apply, one at a time, top to bottom: Shrinkwrap, then Solidify, then Subdivision Surface. (His shortcut: Ctrl+A applies the top one.) Applying bakes each effect into the mesh. When you are done the icing has NO live modifiers left, and it no longer needs them - it IS the shape now. Buddy's tick checks exactly this: live, un-applied modifiers mean the part is half done.",
+            "SCULPT THE WAVES - about 14:26. Stay right here in the Buddy Model screen: switch the mode menu (top left of the 3D window) from Object Mode to Sculpt Mode. Sculpting is a MODE of this screen in Buddy's layout - there is no separate Sculpting tab to hunt for. (In plain Blender it is the Sculpting workspace along the top; the brushes are the same.) Press Numpad . to centre your view on the icing. Start with the Inflate/Deflate brush - it puffs or dents the surface: run it over the drip heads and along the edges, where hand-poured icing is never even. Size the brush with F - F is brush size: move the mouse until the circle fits, then click. Then the Grab brush: pull gentle waves and dips into the surface, working around the ring until it looks poured rather than machine-made.",
+            "SAVE (Ctrl+S). The tick comes when the icing sits on the dough as a finished, closed shell - drips at its rim, effects applied away, and the file saved. The sculpting above is the finishing touch - it is what makes the icing look poured - but the tick grades the shell itself, not the sculpting. If your modifiers are still live, you are at his halfway point, and the tick waits - keep going, exactly like he does. (His homework this part: a plate for the donut - Part 4 opens with his.)",
+        ],
+        "check": _check_icing_hug,
+        "run": _tour_step_icing_hug,
+    },
+    {
+        "id": "first_picture",
+        "package": "donut",
+        "title": "Part 4 - Plate, table, and a first picture",
+        "how": "The donut gets a plate and a table, a "
+                 "lattice bends it into a real shape, colour "
+                 "goes on, and the first render happens.",
+        "video": {"url": "https://www.youtube.com/watch?v=5Xlu2zwbJd0", "label": "Watch Part 4 on YouTube"},
+        "skill": "Setting a scene: a plate built from a flat circle, the Lattice bend, first colours, the subsurface glow recipe, ray tracing, and your first render",
+        "missing": "The donut resting on a plate on a table, ray tracing on, the glow recipe (Weight 1, Radius 1 1 1) on both dough and icing, and a render made.",
+        "tools": ["add_circle", "add_sheet", "give_colour", "take_picture", "save_work"],
+        "teach": [
+            "Part 4 puts the donut somewhere: on a plate, on a "
+            "table, with colour - and ends with your first real "
+            "picture of it.",
+            "THE PLATE - from a flat circle, at about 3:57. "
+            "Shift+A, Mesh, Circle. In the Add Circle panel set "
+            "the Fill Type to Ngon - one big face filling the "
+            "circle. The radius is yours to drag until the "
+            "circle looks like his plate under the donut (he "
+            "never states a number - match the picture). Tab "
+            "into Edit Mode, press E and click straight away: "
+            "the face is extruded in place. Press X, Faces, and "
+            "delete the top face only - you can see through the "
+            "plate from above now; that is correct. What remains "
+            "is the plate's floor with its rim edge standing "
+            "free. Select that rim edge (Alt+click it), then "
+            "walk it outward into the plate's rim the way he "
+            "does, about 5:33 to 7:24: E then S grows it out a "
+            "little; E then up (Z) raises the lip; E and S once "
+            "more flares it outward. Each move is by eye - watch "
+            "his rim grow and match the profile.",
+            "FINISH THE PLATE. Ctrl+R and add one loop cut "
+            "around the rim's wall so the curve later holds its "
+            "shape. Modifiers tab: Subdivision Surface, levels "
+            "2 - the rim curve appears. Then Solidify ABOVE it "
+            "in the stack (drag it up): his order for the plate "
+            "is Subdivision first, then Solidify dragged to the "
+            "top, its Thickness dragged thin by eye. The plate "
+            "has a real edge now, not a paper cutout.",
+            "THE TABLE. Shift+A, Mesh, Plane. Press S and type "
+            "2.4 - his exact number - and Enter: the plane "
+            "scales to his table size. Slide it down (G, then Z) "
+            "until its top is where the plate should rest.",
+            "SET THE TABLE. Slide the donut and its plate onto "
+            "the table, and bring the Mug back in from where it "
+            "was parked: G moves the selected object; set them "
+            "down like his frame at about 9:03 - donut on plate "
+            "at the middle, mug beside them, everything resting "
+            "on the tabletop, nothing floating.",
+            "BEND IT REAL - the Lattice, at about 10:38. A real "
+            "donut sags a little; a perfect torus does not. The "
+            "Lattice is a cage you bend, and the shape inside "
+            "follows. Press Shift+S and choose Cursor to "
+            "Selected with the donut picked - the 3D cursor (the "
+            "little target new objects are born at) jumps to the "
+            "donut. Shift+A, Lattice. In its panel set Resolution "
+            "W to 3. Scale the lattice (S) until it just wraps "
+            "the donut AND its icing. Then select donut and "
+            "icing, Shift+click the lattice last, and press "
+            "Ctrl+P, Set Parent To, Object: they are parented - "
+            "they now ride with the lattice. Right-click the "
+            "donut, Modifiers, Add Modifier, Deform, Lattice, "
+            "and in its Object box pick the lattice; do the same "
+            "for the icing. Tab into Edit Mode ON THE LATTICE "
+            "and squeeze its middle ring inward - the donut "
+            "pinches slightly, like it settled under its own "
+            "weight. Nudge a couple of other points while you "
+            "are there; he does this by eye.",
+            "MAKE THE BEND PERMANENT. Select the donut, find its "
+            "Lattice modifier, dropdown, Apply. Same for the "
+            "icing. Then delete the lattice itself (select it, "
+            "X). The sag stays - it is baked into the shapes "
+            "now - and the cage is gone.",
+            "FIRST COLOUR - about 16:17. His word for these is "
+            "placeholder: close enough to judge the picture, "
+            "replaced by real surfaces in Part 5. Click the "
+            "icing, open the Material Properties tab (the "
+            "checkerboard sphere), click New, and set Base Color "
+            "to a hot pink; set Roughness to 0.2 - his stated "
+            "number, the slider in the same panel. The mug gets "
+            "nearly black, the plate a plain mid grey - both by "
+            "eye, both placeholders.",
+            "THE FAMOUS GLOW - subsurface scattering, at about "
+            "24:38. Real frosting and dough are not solid all "
+            "the way through: light sinks in a little and "
+            "glows back out, which is why food looks soft and "
+            "edible. Blender's setting for it is called "
+            "Subsurface, in the same material panel. On the "
+            "icing and then the dough: set Subsurface Weight "
+            "all the way to 1 (he says 'let's just turn the "
+            "weight all the way up to one'), and set the Radius "
+            "to 1, 1, 1 - he clears the default numbers and "
+            "types 1 into all three boxes. The Scale box beside "
+            "them is how far the light travels once it sinks "
+            "in - different foods want different distances; he "
+            "leaves it standing in this part. Remember this "
+            "recipe - weight 1, radius 1 1 1 - Buddy checks it "
+            "exactly, because a weight of 0.2 is the same slider "
+            "at a setting he never used.",
+            "TURN RAY TRACING ON - about 20:48. In the Render "
+            "Properties tab (the camera-back icon), find Ray "
+            "Tracing and switch it ON. Guru is blunt about it: "
+            "it should have been on by default. It is what makes "
+            "Eevee's light bounce believably.",
+            "LINE UP THE CAMERA. Click the camera, then in the "
+            "View menu (or the camera's own panel) use Lock "
+            "Camera to View, and drag your view until the frame "
+            "looks like his first picture - donut left of "
+            "centre, mug behind it. Untick Lock Camera to View "
+            "when it sits right. The framing is by eye; he "
+            "states no camera numbers anywhere in the series.",
+            "RENDER. Press F12 - or Render menu, Render Image. "
+            "Your first picture of the donut appears. (Render "
+            "Slots: each render can live in its own slot - "
+            "press J over the picture to flip between two and "
+            "compare, the way he does at 21:04.) SAVE the file "
+            "(Ctrl+S). Buddy ticks when the plate, table, glow "
+            "recipe and ray tracing are all in place and a "
+            "render exists - objects found by their job in the "
+            "scene, because Guru does not name the plate and "
+            "table until Part 8, and your names are your own.",
+        ],
+        "check": _check_first_picture,
+        "run": _tour_step_first_picture,
+    },
+    {
+        "id": "real_surfaces",
+        "package": "donut",
+        "title": "Part 5 - Real surfaces",
+        "how": "Photo textures on every surface: the table "
+                 "wired by hand, the rest by the texture "
+                 "add-on, and the dough gets real displacement.",
+        "video": {"url": "https://www.youtube.com/watch?v=h30ZJQrb4s8", "label": "Watch Part 5 on YouTube"},
+        "skill": "Photo textures: wiring colour, roughness, normal and displacement pictures by hand, sRGB versus Non-Color, and real displacement on the dough",
+        "missing": "Every surface wearing the recipe on its own: table, plate and dough fully wired; the icing wired with its colour set by hand and its glow re-set; the dough displaced with a level-3 Subdivision Surface.",
+        "tools": ["paint_picture", "push_with_picture", "save_work"],
+        "teach": [
+            "Part 5 replaces Part 4's placeholder colours with "
+            "photographed surfaces. The real textures come from "
+            "Poliigon (his link is under the video) and most go "
+            "on with the Poliigon add-on - Buddy's tick does not "
+            "care how a texture got there, only that each "
+            "surface truly wears the recipe below.",
+            "THE WORKSPACE. Click the Shading tab along the top. "
+            "This is the material workshop: your object above, "
+            "its material as a chain of boxes - nodes - below. "
+            "A node's output plugs into the next node's input; "
+            "the chain ends at the Principled BSDF, the box "
+            "that decides how the surface answers light.",
+            "THE TABLE, WIRED BY HAND - about 0:00 to 7:27. He "
+            "deliberately does this one manually, 'because I "
+            "think it's good for you to know how to do this "
+            "stuff manually.' His concrete set has four "
+            "pictures: the colour photo, a roughness map (which "
+            "areas shine), a normal map (fake fine bumps), and "
+            "a displacement map (real height). For EACH picture: "
+            "Shift+A in the node area, Texture, Image Texture, "
+            "and open the picture. Then the rule that matters: "
+            "the COLOUR picture keeps its Color Space at sRGB; "
+            "every other picture gets Color Space set to "
+            "Non-Color - data maps are measurements, not "
+            "colours, and Blender must not 'correct' them. Wire "
+            "them: colour into Base Color; roughness into "
+            "Roughness; normal through a Normal Map node "
+            "(Shift+A, Vector, Normal Map) into Normal; the "
+            "displacement picture waits for the dough - the "
+            "table keeps its own simpler wiring here. Above the "
+            "chain, add a Texture Coordinate node and a Mapping "
+            "node (Shift+A, Input and Vector) feeding every "
+            "picture's Vector socket, and raise the Mapping's "
+            "Scale until the concrete's grain is the size it is "
+            "in his frame.",
+            "THE PLATE - about 7:46. First it is unwrapped: Tab "
+            "into Edit Mode, select all, U, Smart UV Project - "
+            "unwrapping flattens the shape's skin into a flat "
+            "map so a photo can wrap it without stretching (his "
+            "seams go where Part 3's icing crease runs, and the "
+            "plate follows the same idea). Then its texture set "
+            "goes on with the Poliigon add-on: select the plate "
+            "in the add-on, pick the ceramic set, and it wires "
+            "colour, roughness and normal the same way you just "
+            "did by hand.",
+            "THE ICING - about 12:57, and a repair at 16:22. "
+            "Its glaze set goes on the same add-on way. Then "
+            "Guru finds a mistake: Part 4's hand-set pink "
+            "survived, fighting the glazed look. His fix, in the "
+            "Shading workspace: DELETE the wire from the "
+            "texture's Color output into Base Color, and set "
+            "Base Color back to a pink by hand. The roughness "
+            "and normal pictures stay wired - they are what "
+            "make the glaze look wet - and he re-sets the "
+            "Subsurface by hand here too: Weight 1, Radius "
+            "1 1 1, the Part 4 recipe. Buddy's tick allows the "
+            "icing's colour to be hand-set exactly this way; "
+            "what it will not pass is a surface with no real "
+            "texture wiring at all.",
+            "THE DOUGH - about 19:05, the part's showpiece. Its "
+            "bread set goes on like the others. Then real "
+            "DISPLACEMENT: a Displacement node (Shift+A, Vector, "
+            "Displacement) takes the dough's displacement "
+            "picture and plugs into the Material Output node's "
+            "Displacement socket - the last node in the chain. "
+            "In the Material Properties panel set the Surface "
+            "Displacement dropdown to 'Displacement and Bump' - "
+            "that switch is what lets the height map move real "
+            "geometry instead of just faking shade. Add a "
+            "Subdivision Surface modifier to the dough with "
+            "Levels Viewport 3 and Render 3 - his stated "
+            "levels, because displacement needs a fine mesh to "
+            "carve. Then tune the Displacement node's Scale: he "
+            "tries 0.2, finds it too strong, and settles at "
+            "0.12 - his numbers. The crust goes craggy and real.",
+            "THE MUG waits: its texture is Part 6's job, and "
+            "Guru leaves it alone here - so does Buddy's tick.",
+            "SAVE (Ctrl+S). The tick reads every surface on its "
+            "own: table, plate and dough fully wired (colour, "
+            "a Non-Color data map, a normal map), the icing "
+            "wired with its hand-set colour and re-set glow, "
+            "and the dough carrying displacement at his "
+            "levels. One good surface cannot carry three bare "
+            "ones - that pooling was the old check's hole.",
+        ],
+        "check": _check_real_surfaces,
+        "run": _tour_step_real_surfaces,
+    },
+    {
+        "id": "unwrap_mug",
+        "package": "donut",
+        "title": "Part 6 - Mug seams, unwrapping, and coffee foam",
+        "how": "The mug gets its texture the proper way - "
+                 "seams, a clean unwrap - and the coffee's foam "
+                 "is built out of the mug itself.",
+        "video": {"url": "https://www.youtube.com/watch?v=yxAqN8TzFbo", "label": "Watch Part 6 on YouTube"},
+        "skill": "Unwrapping: seams marked where they hide, Live Unwrap, and a new surface - the coffee foam - built out of the mug's own rim",
+        "missing": "The mug wearing a real set of seams and a UV map, and the foam in its rim with a raised edge and a dipped middle - never a flat disc.",
+        "tools": ["split_off", "inset_face", "paint_picture", "save_work"],
+        "teach": [
+            "Part 6 gives the mug its real texture. The texture "
+            "arrives fine and lands wrong - the handle's UVs "
+            "are garbage - so this part is about unwrapping "
+            "properly: cutting the skin so it lies flat.",
+            "PUT THE TEXTURE ON - 0:00. Through the Poliigon "
+            "add-on, put the Rustic Gold Ceramic set on the "
+            "Mug. The free-rotation handles appear at the mug's "
+            "base: that unfinished look is what this part fixes.",
+            "A SMALL CLEANUP at 1:37: in the mug's material, "
+            "find the Roughness picture's wire into the "
+            "Principled and delete it (click the wire, X), then "
+            "set Roughness with its plain slider - he steers it "
+            "by eye to a soft sheen.",
+            "TURN ON ON CAGE. In the Modifiers tab, the mug's "
+            "Subdivision Surface has a small triangle button - "
+            "On Cage. Switch it on: the low-poly cage stops "
+            "hiding under its smoothed preview, which matters "
+            "because you are about to edit the cage.",
+            "MARK THE SEAMS - Ctrl+E, Mark Seam, from about "
+            "2:42. A seam is a cut line: where the skin will be "
+            "split to lie flat, like the seam of a garment. "
+            "Select an edge loop (Alt+click an edge), then "
+            "Ctrl+E and Mark Seam - it turns orange-red. His "
+            "layout, all of it: one loop at the handle's TOP "
+            "joint; one loop at its BOTTOM joint (the handle "
+            "becomes its own island); one vertical line down the "
+            "mug's side, just beside the handle where nobody "
+            "looks; the loop around the INSIDE at the base; one "
+            "vertical line down the inside; and the loop around "
+            "the UNDERSIDE. Six cuts, each where a real mug's "
+            "glaze would hide them.",
+            "LIVE UNWRAP. Turn on Live Unwrap in the UV Editing "
+            "workspace's options - from then on, every seam you "
+            "mark re-flattens the map instantly, so you can "
+            "watch each cut fix the stretching. Then his UV "
+            "toolkit finishes the job: the Mio3 UV add-on's "
+            "buttons (an extension he uses; its absence never "
+            "blocks the tick) and Gridify, which straightens the "
+            "curved side panel into a clean rectangle - watch "
+            "how much tidier the texture sits afterwards.",
+            "THE TABLE GOES DARK - about 21:52, off to the side "
+            "of the part and easy to miss: it is where the "
+            "finale's dark counter actually comes from. In the "
+            "Shading workspace, on the TABLE's material, add an "
+            "RGB Curves node (Shift+A, Color, RGB Curves) "
+            "between the colour picture and the Principled's "
+            "Base Color, and bend its line into a gentle S - "
+            "drag the shadow end DOWN and the top end up a "
+            "touch: the pale concrete darkens and gains "
+            "contrast. Then add a Hue Saturation Value node "
+            "(Shift+A, Color) after it and pull Saturation down "
+            "until the concrete's yellow-green cast is gone. "
+            "Both amounts are by eye - match his frame.",
+            "THE COFFEE FOAM - about 25:05, built from the mug "
+            "itself, never a new disc. Tab into Edit Mode on "
+            "the Mug and select the loop of edges around the "
+            "INSIDE of its rim - the coffee's edge. Shift+D "
+            "duplicates it in place; press Esc; then press P "
+            "(Separate) and choose Selection: the loop becomes "
+            "its own object. Tab out, select it, F2, name it "
+            "Foam. Back in Edit Mode on the Foam: select all "
+            "and press F - Fill: a skin stretches across the "
+            "ring. Press I and inset a little, creating the "
+            "foam's raised edge; select the new middle face and "
+            "press G, then Z, and lower it slightly - the dip "
+            "in the middle is what catches the light and reads "
+            "as a liquid surface. Press I once more for the "
+            "inner detail. Right-click, Shade Smooth.",
+            "FOAM TEXTURE - the 'Coffee Foam Atlas': one photo "
+            "holding NINE foam designs, and you use one. In the "
+            "UV editor, scale the foam's flattened shape down "
+            "until it covers just one design - he drags his "
+            "onto 'that one at the top', but any of the nine is "
+            "a legal coffee; his point is one design per cup, "
+            "not the whole sheet stretched across.",
+            "SAVE (Ctrl+S). Buddy ticks when the mug wears a "
+            "real set of seams (his six-cut layout - a stray "
+            "edge or two will not pass) and the foam sits in "
+            "the rim with its edge raised and its middle dipped "
+            "- a flat dark disc dropped in the top is not his "
+            "coffee and will not tick.",
+        ],
+        "check": _check_unwrap_mug,
+        "run": _tour_step_unwrap_mug,
+    },
+    {
+        "id": "scatter",
+        "package": "donut",
+        "title": "Part 7 - Sprinkles, scattered for real",
+        "how": "One sprinkle, a handful of hand-shaped "
+                 "variants, one shared rainbow material, and "
+                 "Blender 5's own scatter system does the rest.",
+        "video": {"url": "https://www.youtube.com/watch?v=_-QsGTL7pS0", "label": "Watch Part 7 on YouTube"},
+        "skill": "Scatter on Surface (Blender 5): collection instancing, weight-painting a distribution mask, and one material colouring every copy at random",
+        "missing": "The scatter modifier reading the way he set it: the Sprinkles collection with Pick Instance on, Density 900, Poisson Disk, and your painted Group wired as the Distribution Mask.",
+        "tools": ["add_tube", "paint_it", "save_work"],
+        "teach": [
+            "Part 7 covers the donut in sprinkles - hundreds of "
+            "them, placed by a system, not by hand. This part "
+            "needs Blender 5.0 or newer: the scatter tool below "
+            "is one of its new features, and there is no older-"
+            "Blender version of this step.",
+            "PLANT THE CURSOR FIRST - about 0:00. Before making "
+            "anything, he clicks on the donut's top with Shift+"
+            "right-click: that plants the 3D cursor there. The "
+            "cursor is where new objects are born - it is why "
+            "the sprinkle appears on the donut instead of at "
+            "the world's centre.",
+            "ONE SPRINKLE. Shift+A, Mesh, Cylinder. In its "
+            "panel: drag Radius down to nearly nothing, then "
+            "back up a touch; lengthen the Depth; and set "
+            "Vertices to 6 - his exact number; a sprinkle is a "
+            "hexagonal sliver, not a tube. The radius and depth "
+            "amounts are dragged by eye; there is no typed "
+            "value. Add a Subdivision Surface modifier and two "
+            "loop cuts (Ctrl+R) near the ends so the caps round "
+            "off; right-click, Shade Smooth; press F2 and name "
+            "it Sprinkle.",
+            "THE VARIANTS - about 4:23. Real sprinkles are not "
+            "identical, so: Shift+D duplicates the sprinkle "
+            "several times (his screen ends with six), and each "
+            "copy is twisted, bent and resized BY HAND until "
+            "they are all cousins, not clones. While they are "
+            "all selected, right-click and Set Origin, Origin "
+            "to Geometry - each sprinkle's centre dot moves "
+            "into its middle, so scattered copies sit INTO the "
+            "icing instead of floating on their ends.",
+            "FILE THEM AWAY. Select all the variants and press "
+            "M, Move to Collection, New Collection, and name it "
+            "Sprinkles. Then, in the Outliner (the list of "
+            "everything, top right), untick the checkbox beside "
+            "the Sprinkles collection: the originals vanish "
+            "from view AND from renders. They are not deleted - "
+            "the scatterer is about to read them from that "
+            "collection.",
+            "ONE MATERIAL FOR ALL OF THEM - about 6:26. He is "
+            "explicit about the system: ONE material, named "
+            "Sprinkles, on every variant - not a colour per "
+            "shape. (Link materials between the copies with "
+            "Ctrl+L, Link, Materials.) The rainbow lives in its "
+            "nodes: in the Shading workspace, add an Object "
+            "Info node (Shift+A, Input, Object Info) - its "
+            "Random output is a different steady number for "
+            "every scattered copy - and a Color Ramp node "
+            "(Shift+A, Converter, Color Ramp). Wire Random into "
+            "the ramp's Fac, set the ramp's interpolation to "
+            "Constant (the dropdown on the ramp - Constant means "
+            "each copy gets ONE flat colour, never a blend), "
+            "wire the ramp's Color into Base Color, and fill "
+            "the ramp with his palette: aqua takes most of the "
+            "bar (it is the primary colour), then purple, pink, "
+            "white and yellow in smaller slices, saturation "
+            "kept under full. Set Roughness by eye - 'a little "
+            "bit shiny' - and the Subsurface recipe from Part "
+            "4, with the Scale turned really low (his words; "
+            "the finale retunes it to a stated number).",
+            "PAINT WHERE THEY MAY LAND - about 12:44. Select "
+            "the Icing and enter Weight Paint mode (the mode "
+            "dropdown, top left). Weight painting paints an "
+            "invisible strength map onto a shape: red is full "
+            "strength, blue is none. Turn on Front Faces Only "
+            "in the brush options so you do not paint through "
+            "to the underside. Paint the top of the icing red; "
+            "paint softer - lighter pressure - down the edges. "
+            "The values live in a VERTEX GROUP (a named list of "
+            "points with strengths); Blender names yours "
+            "'Group' automatically, and his keeps that name - "
+            "do not rename it, the scatterer is about to look "
+            "for it.",
+            "SCATTER - the modifier, about 8:35 in his order of "
+            "work and the heart of the part. Select the Icing, "
+            "Modifiers tab, Add Modifier, and add Scatter on "
+            "Surface (one of the new built-in geometry systems "
+            "in Blender 5). Walk its panel top to bottom the "
+            "way he does: Instancing Type set to Collection, "
+            "and the Collection box set to your Sprinkles "
+            "collection; Pick Instance ON (each scatter point "
+            "then takes a whole variant); Reset Transform - he "
+            "presses it and the sprinkles lie down along the "
+            "surface; Alignment Axis to Y (a sprinkle's length "
+            "now follows its Y, so it lies along the icing "
+            "instead of standing on end); Randomize ON, with "
+            "Rotation Y at 360 degrees and X turned just a "
+            "little - his words, no number given; Surface "
+            "Offset nudged up very, very slightly, so they sit "
+            "ON the icing instead of in it.",
+            "THE MASK - about 17:00, and he warns about this "
+            "one himself: under Masking, the Distribution Mask "
+            "input takes your painted group - set it to the "
+            "attribute named Group. NOT the Density input "
+            "(plugging the paint there is the mistake he calls "
+            "out). Sprinkles now only grow where you painted, "
+            "thick on top, thinning at the edges, none "
+            "underneath.",
+            "DENSITY - about 26:58. Set the Density Method "
+            "dropdown to Density and the Density itself to "
+            "900 - his stated number. (The other method, Total, "
+            "spreads a fixed count over the whole surface "
+            "however big it is; Density keeps them evenly "
+            "packed.) Set the Distribution Method to Poisson "
+            "Disk and give the Minimum Distance a small value "
+            "- by eye, until the sprinkles stop touching - and "
+            "cycle the Seed number until a random arrangement "
+            "pleases you; both of those are taste, and his are "
+            "never stated.",
+            "ONE GLOBAL LOOK - about 33:34. In the Render "
+            "Properties, under Color Management, set the Look "
+            "to Medium High Contrast. He makes it a standing "
+            "choice for the series - it is the same contrast "
+            "the final Part 8 picture is rendered with.",
+            "SAVE (Ctrl+S). Buddy's tick reads the scatter "
+            "modifier itself: collection instancing with Pick "
+            "Instance, Density at 900, Poisson Disk, the "
+            "painted group wired as the mask attribute with "
+            "real paint in it, and the variants sharing the one "
+            "Object Info rainbow material. Scattering sprinkles "
+            "by any other system does not tick - this part is "
+            "about HIS new system.",
+        ],
+        "check": _check_scatter,
+        "run": _tour_step_scatter,
+    },
+    {
+        "id": "final_picture",
+        "package": "donut",
+        "title": "Part 8 - The final picture",
+        "how": "Sun, window light through two blockers, a "
+                 "blue sky light and a warm bounce, a light "
+                 "probe, depth of field - and the photograph.",
+        "video": {"url": "https://www.youtube.com/watch?v=WobATxh3i-g", "label": "Watch Part 8 on YouTube"},
+        "skill": "Lighting a photograph: a sun through window blockers, sky and bounce point lights, a Light Probe Volume, depth of field, shadow Steps",
+        "missing": "His rig in place - sun at about 10, two upright blockers, blue Sky and white Indoor Bounce, the probe at resolution 4, shadow Steps at 16, the camera focused on the icing, the set parented - and a fresh render.",
+        "tools": ["add_sun", "add_lamp", "add_sheet", "take_picture", "save_work"],
+        "teach": [
+            "Part 8 is photography: the scene is done, and now "
+            "it gets lit, framed and shot like a cafe photo on "
+            "a magazine page.",
+            "HOUSEKEEPING - about 0:15. Parenting first: "
+            "selecting a child, then Shift+clicking its parent "
+            "and pressing Ctrl+P, Object (Keep Transform) makes "
+            "the child ride with the parent without jumping. "
+            "Do it four times: the Icing parents to the Donut; "
+            "the Donut to the Plate; the Foam to the Mug; and "
+            "the Plate and the Mug to the Table. Now moving the "
+            "table carries the whole set. Then the last two "
+            "names of the series: F2 on the plane - Table. F2 "
+            "on the plate - Plate. (Yes, here at the end is "
+            "where those names come from.)",
+            "THE SUN - about 2:11. Select the lamp that has "
+            "been in your scene since Part 1 and press F2: "
+            "Sun. In its Light panel, change its Type to Sun - "
+            "a sun light throws even, parallel light across "
+            "everything, like real daylight - and set its "
+            "Strength to about 10 ('I keep this around 10'). "
+            "Its Temperature slider (the Kelvin colour of the "
+            "light, a newer-Blender feature where your copy "
+            "has it) is warmed until the light looks like an "
+            "early morning - he states no number; warm it by "
+            "eye. Angle the sun so the light comes from the "
+            "right of your frame.",
+            "THE WINDOW TRICK - about 5:28. A bare sun floods "
+            "everything; a sun seen through a window lays one "
+            "bright sliver across the table. Shift+A, Mesh, "
+            "Plane - a blocker. Move it to stand between the "
+            "sun and the set, then R, then X, then hold Ctrl "
+            "while rotating until it snaps to exactly 90 "
+            "degrees, standing upright. Shift+D duplicates it; "
+            "R, Z, 90 turns the copy upright the other way. "
+            "Two walls of light-shade, with a gap between them "
+            "- slide them (G) until a sliver of sun falls "
+            "across the donut and the rest of the table sits "
+            "in softer shade. The sizes and exact positions are "
+            "worked by eye; watch his light, then place yours.",
+            "A LITTLE RESTAGING - about 7:26: with the light "
+            "placed, he slides the mug further back (G, and "
+            "Shift+Z keeps it sliding flat across the table's "
+            "plane instead of floating) until the composition "
+            "balances - donut front and bright, mug behind in "
+            "the shade's edge. By eye, as always with framing.",
+            "FILE THE LIGHTS AWAY - about 8:16: select the sun "
+            "and both blockers, press M, Move to Collection, "
+            "New Collection, and name it Lighting. The stage "
+            "hands live in one drawer now.",
+            "THE SKY - about 8:49. Select the Sun and Shift+D: "
+            "a copy. F2 - Sky. Change its Type to Point (a "
+            "light that glows out in all directions from one "
+            "spot, like a bulb). This dome of sky does the soft "
+            "ambient fill: set its Colour by clicking the "
+            "colour box and choosing a soft, slightly purple "
+            "blue (he clears the warm temperature tint first) "
+            "- the value is by eye. Move it up high, to where a "
+            "window's sky would be. And increase its Radius 'by "
+            "a lot' - a big light source makes very soft "
+            "shadows, and the sky's shadows should be nearly "
+            "shadowless. Amount unstated; open it right up.",
+            "THE BOUNCE - about 13:23. Shift+D the Sky: F2 - "
+            "Indoor Bounce. Clear its Colour back to plain "
+            "white (the default) and set its Power back to "
+            "10 - the default, his stated resting value. "
+            "Position it off on the set's dark side, lower, "
+            "where light that hit a cafe wall would bounce "
+            "back from. This is the gentlest light in the rig - "
+            "it just lifts the shadows so they are dark, not "
+            "dead.",
+            "THE CAMERA - about 15:05. Turn on Lock Camera to "
+            "View (the camera's panel, or the View menu) and "
+            "pull your view closer until the donut fills the "
+            "frame the way his does - big, left of centre, the "
+            "mug behind it right, the plate running off the "
+            "bottom edge. Untick the lock. No lens change is "
+            "made or stated anywhere in the series - the "
+            "framing is distance and angle, both by eye.",
+            "EEVEE QUALITY - about 15:36. In the Render "
+            "Properties, under Shadows, find Steps and set it "
+            "to 16 - the maximum. His words: the default 'is "
+            "wrong' and 'should be maxed out' - at 16 the "
+            "sun's shadow edges turn clean. The render samples "
+            "he reads off as they stand: Viewport 16, Render "
+            "64. (Ray tracing was switched on back in Part 4 - "
+            "it stays on.)",
+            "RETUNE UNDER THE LIGHT - the subsurface Scale is "
+            "the one material number the finale states twice: "
+            "on the ICING set the Subsurface Scale to 0.03; on "
+            "the SPRINKLES material set it to 0.08 (he tries "
+            "0.06 on the sprinkles first, then decides 0.08 - "
+            "0.08 is the value that ships). Weight stays 1 and "
+            "Radius 1 1 1 everywhere, as set in Part 4.",
+            "THE LIGHT PROBE - about 20:17. Eevee's fast "
+            "renderer needs help with bounced light indoors: a "
+            "Light Probe Volume is a box that samples the "
+            "light around the set and feeds it back as soft "
+            "bounce. Shift+right-click the donut (cursor "
+            "there), Shift+A, Light Probe, Volume. Scale the "
+            "box (S) until it just encapsulates the set, its "
+            "points sitting just above the table. Set its "
+            "Resolution to 4 - his stated value ('I probably "
+            "only need about three. No, I'll go four'). He "
+            "then nudges a couple of the box's points by hand - "
+            "one to the plate's edge, one inside the donut - "
+            "and presses Bake Light Cache in the Render "
+            "Properties: Blender pre-cooks the bounce. (Baking "
+            "on some machines waits for a GPU; the probe and "
+            "its resolution are what Buddy grades.)",
+            "DEPTH OF FIELD - about 22:30. Click the camera, "
+            "open its Depth of Field section, switch it ON, "
+            "and set Focus Object to the Icing - click the "
+            "eyedropper, then the icing (he picks it in the "
+            "Outliner because the probe box intercepts clicks "
+            "in the view). The background now falls softly out "
+            "of focus like a real camera's. The F-Stop he "
+            "never states - Blender's own resting value "
+            "stands; widening or narrowing it is your taste.",
+            "SUN SHADOW JITTER - about 24:36: on the Sun, in "
+            "its Shadow settings, switch Jitter ON. It softens "
+            "the shadow edge in the final render. His warning "
+            "comes with it: leave the VIEWPORT jitter off - in "
+            "the working view it just looks like noise.",
+            "THE COMPARISON - about 25:25. He renders twice: "
+            "F12 for the Eevee picture, then switches the "
+            "render engine to Cycles (the Render Properties' "
+            "top dropdown - on his machine the GPU does it: "
+            "Preferences, System, Cycles Render Devices) and "
+            "renders again into another slot, flipping between "
+            "them with J. Eevee is the series' photograph; "
+            "Cycles is the slower, truer second opinion. Judge "
+            "yours the same way.",
+            "SAVE (Ctrl+S) - and the series is done. Buddy "
+            "ticks the finale on the rig itself: a sun at "
+            "about 10, two upright blockers, the blue sky "
+            "point and the white bounce at 10, a probe volume "
+            "at resolution 4, shadow steps at 16, the camera's "
+            "focus on the icing, the parenting done, the "
+            "retuned glow - and a fresh render on file. When "
+            "it ticks, you have built the donut the way he "
+            "built it: every part, in order, with nothing "
+            "done for you.",
+        ],
+        "check": _check_final_picture,
+        "run": _tour_step_final_picture,
+    },
 ]
 
 
@@ -3085,12 +6103,47 @@ class BUDDY_OT_action(Operator):
                     mode = "OBJECT"
                 result = bpy.ops.object.mode_set(mode=mode)
             elif kind == "modifier":
+                obj = context.object
+                before = {m.name for m in obj.modifiers} \
+                    if obj is not None else set()
                 result = bpy.ops.object.modifier_add(type=act["target"])
-                mod = context.object.modifiers[-1] if context.object.modifiers else None
-                if mod is not None:
-                    for prop, value in _MOD_DEFAULTS.get(act["target"], {}).items():
-                        if hasattr(mod, prop):
-                            setattr(mod, prop, value)
+                mod = None
+                if obj is not None:
+                    for m in obj.modifiers:
+                        if m.type == act["target"] \
+                                and m.name not in before:
+                            mod = m
+                            break
+                if mod is None:
+                    # A press must never be a silent no-op
+                    # (walkthrough gap 1.16: the step card's
+                    # own modifier buttons produced nothing
+                    # and said nothing - the saved file held
+                    # no modifiers at all, and the NEXT step's
+                    # instruction dead-ended on the missing
+                    # effect). Verify the effect exists, and
+                    # say plainly when it does not.
+                    self.report(
+                        {"ERROR"},
+                        f"No effect was added - '{act['plain']}' "
+                        "did not land on the picked thing. Click "
+                        "the shape itself once so it is outlined "
+                        "orange, then press the button again. "
+                        "When it works, the effect's name "
+                        "appears in the Modifiers tab (the "
+                        "wrench) on the right.")
+                    return {"CANCELLED"}
+                for prop, value in _MOD_DEFAULTS.get(
+                        act["target"], {}).items():
+                    if hasattr(mod, prop):
+                        setattr(mod, prop, value)
+                self.report(
+                    {"INFO"},
+                    f"Done - {act['plain']}: '{mod.name}' is "
+                    f"now on '{obj.name}'. See it in the "
+                    "Modifiers tab (the wrench) on the right - "
+                    "that list is where it lives.")
+                return {"FINISHED"}
             elif kind == "custom":
                 result = _CUSTOM[act["target"]](context)
             else:
@@ -3227,9 +6280,12 @@ class BUDDY_OT_tour_do(Operator):
 # The Buddy Expert: plug in your own AI key and a small expert lives in
 # the panel - and floats over the 3D window - answering in plain words
 # about YOUR scene. It can also point at the exact Buddy button for
-# the job, with a Do-it button right there. The key is the user's own,
-# stored in Blender's preferences on their own computer; Buddy brings
-# no key and charges nothing.
+# the job, drawn as one press the user makes themselves. The Expert
+# is an assistant to a creator: it answers, explains, sets exact
+# values, wires nodes and fetches ingredients for bounded tasks the
+# user asks for - the user is always the author. The key is the
+# user's own, stored in Blender's preferences on their own computer;
+# Buddy brings no key and charges nothing.
 # ----------------------------------------------------------------------------
 
 _EXPERT_DEFAULT_URL = "https://api.openai.com/v1/chat/completions"
@@ -3315,9 +6371,50 @@ class BUDDY_Preferences(AddonPreferences):
         _WRAP_CAP = _fit_width(context)
         layout = self.layout
         layout.prop(self, "expert_service")
-        layout.prop(self, "expert_key")
-        layout.prop(self, "expert_url")
-        layout.prop(self, "expert_model")
+        if self.expert_service == "CODEX":
+            # Status FIRST, with the remedy as a button: the login
+            # is one click from here, not a treasure hunt.
+            found = _find_codex()
+            if found:
+                signed = _codex_login_status(found)
+                if signed == "in":
+                    _wrap(layout, f"Codex: found at {found}, and "
+                                  "signed in. The expert can ask "
+                                  "through your ChatGPT login.")
+                elif signed == "out":
+                    _wrap(layout, f"Codex: found at {found}, but "
+                                  "not signed in yet. Open it and "
+                                  "sign in with your ChatGPT "
+                                  "account - that's the whole setup.")
+                else:
+                    _wrap(layout, f"Codex: found at {found}. If "
+                                  "you're signed in there, the "
+                                  "expert works through your "
+                                  "ChatGPT login.")
+                layout.operator("buddy.open_codex",
+                                text="Open Codex to sign in")
+            else:
+                _wrap(layout, "Codex: not installed on this "
+                              "computer. Install OpenAI's Codex "
+                              "program, open it once and sign in "
+                              "with your ChatGPT account - then "
+                              "this page will say 'found' and the "
+                              "expert works.")
+            _wrap(layout, "The key, address and model fields "
+                          "don't apply to the ChatGPT route - "
+                          "Codex uses its own - so they're hidden "
+                          "here rather than pretending to matter.")
+        elif self.expert_service == "LOCAL":
+            layout.prop(self, "expert_url")
+            layout.prop(self, "expert_model")
+            _wrap(layout, "A local AI needs no key and no login - "
+                          "it just has to be running (for example "
+                          "Ollama). Buddy checks it's answering "
+                          "before it asks.")
+        else:
+            layout.prop(self, "expert_key")
+            layout.prop(self, "expert_url")
+            layout.prop(self, "expert_model")
         layout.prop(self, "expert_float")
         layout.operator("buddy.test_expert",
                         text="Test this connection")
@@ -3327,16 +6424,6 @@ class BUDDY_Preferences(AddonPreferences):
             status = ""
         if (status or "").strip():
             _wrap(layout, status)
-        if self.expert_service == "CODEX":
-            found = _find_codex()
-            if found:
-                _wrap(layout, f"Codex program: found ({found}).")
-            else:
-                _wrap(layout, "Codex program: not found on this "
-                              "computer yet. Install OpenAI's Codex "
-                              "program, open it once and sign in "
-                              "with your ChatGPT account, then press "
-                              "Test this connection.")
         _wrap(layout, "Why no plain 'log in with ChatGPT or Muse' "
                       "button? Those companies don't offer one to "
                       "other apps: a ChatGPT or Claude subscription "
@@ -3374,7 +6461,12 @@ class BUDDY_Preferences(AddonPreferences):
                       "of your scene (what's in it, what you have "
                       "picked, which mode you're in). Nothing else "
                       "is sent. A key stays on your computer, in "
-                      "Blender's own preferences.")
+                      "Blender's own preferences. One honest "
+                      "exception to picture: on the ChatGPT route "
+                      "the question goes to OpenAI's Codex program "
+                      "on your computer, and that program does its "
+                      "own work there - Buddy hands it the same "
+                      "question and scene description, no more.")
 
 
 def _expert_settings():
@@ -3393,15 +6485,44 @@ def _is_local_url(url):
     return (url or "").startswith(("http://localhost", "http://127.0.0.1"))
 
 
+_LOCAL_PROBE = {"at": 0.0, "ok": False, "url": ""}
+
+
+def _local_alive(url):
+    """Is a local AI actually answering at this address right now?
+    Probed for real (a short GET on the server's own version page),
+    cached for a few seconds so the panel can ask on every draw
+    without hammering. Until this existed, 'ready' for a local AI
+    was a guess that was always yes - so when the server was off,
+    the ask failed and the one message written for exactly that
+    failure could never be shown."""
+    base = (url or "").split("/v1/")[0].rstrip("/")
+    if not base:
+        return False
+    now = time.monotonic()
+    if _LOCAL_PROBE["url"] == base and now - _LOCAL_PROBE["at"] < 8.0:
+        return _LOCAL_PROBE["ok"]
+    ok = False
+    try:
+        req = urllib.request.Request(base + "/api/version",
+                                     method="GET")
+        with urllib.request.urlopen(req, timeout=0.7) as resp:
+            ok = resp.status == 200
+    except Exception:
+        ok = False
+    _LOCAL_PROBE.update(at=now, ok=ok, url=base)
+    return ok
+
+
 def _expert_ready(settings):
     """Can the expert actually be asked right now? A key for key
-    services, the Codex program for ChatGPT login, nothing at all
-    for a local AI."""
+    services, the Codex program for ChatGPT login, and for a local
+    AI: the local AI itself, answering."""
     service = settings.get("service", "KEY")
     if service == "CODEX":
         return _find_codex() is not None
     if service == "LOCAL":
-        return True
+        return _local_alive(settings.get("url"))
     return bool(settings.get("key")) or _is_local_url(settings.get("url"))
 
 
@@ -3415,9 +6536,11 @@ def _expert_setup_message(settings):
                 "Buddy asks through it, so your login never touches "
                 "Buddy.")
     if service == "LOCAL":
-        return ("The expert is set to a local AI, but it didn't "
-                "answer. Make sure your local AI (for example "
-                "Ollama) is running, then ask again.")
+        return ("The expert is set to a local AI, but nothing is "
+                "answering on this computer. Start your local AI "
+                "(for example Ollama), then ask again - a local AI "
+                "needs no key and no internet, it just has to be "
+                "running.")
     if service == "CLAUDE":
         return ("The expert is set to Claude, but no Claude key is "
                 "pasted yet. Press 'Set up the expert' and paste "
@@ -3428,6 +6551,114 @@ def _expert_setup_message(settings):
             "and either paste your own AI key, choose ChatGPT login "
             "(through OpenAI's Codex program), or choose a local AI "
             "- the key stays on your computer.")
+
+
+class _ExpertFault(Exception):
+    """An expert failure that already knows what it is. The
+    transports raise these with a plain kind; _fault_message turns
+    the kind into the exact words the user reads. Until this
+    existed, every failure - wrong key, rate limit, dead local
+    server, missing model, signed-out Codex - collapsed into one
+    sentence about checking the setup and being online."""
+    def __init__(self, kind, detail=""):
+        super().__init__(kind)
+        self.kind = kind
+        self.detail = detail
+
+
+def _fault_message(settings, exc):
+    """Name the actual fault, in plain words, with the remedy.
+    This is the ONLY way an ask failure reaches the user."""
+    service = (settings or {}).get("service", "KEY")
+    model = (settings or {}).get("model", "") or "the named model"
+    if isinstance(exc, _ExpertFault):
+        kind, detail = exc.kind, exc.detail
+        if kind == "key_refused":
+            if service == "CLAUDE":
+                return ("Your Claude key was refused by Anthropic "
+                        "(the service answered: not accepted). Check "
+                        "the key in the expert's setup - a copied key "
+                        "with a missing character reads exactly like "
+                        "this - then ask again.")
+            return ("Your key was refused by the AI service (the "
+                    "service answered: not accepted). Check the key "
+                    "in the expert's setup - a copied key with a "
+                    "missing character reads exactly like this - "
+                    "then ask again.")
+        if kind == "rate_limited":
+            return ("The AI service says too many asks in a row "
+                    "(a rate limit). Wait a minute, then ask again "
+                    "- nothing is broken.")
+        if kind == "model_missing":
+            if service == "LOCAL":
+                return (f"Your local AI is running, but the model "
+                        f"'{model}' isn't downloaded yet, so it "
+                        f"can't answer. Download it first (for "
+                        f"Ollama: ollama pull {model}), then ask "
+                        f"again.")
+            return (f"The AI service doesn't know a model called "
+                    f"'{model}'. Check the model name in the "
+                    f"expert's setup, then ask again.")
+        if kind == "unreachable":
+            if service == "LOCAL" or _is_local_url(
+                    (settings or {}).get("url")):
+                return ("Your local AI isn't running - nothing "
+                        "answered at its address on this computer. "
+                        "Start it (for example Ollama), then ask "
+                        "again.")
+            return ("Nothing answered at the AI service's address "
+                    "- the service may be down, or this computer "
+                    "may be offline. Give it a moment, then ask "
+                    "again.")
+        if kind == "timeout":
+            if service == "LOCAL" or _is_local_url(
+                    (settings or {}).get("url")):
+                return ("Your local AI is running, but it didn't "
+                        "finish an answer even given several "
+                        "minutes. On a computer without a graphics "
+                        "card a local model thinks slowly, and "
+                        "Buddy describes your scene in detail - "
+                        "that combination can simply be slow, not "
+                        "broken. A smaller or faster local model "
+                        "answers sooner; the key and ChatGPT routes "
+                        "answer in seconds.")
+            return ("The AI service didn't answer in time - it "
+                    "may be busy or this connection may be slow. "
+                    "Nothing is wrong with your setup; ask again "
+                    "in a moment.")
+        if kind == "service_error":
+            return (f"The AI service answered with an error "
+                    f"(code {detail}). That's the service's side, "
+                    f"not your scene - give it a moment, then ask "
+                    f"again.")
+        if kind == "codex_missing":
+            return ("The expert is set to use your ChatGPT login, "
+                    "but OpenAI's Codex program isn't on this "
+                    "computer yet. Install Codex (it's OpenAI's own "
+                    "program), open it once and sign in with your "
+                    "ChatGPT account, then ask again - Buddy asks "
+                    "through it, so your login never touches Buddy.")
+        if kind == "codex_signed_out":
+            return ("The Codex program is on this computer, but "
+                    "you're not signed in to it yet. Open Codex "
+                    "(there's a button in the expert's setup), sign "
+                    "in with your ChatGPT account once, then ask "
+                    "again.")
+        if kind == "codex_failed":
+            tail = f" Its own last words: {detail}" if detail else ""
+            return ("The Codex program didn't answer properly."
+                    f"{tail} Try once more; if it keeps happening, "
+                    "open Codex itself and check it's signed in and "
+                    "well.")
+        if kind == "empty_reply":
+            return ("The expert answered with nothing readable. "
+                    "Ask once more - if it repeats, the model name "
+                    "in the setup may not be one the service knows.")
+    return ("The expert didn't answer - something went wrong that "
+            "Buddy can't name yet"
+            + (f" ({str(exc)[:70]})" if str(exc) else "")
+            + ". Ask once more; if it keeps happening, the setup "
+            "in the add-on's preferences shows the ways to connect.")
 
 
 def _run_cli(argv, timeout=120):
@@ -3482,40 +6713,124 @@ def _find_codex():
     return None
 
 
+def _codex_login_status(path):
+    """Ask the Codex program itself whether it's signed in:
+    'in', 'out', or 'unknown' (the check itself failed - proceed
+    and let the ask speak). Uses the program's own status
+    command; Buddy never touches the login itself."""
+    try:
+        out = _run_cli([path, "login", "status"], timeout=20)
+    except Exception:
+        return "unknown"
+    text = (out or "").lower()
+    if "not logged in" in text or "not signed in" in text:
+        return "out"
+    if "logged in" in text or "signed in" in text:
+        return "in"
+    return "unknown"
+
+
 def _ask_via_codex(system, user):
     path = _find_codex()
     if not path:
-        raise RuntimeError(
-            "the Codex program isn't on this computer yet - install "
-            "OpenAI's Codex program, open it once and sign in with "
-            "your ChatGPT account, then ask again")
-    out = _run_cli([path, "exec", "-s", "read-only",
-                    "--skip-git-repo-check", f"{system}\n\n{user}"])
-    text = (out or "").strip()
+        raise _ExpertFault("codex_missing")
+    if _codex_login_status(path) == "out":
+        raise _ExpertFault("codex_signed_out")
+    # Take the reply from the program's own final-message file,
+    # not its whole output: the raw output can carry the agent's
+    # working narration, which padded answers and tripped the
+    # connection test on a working route.
+    fd, outfile = tempfile.mkstemp(prefix="buddy_codex_",
+                                   suffix=".txt")
+    os.close(fd)
+    try:
+        out = ""
+        try:
+            out = _run_cli([path, "exec", "-s", "read-only",
+                            "--skip-git-repo-check",
+                            "--output-last-message", outfile,
+                            f"{system}\n\n{user}"])
+        except RuntimeError as exc:
+            tail = str(exc)
+            if "not logged in" in tail.lower() or \
+                    "sign in" in tail.lower() or "login" in tail.lower():
+                raise _ExpertFault("codex_signed_out")
+            raise _ExpertFault("codex_failed", tail[-140:])
+        text = ""
+        try:
+            with open(outfile, encoding="utf-8") as fh:
+                text = fh.read().strip()
+        except OSError:
+            text = ""
+        if not text:
+            text = (out or "").strip()
+    finally:
+        try:
+            os.unlink(outfile)
+        except OSError:
+            pass
     if not text:
-        raise RuntimeError("the Codex program answered with nothing")
+        raise _ExpertFault("empty_reply")
     return text
 
 
 def _scene_summary(context):
+    """What the expert is told about the scene. It used to be
+    counts and a mode - not enough to teach against, and nothing
+    at all about materials or node trees, which made the headline
+    use case (node work) impossible at the first step. Now: names,
+    the picked thing's modifiers and material, its tree in brief,
+    the renderer, and the current brush values - so relative
+    asks ('a bit bigger than now') have something to bite on."""
+    objs = list(context.scene.objects)
     counts = {}
-    for o in context.scene.objects:
+    for o in objs:
         counts[o.type] = counts.get(o.type, 0) + 1
     parts = [f"{n} {t.lower()}{'s' if n > 1 else ''}"
              for t, n in sorted(counts.items())]
+    names = ", ".join(o.name for o in objs[:10])
+    if len(objs) > 10:
+        names += f", and {len(objs) - 10} more"
     obj = context.object
-    picked = (f"Picked: {obj.name} ({obj.type.lower()})."
-              if obj else "Nothing picked.")
+    picked = "Nothing picked."
+    if obj is not None:
+        picked = f"Picked: {obj.name} ({obj.type.lower()})."
+        mods = [f"{m.name} ({m.type.lower()})"
+                for m in getattr(obj, "modifiers", []) or []]
+        if mods:
+            picked += f" Its modifiers: {', '.join(mods)}."
+        mat = getattr(obj, "active_material", None)
+        if mat is not None:
+            picked += f" Its material: {mat.name}."
+            if mat.use_nodes and mat.node_tree is not None:
+                picked += (" Its node tree: "
+                           + _tree_digest(mat.node_tree) + ".")
+    engine = {"BLENDER_EEVEE_NEXT": "Eevee", "CYCLES": "Cycles"}.get(
+        context.scene.render.engine, context.scene.render.engine)
+    render = f"Renderer: {engine}"
+    if engine == "Cycles":
+        render += f", {context.scene.cycles.samples} samples"
+    render += "."
+    brush = ""
+    try:
+        b = context.tool_settings.sculpt.brush
+        if b is not None:
+            brush = (f" Sculpt brush right now: size {b.size}, "
+                     f"strength {round(float(b.strength), 2)}, "
+                     f"falloff {_get_falloff(b)}.")
+    except Exception:
+        brush = ""
     checks, current = (tour_state(context)
                        if getattr(context.scene, "buddy_tour_started", False)
                        else (None, None))
     tour = ""
     if checks is not None:
-        tour = (f" Donut tour: {sum(checks)} of {len(checks)} steps done"
+        tour = (f" Guided project: {current} of {len(checks)} steps done"
                 + (f", current step: {TOUR_STEPS[current]['title']}."
                    if current < len(checks) else " - finished."))
-    return (f"Scene has: {', '.join(parts) or 'nothing'}. {picked} "
-            f"Mode: {context.mode}.{tour} "
+    return (f"Scene has: {', '.join(parts) or 'nothing'}"
+            f"{f' ({names})' if names else ''}. {picked} "
+            f"Mode: {context.mode}. {render}{brush}{tour} "
             f"Saved file: {'yes' if bpy.data.filepath else 'not yet'}.")
 
 
@@ -3537,39 +6852,81 @@ _AGENT_OPS_CACHE = None
 
 def _agent_ops_list():
     """The Blender tools the expert may use in a plan: the everyday
-    categories, as 'idname = name' lines. Cached."""
+    categories, as 'idname = name' lines. Cached. This list IS the
+    parser's gate - a plan may only name tools printed here, so
+    what the prompt advertises and what the code allows are the
+    same set. Session/file categories (wm, screen) are not in it:
+    a plan never opens, saves or quits the user's work."""
     global _AGENT_OPS_CACHE
     if _AGENT_OPS_CACHE is not None:
         return _AGENT_OPS_CACHE
-    cats = {"mesh", "object", "view3d", "render", "scene", "wm",
+    cats = {"mesh", "object", "view3d", "render", "scene",
             "transform", "curve", "surface", "armature", "material"}
     lines = [f"{e['idname']} = {e['label']}"
-             for e in build_index() if e["cat"] in cats]
+             for e in build_index() if e["cat"] in cats
+             and e["idname"] not in _REFUSED_TOOLS]
     _AGENT_OPS_CACHE = "\n".join(lines)
     return _AGENT_OPS_CACHE
 
 
-def _expert_agent_prompt():
-    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in ACTIONS)
-    settings = "\n".join(f"STEP: set:{s['desc']}"
-                         for s in SETTINGS.values())
-    styles = "; ".join(f"{k} = {v[0]}" for k, v in STYLES.items())
+def _expert_agent_prompt(context=None):
+    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in ACTIONS
+                        if a["id"] not in _stale_map())
+    stale_settings = _stale_settings()
+    settings = "\n".join(
+        f"STEP: set:{spec['desc']}"
+        for key, spec in SETTINGS.items() if key not in stale_settings)
+    stale_styles = _stale_styles()
+    styles = "; ".join(f"{k} = {v[0]}" for k, v in STYLES.items()
+                       if k not in stale_styles)
+    nodes = "; ".join(f"{k} = {v}" for k, v in _NODE_ADD_TYPES.items())
+    tree = ""
+    if context is not None:
+        obj = getattr(context, "object", None)
+        mat = getattr(obj, "active_material", None) if obj else None
+        if mat is not None and mat.use_nodes and mat.node_tree:
+            tree = ("\nThe picked thing's material tree right now "
+                    "(node steps and ramp steps work on this tree):\n"
+                    + _tree_digest(mat.node_tree, with_values=True))
     return (
-        "You are the Buddy Expert, the user's own agent inside a "
-        "beginner Blender add-on. The user asks for a result in "
-        "plain words; you reply with a plan the add-on will run, "
-        "step by step, in their Blender. You can press buttons, run "
-        "Blender tools, adjust exact settings (like giving them the "
-        "precise sculpt brush they describe), apply node-tree "
-        "styles, and look up add-ons for them. Format EXACTLY:\n"
-        "SUMMARY: <one plain sentence saying what the plan achieves>\n"
+        "You are the Buddy Expert, a patient Blender teacher inside "
+        "a beginner add-on called Blender Buddy. The user is the "
+        "creator and the author of their project; you assist with "
+        "bounded tasks they ask for - you never do their whole "
+        "project, and you prefer the smallest steps that do exactly "
+        "what they asked. Reply with a plan the add-on will run, "
+        "step by step, in their Blender - they check it and press "
+        "Run themselves. You can press buttons, run Blender tools, "
+        "adjust exact settings (like giving them the precise sculpt "
+        "brush they describe), apply node-tree styles, wire node "
+        "trees, set colour ramps, look up real add-ons, models and "
+        "textures, and grow simple ingredients (a low tree, a flat "
+        "picture of a thing). Format EXACTLY:\n"
+        "SUMMARY: <one plain sentence that teaches what the plan "
+        "does and why>\n"
         "STEP: button:<id>   (an add-on button, preferred)\n"
-        "STEP: tool:<idname>   (a raw Blender tool, when no button fits)\n"
-        "STEP: set:<setting from the settings list>\n"
+        "STEP: tool:<idname>   (a Blender tool from the list below, "
+        "when no button fits)\n"
+        "STEP: set:<setting>:<value>   (an exact setting from the "
+        "settings list)\n"
         "STEP: style:<style name>   (a node-tree style for the "
         "picked thing)\n"
-        "STEP: find:<words>   (open an add-on search for these "
-        "words, when a plugin would serve them better)\n"
+        "STEP: node:add:<node type>   (add a node to the picked "
+        "thing's material tree)\n"
+        "STEP: node:set:<node name>:<input name>:<value>   (set an "
+        "exact value on a node in the tree below)\n"
+        "STEP: node:link:<from node>:<from socket>:<to node>:<to "
+        "socket>   (wire two nodes together)\n"
+        "STEP: node:remove:<node name>   (remove a node from the "
+        "tree)\n"
+        "STEP: ramp:<node name>:<position>=<#RRGGBB>;<position>="
+        "<#RRGGBB>   (set a colour ramp's stops)\n"
+        "STEP: find:<words>   (look up real add-ons, models or "
+        "textures for these words)\n"
+        "STEP: grow:tree   (grow a simple low tree as an "
+        "ingredient)\n"
+        "STEP: grow:sprite   (make a flat picture of the picked "
+        "thing, to stand in the background)\n"
         "One STEP per line, in the order they must run. Prefer "
         "buttons - they are safe and beginner-shaped. Use at most 8 "
         "steps. Only use ids from the lists below; anything else is "
@@ -3577,7 +6934,9 @@ def _expert_agent_prompt():
         f"Buttons: {buttons}\n"
         f"Settings you may adjust:\n{settings}\n"
         f"Styles: {styles}\n"
-        f"Tools:\n{_agent_ops_list()}")
+        f"Node types you may add: {nodes}\n"
+        f"Tools:\n{_agent_ops_list()}"
+        f"{tree}")
 
 
 def _first_modifier(context, mtype):
@@ -3590,14 +6949,128 @@ def _first_modifier(context, mtype):
     return None
 
 
+_BUDDY_BRUSH = None
+
+
 def _sculpt_brush(context):
+    """The brush the brush settings land on: the user's current
+    sculpt brush whenever one is active (always, in a real
+    session). On Blender 5.3 a bare file has NO active brush and
+    the slot is read-only from Python (brushes are assets now),
+    so Buddy keeps its own brush datablock for that case and the
+    set/get pair still agree with each other."""
+    global _BUDDY_BRUSH
     ts = context.tool_settings
     brush = ts.sculpt.brush if ts.sculpt else None
-    if brush is None:
-        brush = bpy.data.brushes.new("Buddy Brush", mode="SCULPT")
-        if ts.sculpt:
-            ts.sculpt.brush = brush
-    return brush
+    if brush is not None:
+        return brush
+    if _BUDDY_BRUSH is None or _BUDDY_BRUSH.name not in bpy.data.brushes:
+        _BUDDY_BRUSH = bpy.data.brushes.new("Buddy Brush", mode="SCULPT")
+    if ts.sculpt:
+        try:
+            ts.sculpt.brush = _BUDDY_BRUSH
+        except Exception:
+            pass
+    return _BUDDY_BRUSH
+
+
+# The five falloff shapes, as curve control points. Blender's own
+# preset machinery differs per version (curve_preset up to 4.x,
+# curve_distance_falloff_preset from 5.x) and in a headless write
+# both only RECORD the name without rebuilding the curve - so
+# Buddy writes the shape itself, into whichever curve the running
+# Blender actually uses, and reads the shape back from the curve.
+_FALLOFF_PROFILES = {
+    "SMOOTH": [(0.0, 1.0), (0.25, 0.84), (0.5, 0.5), (0.75, 0.16),
+               (1.0, 0.0)],
+    "SPHERE": [(0.0, 1.0), (0.25, 0.97), (0.5, 0.87), (0.75, 0.66),
+               (1.0, 0.0)],
+    "SHARP": [(0.0, 1.0), (0.2, 0.5), (0.4, 0.13), (1.0, 0.0)],
+    "LIN": [(0.0, 1.0), (1.0, 0.0)],
+    "CONSTANT": [(0.0, 1.0), (0.9, 1.0), (1.0, 0.0)],
+}
+
+
+def _brush_falloff_curve(brush):
+    for attr in ("curve_distance_falloff", "curve"):
+        cm = getattr(brush, attr, None)
+        if cm is not None:
+            return cm
+    return None
+
+
+def _write_curve_profile(cm, profile):
+    curve = cm.curves[0]
+    pts = curve.points
+    while len(pts) > len(profile):
+        pts.remove(pts[len(pts) // 2])
+    while len(pts) < len(profile):
+        pts.new(0.5, 0.5)
+    for point, (x, y) in zip(pts, profile):
+        point.location = (x, y)
+    cm.update()
+
+
+def _profile_samples(profile, xs):
+    out = []
+    for x in xs:
+        y = profile[-1][1]
+        for (x0, y0), (x1, y1) in zip(profile, profile[1:]):
+            if x0 <= x <= x1:
+                t = 0.0 if x1 == x0 else (x - x0) / (x1 - x0)
+                y = y0 + t * (y1 - y0)
+                break
+        out.append(y)
+    return out
+
+
+def _classify_falloff(cm):
+    """Name the falloff shape a curve actually has, by sampling
+    it against the five profiles. Used when Blender's own preset
+    name says CUSTOM (a hand-edited curve)."""
+    curve = cm.curves[0]
+    xs = [i / 10 for i in range(1, 10)]
+    try:
+        got = [cm.evaluate(curve, x) for x in xs]
+    except Exception:
+        return "SMOOTH"
+    best, best_d = "SMOOTH", None
+    for name, profile in _FALLOFF_PROFILES.items():
+        want = _profile_samples(profile, xs)
+        d = sum(abs(a - b) for a, b in zip(got, want))
+        if best_d is None or d < best_d:
+            best, best_d = name, d
+    return best
+
+
+def _set_falloff(brush, preset):
+    cm = _brush_falloff_curve(brush)
+    if cm is not None:
+        _write_curve_profile(cm, _FALLOFF_PROFILES[preset])
+    props = brush.bl_rna.properties
+    if "curve_preset" in props:
+        brush.curve_preset = preset
+    elif "curve_distance_falloff_preset" in props:
+        brush.curve_distance_falloff_preset = preset
+
+
+def _get_falloff(brush):
+    props = brush.bl_rna.properties
+    if "curve_preset" in props:
+        return brush.curve_preset
+    if "curve_distance_falloff_preset" in props:
+        value = brush.curve_distance_falloff_preset
+        if value in _FALLOFF_PROFILES:
+            return value
+    cm = _brush_falloff_curve(brush)
+    if cm is None:
+        return "SMOOTH"
+    return _classify_falloff(cm)
+
+
+def _falloff_alive():
+    props = bpy.types.Brush.bl_rna.properties
+    return "curve_preset" in props or "curve_distance_falloff" in props
 
 
 def _need_modifier(context, mtype, plain):
@@ -3608,29 +7081,109 @@ def _need_modifier(context, mtype, plain):
     return mod
 
 
+def _set_camera_focal(c, v):
+    """Buddy's own pattern: help instead of fail. A scene with no
+    camera gets one, then the lens is set."""
+    cam = c.scene.camera
+    if cam is None:
+        data = bpy.data.cameras.new("Buddy Camera")
+        cam = bpy.data.objects.new("Buddy Camera", data)
+        c.scene.collection.objects.link(cam)
+        c.scene.camera = cam
+    cam.data.lens = float(v)
+
+
+def _get_camera_focal(c):
+    if c.scene.camera is None:
+        raise RuntimeError("the scene has no camera yet")
+    return c.scene.camera.data.lens
+
+
+def _picked_not_light(c):
+    obj = c.object
+    if obj is None:
+        return "nothing is picked"
+    return f"the picked thing is '{obj.name}' (a {obj.type.lower()})"
+
+
+def _set_light_energy(c, v):
+    obj = c.object
+    if obj is None or obj.type != "LIGHT":
+        raise RuntimeError(f"{_picked_not_light(c)}, not a light - "
+                           "pick a light first, then set its strength")
+    obj.data.energy = float(v)
+
+
+def _get_light_energy(c):
+    obj = c.object
+    if obj is None or obj.type != "LIGHT":
+        raise RuntimeError(f"{_picked_not_light(c)}, not a light")
+    return obj.data.energy
+
+
+def _rna_has(type_name, prop):
+    t = getattr(bpy.types, type_name, None)
+    return t is not None and prop in t.bl_rna.properties
+
+
+def _cycles_samples_alive():
+    """Probe render.samples against the LIVE scene's Cycles
+    settings, not bpy.types: on Blender 5.3 the CyclesRenderSettings
+    type exists and works on the scene but is no longer reachable
+    as bpy.types.CyclesRenderSettings, so the type-name probe
+    reported a live setting dead (found by the 5.3 suite run,
+    2026-11-13). An instance can't lie about its own properties."""
+    try:
+        return "samples" in bpy.context.scene.cycles.bl_rna.properties
+    except Exception:
+        return True
+
+
+def _light_energy_alive():
+    """Probe light.energy instance-first (bpy.types lookups are
+    not guaranteed across versions) - read-only either way: this
+    can be called while a panel is drawing, so it must never
+    create or remove data. With no instance to ask and no type
+    to check, the answer is alive: never hide on a guess."""
+    if _rna_has("Light", "energy"):
+        return True
+    for light in bpy.data.lights:
+        try:
+            return "energy" in light.bl_rna.properties
+        except Exception:
+            return True
+    return True
+
+
 # Settings the agent may adjust directly - the "give me the exact
 # brush" layer. Each has a plain description (which is also what the
 # AI sees), a setter, and a reader so a run step can verify its own
-# work landed.
+# work landed. "range" is the contract the description promises -
+# enforced when a step is parsed, not just described. "probe" is
+# how the anti-stale guard checks the setting still exists in the
+# running Blender, the same discipline ACTIONS already had.
 SETTINGS = {
     "brush.size": {
         "label": "Sculpt brush size",
         "desc": "brush.size:<pixels 1-500> - the sculpt brush's size",
         "set": lambda c, v: setattr(_sculpt_brush(c), "size", int(v)),
         "get": lambda c: _sculpt_brush(c).size,
+        "range": (1, 500), "probe": ("Brush", "size"),
     },
     "brush.strength": {
         "label": "Sculpt brush strength",
         "desc": "brush.strength:<0-1> - how hard the sculpt brush pushes",
         "set": lambda c, v: setattr(_sculpt_brush(c), "strength", float(v)),
         "get": lambda c: _sculpt_brush(c).strength,
+        "range": (0.0, 1.0), "probe": ("Brush", "strength"),
     },
     "brush.falloff": {
         "label": "Sculpt brush falloff",
         "desc": "brush.falloff:<SMOOTH|SPHERE|SHARP|LIN|CONSTANT> - "
                 "the shape of the sculpt brush's edge",
-        "set": lambda c, v: setattr(_sculpt_brush(c), "curve_preset", str(v)),
-        "get": lambda c: _sculpt_brush(c).curve_preset,
+        "set": lambda c, v: _set_falloff(_sculpt_brush(c), str(v)),
+        "get": lambda c: _get_falloff(_sculpt_brush(c)),
+        "probe": _falloff_alive,
     },
     "bevel.width": {
         "label": "Edge rounding width",
@@ -3640,6 +7193,7 @@ SETTINGS = {
         "set": lambda c, v: setattr(
             _need_modifier(c, "BEVEL", "bevel"), "width", float(v)),
         "get": lambda c: _need_modifier(c, "BEVEL", "bevel").width,
+        "range": (0.0, 1.0), "probe": ("BevelModifier", "width"),
     },
     "bevel.segments": {
         "label": "Edge rounding smoothness",
@@ -3647,6 +7201,7 @@ SETTINGS = {
         "set": lambda c, v: setattr(
             _need_modifier(c, "BEVEL", "bevel"), "segments", int(v)),
         "get": lambda c: _need_modifier(c, "BEVEL", "bevel").segments,
+        "range": (1, 10), "probe": ("BevelModifier", "segments"),
     },
     "subdivision.levels": {
         "label": "Smoothness levels",
@@ -3656,6 +7211,7 @@ SETTINGS = {
         "set": lambda c, v: setattr(
             _need_modifier(c, "SUBSURF", "subdivision"), "levels", int(v)),
         "get": lambda c: _need_modifier(c, "SUBSURF", "subdivision").levels,
+        "range": (0, 6), "probe": ("SubsurfModifier", "levels"),
     },
     "solidify.thickness": {
         "label": "Shell thickness",
@@ -3664,6 +7220,7 @@ SETTINGS = {
         "set": lambda c, v: setattr(
             _need_modifier(c, "SOLIDIFY", "solidify"), "thickness", float(v)),
         "get": lambda c: _need_modifier(c, "SOLIDIFY", "solidify").thickness,
+        "range": (0.0, 1.0), "probe": ("SolidifyModifier", "thickness"),
     },
     "array.count": {
         "label": "Copies in a row",
@@ -3672,28 +7229,61 @@ SETTINGS = {
         "set": lambda c, v: setattr(
             _need_modifier(c, "ARRAY", "array"), "count", int(v)),
         "get": lambda c: _need_modifier(c, "ARRAY", "array").count,
+        "range": (1, 50), "probe": ("ArrayModifier", "count"),
     },
     "render.samples": {
         "label": "Picture quality (Cycles samples)",
         "desc": "render.samples:<1-4096> - more samples = a cleaner "
-                "picture that takes longer",
+                "picture that takes longer (counts when the scene "
+                "renders in Cycles)",
         "set": lambda c, v: setattr(c.scene.cycles, "samples", int(v)),
         "get": lambda c: c.scene.cycles.samples,
+        "range": (1, 4096), "probe": _cycles_samples_alive,
     },
     "light.energy": {
         "label": "Picked light brightness",
         "desc": "light.energy:<number> - the picked light's strength "
                 "(the picked thing must be a light)",
-        "set": lambda c, v: setattr(c.object.data, "energy", float(v)),
-        "get": lambda c: c.object.data.energy,
+        "set": _set_light_energy,
+        "get": _get_light_energy,
+        "range": (0.0, 10000.0), "probe": _light_energy_alive,
     },
     "camera.focal": {
         "label": "Camera zoom (lens mm)",
-        "desc": "camera.focal:<10-200> - the scene camera's lens",
-        "set": lambda c, v: setattr(c.scene.camera.data, "lens", float(v)),
-        "get": lambda c: c.scene.camera.data.lens,
+        "desc": "camera.focal:<10-200> - the scene camera's lens "
+                "(adds a camera first if the scene has none)",
+        "set": _set_camera_focal,
+        "get": _get_camera_focal,
+        "range": (10.0, 200.0), "probe": ("Camera", "lens"),
     },
 }
+
+
+_STALE_SETTINGS_CACHE = None
+
+
+def _stale_settings():
+    """SETTINGS whose backing property no longer exists in the
+    running Blender - the same self-check ACTIONS get, extended
+    to the registry that shipped a dead brush.falloff on 5.3
+    unnoticed. A check that cannot be made counts as alive:
+    Buddy never hides a tool on a guess."""
+    global _STALE_SETTINGS_CACHE
+    if _STALE_SETTINGS_CACHE is not None:
+        return _STALE_SETTINGS_CACHE
+    stale = set()
+    for key, spec in SETTINGS.items():
+        probe = spec.get("probe")
+        if probe is None:
+            continue
+        try:
+            alive = probe() if callable(probe) else _rna_has(*probe)
+        except Exception:
+            alive = True
+        if not alive:
+            stale.add(key)
+    _STALE_SETTINGS_CACHE = stale
+    return stale
 
 
 def _style_material(obj):
@@ -3708,15 +7298,39 @@ def _style_material(obj):
 
 
 def _bsdf(mat):
-    node = mat.node_tree.nodes.get("Principled BSDF")
-    if node is None:
-        raise RuntimeError("the material has no Principled node to style")
+    """The Principled node, found by TYPE - the old code looked
+    it up by its English name, which failed on renamed nodes and
+    non-English Blender interfaces on trees that plainly had one."""
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            return node
+    raise RuntimeError("the material has no Principled node to "
+                       "style - it may be a special material "
+                       "Buddy doesn't style")
+
+
+def _buddy_node(tree, style_key, bl_idname, plain):
+    """A node Buddy adds for a style, under a name that says so -
+    so a style run twice replaces its own nodes instead of
+    stacking a second chain on the tree."""
+    name = f"Buddy {style_key} {plain}"
+    old = tree.nodes.get(name)
+    if old is not None:
+        tree.nodes.remove(old)
+    node = tree.nodes.new(bl_idname)
+    node.name = name
+    node.label = f"Buddy style: {style_key}"
     return node
+
+
+def _base_colour_free(bsdf):
+    return not bsdf.inputs["Base Color"].links
 
 
 def _style_chrome(obj):
     bsdf = _bsdf(_style_material(obj))
-    bsdf.inputs["Base Color"].default_value = (0.9, 0.9, 0.92, 1.0)
+    if _base_colour_free(bsdf):
+        bsdf.inputs["Base Color"].default_value = (0.9, 0.9, 0.92, 1.0)
     bsdf.inputs["Metallic"].default_value = 1.0
     bsdf.inputs["Roughness"].default_value = 0.08
 
@@ -3724,13 +7338,15 @@ def _style_chrome(obj):
 def _style_brushed_metal(obj):
     mat = _style_material(obj)
     bsdf = _bsdf(mat)
-    bsdf.inputs["Base Color"].default_value = (0.75, 0.75, 0.78, 1.0)
+    if _base_colour_free(bsdf):
+        bsdf.inputs["Base Color"].default_value = (0.75, 0.75, 0.78, 1.0)
     bsdf.inputs["Metallic"].default_value = 1.0
     bsdf.inputs["Roughness"].default_value = 0.35
     tree = mat.node_tree
-    noise = tree.nodes.new("ShaderNodeTexNoise")
+    noise = _buddy_node(tree, "brushed_metal", "ShaderNodeTexNoise",
+                        "Noise")
     noise.inputs["Scale"].default_value = 150.0
-    bump = tree.nodes.new("ShaderNodeBump")
+    bump = _buddy_node(tree, "brushed_metal", "ShaderNodeBump", "Bump")
     bump.inputs["Strength"].default_value = 0.15
     tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
     tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
@@ -3767,16 +7383,18 @@ def _style_wood(obj):
     mat = _style_material(obj)
     bsdf = _bsdf(mat)
     tree = mat.node_tree
-    noise = tree.nodes.new("ShaderNodeTexNoise")
+    noise = _buddy_node(tree, "wood", "ShaderNodeTexNoise", "Noise")
     noise.inputs["Scale"].default_value = 3.0
     noise.inputs["Detail"].default_value = 6.0
-    ramp = tree.nodes.new("ShaderNodeValToRGB")
+    ramp = _buddy_node(tree, "wood", "ShaderNodeValToRGB", "Ramp")
     ramp.color_ramp.elements[0].color = (0.25, 0.12, 0.04, 1.0)
     ramp.color_ramp.elements[1].color = (0.55, 0.33, 0.14, 1.0)
-    bump = tree.nodes.new("ShaderNodeBump")
+    bump = _buddy_node(tree, "wood", "ShaderNodeBump", "Bump")
     bump.inputs["Strength"].default_value = 0.3
     tree.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
-    tree.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    if _base_colour_free(bsdf):
+        tree.links.new(ramp.outputs["Color"],
+                       bsdf.inputs["Base Color"])
     tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
     tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
     bsdf.inputs["Roughness"].default_value = 0.55
@@ -3786,13 +7404,15 @@ def _style_marble(obj):
     mat = _style_material(obj)
     bsdf = _bsdf(mat)
     tree = mat.node_tree
-    vor = tree.nodes.new("ShaderNodeTexVoronoi")
+    vor = _buddy_node(tree, "marble", "ShaderNodeTexVoronoi", "Voronoi")
     vor.inputs["Scale"].default_value = 4.0
-    ramp = tree.nodes.new("ShaderNodeValToRGB")
+    ramp = _buddy_node(tree, "marble", "ShaderNodeValToRGB", "Ramp")
     ramp.color_ramp.elements[0].color = (0.85, 0.85, 0.87, 1.0)
     ramp.color_ramp.elements[1].color = (0.35, 0.35, 0.40, 1.0)
     tree.links.new(vor.outputs["Distance"], ramp.inputs["Fac"])
-    tree.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    if _base_colour_free(bsdf):
+        tree.links.new(ramp.outputs["Color"],
+                       bsdf.inputs["Base Color"])
     bsdf.inputs["Roughness"].default_value = 0.15
 
 
@@ -3807,6 +7427,589 @@ STYLES = {
     "wood": ("procedural wood grain (a real node tree)", _style_wood),
     "marble": ("procedural marble veins (a real node tree)", _style_marble),
 }
+
+
+def _apply_style(key, obj):
+    """Apply a style READ-BEFORE-WRITE: the tree is digested
+    before and after, and the caller is told honestly whether
+    anything changed and what couldn't land. Until this existed,
+    a style step reported 'Done' unconditionally - including on
+    textured materials where several styles were silent no-ops,
+    the whole product's one rule (the scene proves it) broken by
+    the Expert itself."""
+    mat = _style_material(obj)
+    tree = mat.node_tree
+    bsdf = _bsdf(mat)
+    linked = not _base_colour_free(bsdf)
+    before = _tree_digest(tree, with_values=True)
+    STYLES[key][1](obj)
+    after = _tree_digest(tree, with_values=True)
+    changed = before != after
+    note = ""
+    if linked and changed:
+        note = ("Your texture still drives the base colour - the "
+                "style landed around it (surface values and any "
+                "grain), not over it.")
+    elif linked and not changed:
+        note = ("the style changed nothing - your texture drives "
+                "the base colour and the rest of this style had "
+                "nothing to take hold of")
+    elif not changed:
+        note = "the style changed nothing in the tree"
+    return changed, note
+
+
+_STALE_STYLES_CACHE = None
+
+
+def _stale_styles():
+    """STYLES that cannot run on this Blender at all, proven by
+    dry-running each on a scratch material - the settings/styles
+    half of the anti-stale guard. Anything the probe can't judge
+    counts as alive."""
+    global _STALE_STYLES_CACHE
+    if _STALE_STYLES_CACHE is not None:
+        return _STALE_STYLES_CACHE
+    stale = set()
+    before = {m.name for m in bpy.data.materials}
+    probe_obj = None
+    try:
+        mesh = bpy.data.meshes.new("Buddy Style Probe")
+        probe_obj = bpy.data.objects.new("Buddy Style Probe", mesh)
+        for key in STYLES:
+            try:
+                _apply_style(key, probe_obj)
+            except Exception:
+                stale.add(key)
+    except Exception:
+        stale = set()
+    finally:
+        if probe_obj is not None:
+            mesh = probe_obj.data
+            bpy.data.objects.remove(probe_obj)
+            try:
+                bpy.data.meshes.remove(mesh)
+            except Exception:
+                pass
+        for mat in list(bpy.data.materials):
+            if mat.name not in before:
+                try:
+                    bpy.data.materials.remove(mat)
+                except Exception:
+                    pass
+    _STALE_STYLES_CACHE = stale
+    return stale
+
+
+# ---------------------------------------------------------------------
+# Node work - the headline capability (owner: "nodes themselves,
+# natural language prompting of tedious shit"). The machinery the
+# audit found absent in kind: the tree is SERIALIZED into what the
+# expert sees, node steps EDIT the named tree, and every step is
+# verified by reading the tree back. The tree is the proof, as the
+# scene is for the guided projects.
+# ---------------------------------------------------------------------
+
+_NODE_ADD_TYPES = {
+    "ShaderNodeTexNoise": "Noise Texture",
+    "ShaderNodeTexVoronoi": "Voronoi Texture",
+    "ShaderNodeTexWave": "Wave Texture",
+    "ShaderNodeTexGradient": "Gradient Texture",
+    "ShaderNodeTexBrick": "Brick Texture",
+    "ShaderNodeTexChecker": "Checker Texture",
+    "ShaderNodeTexImage": "Image Texture",
+    "ShaderNodeValToRGB": "Colour Ramp",
+    "ShaderNodeBump": "Bump",
+    "ShaderNodeNormalMap": "Normal Map",
+    "ShaderNodeDisplacement": "Displacement",
+    "ShaderNodeMix": "Mix",
+    "ShaderNodeMath": "Math",
+    "ShaderNodeVectorMath": "Vector Math",
+    "ShaderNodeMapping": "Mapping",
+    "ShaderNodeTexCoord": "Texture Coordinate",
+    "ShaderNodeRGB": "RGB Colour",
+    "ShaderNodeValue": "Value",
+    "ShaderNodeHueSaturation": "Hue Saturation",
+    "ShaderNodeInvert": "Invert Colour",
+    "ShaderNodeGamma": "Gamma",
+    "ShaderNodeBrightContrast": "Bright Contrast",
+    "ShaderNodeFresnel": "Fresnel",
+    "ShaderNodeLayerWeight": "Layer Weight",
+    "ShaderNodeSeparateXYZ": "Separate XYZ",
+    "ShaderNodeCombineXYZ": "Combine XYZ",
+    "ShaderNodeRGBToBW": "RGB to BW",
+}
+
+# Tools a plan may never name, whatever the categories say:
+# session and file machinery (a plan never opens, saves, undoes
+# or quits the user's work) and outright deletion.
+_REFUSED_TOOLS = {"object.delete"}
+
+
+def _fmt_value(v):
+    if isinstance(v, bool):
+        return "on" if v else "off"
+    if isinstance(v, (int, float)):
+        return f"{float(v):.3g}"
+    try:
+        seq = list(v)
+    except TypeError:
+        return str(v)[:24]
+    if len(seq) in (3, 4) and all(
+            isinstance(x, (int, float)) for x in seq):
+        return "(" + ", ".join(f"{float(x):.2f}" for x in seq) + ")"
+    return str(v)[:24]
+
+
+def _tree_digest(tree, with_values=False):
+    """A bounded, exact description of a node tree: node names
+    and types, key input values, and every link. This is what the
+    expert sees, and what style/node verification diffs."""
+    if tree is None:
+        return "no tree"
+    parts = []
+    for node in list(tree.nodes)[:60]:
+        line = f"{node.name} [{node.bl_idname}]"
+        if with_values:
+            shown = []
+            for sock in node.inputs:
+                if sock.links or not hasattr(sock, "default_value"):
+                    continue
+                shown.append(f"{sock.name}={_fmt_value(sock.default_value)}")
+                if len(shown) >= 6:
+                    break
+            if shown:
+                line += " " + ", ".join(shown)
+        parts.append(line)
+    links = [f"{l.from_node.name}.{l.from_socket.name} -> "
+             f"{l.to_node.name}.{l.to_socket.name}"
+             for l in tree.links]
+    out = "; ".join(parts)
+    if links:
+        out += " | links: " + "; ".join(links[:40])
+    return out
+
+
+def _find_node(tree, name):
+    node = tree.nodes.get(name)
+    if node is not None:
+        return node
+    low = (name or "").lower()
+    hits = [n for n in tree.nodes if n.name.lower() == low]
+    if len(hits) == 1:
+        return hits[0]
+    hits = [n for n in tree.nodes if n.name.lower().startswith(low)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _find_socket(sockets, name):
+    for s in sockets:
+        if s.name == name:
+            return s
+    low = (name or "").lower()
+    for s in sockets:
+        if s.name.lower() == low:
+            return s
+    return None
+
+
+def _active_tree(context):
+    obj = context.object
+    if obj is None:
+        raise RuntimeError("pick the thing whose material tree "
+                           "to work on first")
+    mat = getattr(obj, "active_material", None)
+    if mat is None:
+        mat = _style_material(obj)
+    mat.use_nodes = True
+    if mat.node_tree is None:
+        raise RuntimeError(f"'{obj.name}'s material has no node "
+                           "tree to work on")
+    return mat.node_tree
+
+
+def _coerce_node_value(sock, raw):
+    """Turn a plan's text value into the socket's own type."""
+    t = sock.type
+    raw = str(raw).strip()
+    if t == "VALUE":
+        return float(raw)
+    if t == "INT":
+        return int(float(raw))
+    if t == "BOOLEAN":
+        return raw.lower() in ("true", "1", "yes", "on")
+    if t in ("RGBA", "VECTOR"):
+        if raw.startswith("#") and len(raw) == 7:
+            vals = [int(raw[i:i + 2], 16) / 255.0 for i in (1, 3, 5)]
+        else:
+            vals = [float(p) for p in raw.split(",")]
+        if t == "RGBA" and len(vals) == 3:
+            vals.append(1.0)
+        return vals
+    return raw
+
+
+def _values_match(got, want):
+    try:
+        return abs(float(got) - float(want)) < 1e-4
+    except (TypeError, ValueError):
+        pass
+    try:
+        g, w = list(got), list(want)
+        return len(g) == len(w) and all(
+            abs(float(a) - float(b)) < 1e-3 for a, b in zip(g, w))
+    except (TypeError, ValueError):
+        return str(got) == str(want)
+
+
+def _exec_node_step(context, step):
+    """Run one node step against the picked thing's material
+    tree and verify it by reading the tree back.
+    Returns (ok, note, fail_why)."""
+    tree = _active_tree(context)
+    op = step["op"]
+    if op == "add":
+        bl_idname = step["type"]
+        node = tree.nodes.new(bl_idname)
+        return True, f"Added the node '{node.name}'.", ""
+    if op == "remove":
+        node = _find_node(tree, step["node"])
+        if node is None:
+            return False, "", (f"there's no node called "
+                               f"'{step['node']}' in this tree")
+        name = node.name
+        tree.nodes.remove(node)
+        if _find_node(tree, name) is not None:
+            return False, "", "the node is still there"
+        return True, f"Removed the node '{name}'.", ""
+    if op == "set":
+        node = _find_node(tree, step["node"])
+        if node is None:
+            return False, "", (f"there's no node called "
+                               f"'{step['node']}' in this tree")
+        sock = _find_socket(node.inputs, step["input"])
+        if sock is None:
+            return False, "", (f"'{node.name}' has no input called "
+                               f"'{step['input']}'")
+        if sock.links:
+            src = sock.links[0].from_node.name
+            return False, "", (f"'{node.name}'s {sock.name} is wired "
+                               f"from '{src}' - a wired input has no "
+                               "set value; change it at the other end")
+        if not hasattr(sock, "default_value"):
+            return False, "", (f"'{node.name}'s {sock.name} can't be "
+                               "set to a value")
+        try:
+            value = _coerce_node_value(sock, step["value"])
+        except (TypeError, ValueError):
+            return False, "", (f"'{step['value']}' isn't a value "
+                               f"'{node.name}'s {sock.name} can take")
+        sock.default_value = value
+        if not _values_match(sock.default_value, value):
+            return False, "", (f"the value didn't land - it reads "
+                               f"back as {_fmt_value(sock.default_value)}")
+        return True, (f"Set '{node.name}' {sock.name} to "
+                      f"{step['value']} - read back from the tree."), ""
+    if op == "link":
+        src = _find_node(tree, step["from"])
+        dst = _find_node(tree, step["to"])
+        if src is None or dst is None:
+            missing = step["from"] if src is None else step["to"]
+            return False, "", f"there's no node called '{missing}' in this tree"
+        out_sock = _find_socket(src.outputs, step["from_socket"])
+        in_sock = _find_socket(dst.inputs, step["to_socket"])
+        if out_sock is None:
+            return False, "", (f"'{src.name}' has no output called "
+                               f"'{step['from_socket']}'")
+        if in_sock is None:
+            return False, "", (f"'{dst.name}' has no input called "
+                               f"'{step['to_socket']}'")
+        if in_sock.links:
+            other = in_sock.links[0].from_node.name
+            return False, "", (f"'{dst.name}'s {in_sock.name} is "
+                               f"already wired from '{other}'")
+        tree.links.new(out_sock, in_sock)
+        landed = any(l.from_node == src and l.to_node == dst
+                     and l.from_socket == out_sock
+                     and l.to_socket == in_sock for l in tree.links)
+        if not landed:
+            return False, "", "the wire didn't take"
+        return True, (f"Wired '{src.name}' {out_sock.name} into "
+                      f"'{dst.name}' {in_sock.name}."), ""
+    return False, "", "unknown node step"
+
+
+def _exec_ramp_step(context, step):
+    """Set a colour ramp's stops from a description, then read
+    them back from the tree (the colour-mapping ingredient)."""
+    tree = _active_tree(context)
+    node = _find_node(tree, step["node"])
+    if node is None:
+        node = tree.nodes.new("ShaderNodeValToRGB")
+        node.name = step["node"]
+        created = True
+    else:
+        created = False
+    if node.bl_idname != "ShaderNodeValToRGB":
+        return False, "", (f"'{step['node']}' is a "
+                           f"{node.bl_idname}, not a colour ramp")
+    stops = sorted(step["stops"], key=lambda s: s[0])
+    ramp = node.color_ramp
+    while len(ramp.elements) > len(stops):
+        ramp.elements.remove(ramp.elements[-1])
+    while len(ramp.elements) < len(stops):
+        ramp.elements.new(0.5)
+    for el, (pos, colour) in zip(ramp.elements, stops):
+        el.position = pos
+        el.color = colour
+    for el, (pos, colour) in zip(ramp.elements, stops):
+        if abs(el.position - pos) > 0.02 or not _values_match(
+                el.color, colour):
+            return False, "", "the ramp stops didn't land as described"
+    words = ", ".join(f"{int(pos * 100)}% {_fmt_value(colour)}"
+                      for pos, colour in stops)
+    return True, (f"{'Added' if created else 'Set'} the colour ramp "
+                  f"'{node.name}': {words} - read back from the "
+                  f"tree."), ""
+
+
+# ---------------------------------------------------------------------
+# Ingredients: real resources (links checked before they're
+# shown) and generated set-dressing (a low tree, a flat picture).
+# The expert fetches or builds the ingredient; the creator picks,
+# places and judges. Invented listings are the failure mode -
+# every result below was verified to resolve before it is shown.
+# ---------------------------------------------------------------------
+
+_RESOURCE_CACHE = {}
+
+
+def _fetch_json(url, timeout=10):
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "BlenderBuddy/3.2"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _verify_url(url, timeout=6):
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "BlenderBuddy/3.2"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read(256)
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _find_resources(words):
+    """Named, real results whose links resolve - checked now,
+    not promised. Sources: the Blender Extensions catalogue and
+    Poly Haven's public asset index."""
+    import urllib.parse
+    results = []
+    ext_url = ("https://extensions.blender.org/search/?q="
+               + urllib.parse.quote(words))
+    if _verify_url(ext_url):
+        results.append({
+            "name": f"Add-ons matching '{words}'",
+            "url": ext_url, "source": "Blender Extensions"})
+    try:
+        assets = _RESOURCE_CACHE.get("polyhaven")
+        if assets is None:
+            assets = _fetch_json(
+                "https://api.polyhaven.com/assets"
+                "?t=models,textures,hdris")
+            _RESOURCE_CACHE["polyhaven"] = assets
+        tokens = [t for t in re.split(r"\W+", words.lower())
+                  if len(t) > 2]
+        hits = []
+        for aid, info in (assets or {}).items():
+            name = str(info.get("name") or aid)
+            hay = (name + " " + aid.replace("_", " ")).lower()
+            if tokens and all(t in hay for t in tokens[:2]):
+                hits.append((aid, name))
+        for aid, name in hits[:3]:
+            url = f"https://polyhaven.com/a/{aid}"
+            if _verify_url(url):
+                results.append({"name": name, "url": url,
+                                "source": "Poly Haven"})
+    except Exception:
+        pass
+    return results[:5]
+
+
+def _grow_tree(context):
+    """A simple low tree, grown from Blender's own mesh machinery:
+    a tapered trunk, branches, and a three-blob canopy, standing
+    at the scene target. An ingredient - the creator places and
+    art-directs it. Returns the object names."""
+    import bmesh
+    from mathutils import Matrix, Vector
+    cursor = Vector(context.scene.cursor.location)
+    made = []
+
+    def _obj(name, bm, matrix, mat_name, rgba, rough):
+        nonlocal_mesh = bpy.data.meshes.new(name)
+        bm.to_mesh(nonlocal_mesh)
+        bm.free()
+        obj = bpy.data.objects.new(name, nonlocal_mesh)
+        obj.matrix_world = matrix
+        context.scene.collection.objects.link(obj)
+        _paint(obj, mat_name, rgba, roughness=rough)
+        made.append(obj.name)
+        return obj
+
+    bm = bmesh.new()
+    bmesh.ops.create_cone(bm, cap_ends=True, segments=7, radius1=0.16,
+                          radius2=0.05, depth=2.0)
+    _obj("Buddy Tree Trunk", bm,
+         Matrix.Translation(cursor + Vector((0, 0, 1.0))),
+         "Buddy Bark", (0.23, 0.14, 0.08, 1.0), 0.9)
+    for i, (dx, dy, tilt) in enumerate(((0.4, 0.1, 0.7),
+                                        (-0.35, 0.25, -0.6),
+                                        (0.05, -0.4, 0.5))):
+        bm = bmesh.new()
+        bmesh.ops.create_cone(bm, cap_ends=True, segments=5,
+                              radius1=0.05, radius2=0.015, depth=0.9)
+        m = (Matrix.Translation(cursor + Vector((dx, dy, 2.1)))
+             @ Matrix.Rotation(tilt, 4, "Y")
+             @ Matrix.Rotation(tilt * 0.6, 4, "X")
+             @ Matrix.Translation(Vector((0, 0, 0.45))))
+        _obj(f"Buddy Tree Branch {i + 1}", bm, m,
+             "Buddy Bark", (0.23, 0.14, 0.08, 1.0), 0.9)
+    bm = bmesh.new()
+    for dx, dy, dz, s in ((0, 0, 3.1, 1.0), (0.55, 0.2, 2.75, 0.7),
+                          (-0.5, -0.25, 2.8, 0.75)):
+        bmesh.ops.create_icosphere(
+            bm, subdivisions=1, radius=0.85,
+            matrix=Matrix.Translation(Vector((dx, dy, dz)))
+            @ Matrix.Scale(s, 4) @ Matrix.Scale(0.8, 4, Vector((0, 0, 1))))
+    _obj("Buddy Tree Leaves", bm, Matrix.Translation(cursor),
+         "Buddy Leaves", (0.16, 0.36, 0.12, 1.0), 0.85)
+    return made
+
+
+def _grow_sprite(context):
+    """A flat picture of the picked thing (a billboard sprite):
+    render it alone with transparency, then stand the picture on
+    a plane. Returns the plane's name."""
+    obj = context.object
+    if obj is None or obj.type != "MESH":
+        raise RuntimeError("pick a shape first - a sprite is a "
+                           "picture of the picked thing")
+    scene = context.scene
+    render = scene.render
+    keep = {
+        "filepath": render.filepath,
+        "format": render.image_settings.file_format,
+        "transparent": render.film_transparent,
+        "engine": render.engine,
+        "res": (render.resolution_x, render.resolution_y,
+                render.resolution_percentage),
+        "samples": scene.cycles.samples if hasattr(scene, "cycles")
+                   else None,
+        "hidden": {o.name: o.hide_render for o in scene.objects},
+    }
+    path = os.path.join(tempfile.gettempdir(),
+                        f"buddy_sprite_{obj.name}.png")
+    try:
+        for o in scene.objects:
+            o.hide_render = o is not obj
+        render.engine = "CYCLES"
+        if keep["samples"] is not None:
+            scene.cycles.samples = 16
+        render.resolution_x = render.resolution_y = 128
+        render.resolution_percentage = 100
+        render.film_transparent = True
+        render.image_settings.file_format = "PNG"
+        render.filepath = path
+        bpy.ops.render.render(write_still=True)
+    finally:
+        render.filepath = keep["filepath"]
+        render.image_settings.file_format = keep["format"]
+        render.film_transparent = keep["transparent"]
+        render.engine = keep["engine"]
+        render.resolution_x, render.resolution_y, \
+            render.resolution_percentage = keep["res"]
+        if keep["samples"] is not None:
+            scene.cycles.samples = keep["samples"]
+        for o in scene.objects:
+            if o.name in keep["hidden"]:
+                o.hide_render = keep["hidden"][o.name]
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        raise RuntimeError("the picture of it didn't render")
+    img = bpy.data.images.load(path)
+    width = max(obj.dimensions.x, obj.dimensions.y, 0.5)
+    height = max(obj.dimensions.z, 0.5)
+    bpy.ops.mesh.primitive_plane_add(size=1.0)
+    plane = context.object
+    plane.name = f"Buddy Sprite of {obj.name}"
+    plane.dimensions = (width, height, 0.0)
+    plane.location = (scene.cursor.location.x,
+                      scene.cursor.location.y,
+                      scene.cursor.location.z + height / 2.0)
+    mat = bpy.data.materials.new(f"Buddy Sprite {obj.name}")
+    mat.use_nodes = True
+    tree = mat.node_tree
+    tree.nodes.clear()
+    out = tree.nodes.new("ShaderNodeOutputMaterial")
+    bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled")
+    tex = tree.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    tree.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+    tree.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    plane.data.materials.append(mat)
+    return plane.name
+
+
+# ---------------------------------------------------------------------
+# Capability questions are answered by Buddy itself, from the
+# real registries - no AI connection, no setup. The first
+# question a person asks must never dead-end on setup (owner's
+# live proof: "what can you do for me" met a connection error).
+# ---------------------------------------------------------------------
+
+_CAPABILITY_PHRASES = (
+    "what can you do", "what do you do", "what can i ask",
+    "what are you able to do", "what can the expert do",
+    "what help can you give", "your capabilities",
+    "what can buddy do", "what does buddy do",
+)
+
+
+def _is_capability_question(question):
+    q = " ".join((question or "").lower().split()).strip(" ?!.")
+    if q in ("help", "help me"):
+        return True
+    return any(p in q for p in _CAPABILITY_PHRASES)
+
+
+def _capability_answer(context):
+    available = _available_actions(context)
+    sample = ", ".join(a["plain"] for a in available[:6])
+    settings = [spec["label"].lower() for key, spec in
+                SETTINGS.items() if key not in _stale_settings()]
+    styles = [desc for key, (desc, _fn) in STYLES.items()
+              if key not in _stale_styles()]
+    projects = ", ".join(p["name"] for p in PACKAGES)
+    return (
+        "Plenty - and this answer needed no connection at all. "
+        f"Right now your scene can use {len(available)} of my "
+        f"plain-words tools (things like: {sample}). Ask me in "
+        "your own words and I can explain any step for YOUR scene, "
+        "and - with task help on - draft steps you check and run "
+        "yourself: press tools for you, set exact values "
+        f"({', '.join(settings[:5])} and more), wire node trees "
+        "(add a node, set its value, join sockets), set a colour "
+        f"ramp from a description, apply a style ({', '.join(styles[:4])} "
+        "and more), look up real add-ons, models and textures "
+        "(I check every link before I show it), and grow simple "
+        "ingredients - a low tree, or a flat picture of a thing "
+        f"for the background. I can also walk you through guided "
+        f"projects: {projects}. You stay the author throughout - "
+        "I assist with the task in front of you.")
 
 
 def _open_url(url):
@@ -3824,65 +8027,219 @@ _SETTING_ENUMS = {
 
 def _coerce_setting(key, raw):
     """Turn an agent's text value into the setting's real type, or
-    raise ValueError. A plan step is only kept when this succeeds."""
+    raise ValueError. A plan step is only kept when this succeeds.
+    The documented range is part of the contract: a value outside
+    it is dropped here, not landed (Blender's own ranges are
+    wider than the promised ones - brush strength reads back fine
+    at 2.5 against a promised 0-1)."""
     if key in _SETTING_ENUMS:
         value = str(raw).upper()
         if value not in _SETTING_ENUMS[key]:
             raise ValueError(f"{value} is not one of the falloff shapes")
         return value
     if key in _SETTING_INT_KEYS:
-        return int(raw)
-    return float(raw)
+        value = int(raw)
+    else:
+        value = float(raw)
+    lo_hi = SETTINGS[key].get("range")
+    if lo_hi is not None and not lo_hi[0] <= value <= lo_hi[1]:
+        raise ValueError(
+            f"{key} must be between {lo_hi[0]} and {lo_hi[1]}")
+    return value
+
+
+_PLAN_MAX_STEPS = 8
+
+
+def _clean_plan_line(line):
+    """Strip the furniture real models wrap protocol lines in:
+    code fences, bold marks, list numbering and bullets."""
+    s = line.strip().strip("`").strip()
+    s = re.sub(r"^\d+[.)]\s*", "", s)
+    s = re.sub(r"^[-*]\s+", "", s)
+    s = s.replace("**", "").replace("__", "")
+    return s.strip()
+
+
+def _parse_hex_colour(text):
+    h = text.strip().lstrip("#")
+    if len(h) != 6:
+        raise ValueError("colour must be #RRGGBB")
+    return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0,
+            int(h[4:6], 16) / 255.0, 1.0)
 
 
 def _parse_plan(text):
-    """(summary, steps, dropped) from an agent reply. Steps are only
-    kept when everything they name is verifiably real: the button
-    exists, the tool exists, the setting is in the registry, the
-    style is in the library."""
+    """(summary, steps, dropped) from an agent reply. Steps are
+    only kept when everything they name is verifiably real AND
+    inside the advertised gate: buttons that exist and aren't
+    stale, tools from the SAME everyday list the prompt prints
+    (session/file tools and deletion are refused outright),
+    settings and styles that exist in this Blender, node types
+    from the node list. The 8-step cap and dedupe are enforced
+    here, in code - they used to live only in the prompt. Lines
+    that look like steps but can't be read count as dropped, so
+    the 'left out' note tells the truth."""
     summary = ""
     steps = []
     dropped = 0
     valid_tools = None
-    for line in (text or "").splitlines():
-        m = re.match(r"\s*SUMMARY:\s*(.+)$", line)
+    stale_actions = _stale_map()
+    stale_settings = _stale_settings()
+    stale_styles = _stale_styles()
+
+    def gate_tools():
+        nonlocal valid_tools
+        if valid_tools is None:
+            cats = {"mesh", "object", "view3d", "render", "scene",
+                    "transform", "curve", "surface", "armature",
+                    "material"}
+            valid_tools = {e["idname"] for e in build_index()
+                           if e["cat"] in cats} - _REFUSED_TOOLS
+        return valid_tools
+
+    def keep(step):
+        nonlocal dropped
+        if step in steps:
+            dropped += 1
+            return
+        if len(steps) >= _PLAN_MAX_STEPS:
+            dropped += 1
+            return
+        steps.append(step)
+
+    for raw_line in (text or "").splitlines():
+        line = _clean_plan_line(raw_line)
+        if not line:
+            continue
+        m = re.match(r"(?i)SUMMARY:\s*(.+)$", line)
         if m:
             summary = m.group(1).strip()
             continue
-        m = re.match(r"\s*STEP:\s*(button|tool|style|find):\s*(\S.*?)\s*$",
+        m = re.match(r"(?i)STEP:\s*(button|tool|style|find):\s*(\S.*?)\s*$",
                      line)
         if m:
-            kind, ident = m.group(1), m.group(2)
-            if kind == "button" and any(a["id"] == ident for a in ACTIONS
-                                        if a["id"] not in _stale_map()):
-                steps.append({"kind": "button", "id": ident})
-            elif kind == "tool":
-                if valid_tools is None:
-                    valid_tools = {e["idname"] for e in build_index()}
-                if ident in valid_tools:
-                    steps.append({"kind": "tool", "id": ident})
-                else:
-                    dropped += 1
-            elif kind == "style" and ident in STYLES:
-                steps.append({"kind": "style", "id": ident})
+            kind, ident = m.group(1).lower(), m.group(2).strip()
+            if kind == "button" and any(
+                    a["id"] == ident for a in ACTIONS
+                    if a["id"] not in stale_actions):
+                keep({"kind": "button", "id": ident})
+            elif kind == "tool" and ident in gate_tools():
+                keep({"kind": "tool", "id": ident})
+            elif kind == "style" and ident in STYLES \
+                    and ident not in stale_styles:
+                keep({"kind": "style", "id": ident})
             elif kind == "find" and 0 < len(ident) <= 60:
-                steps.append({"kind": "find", "id": ident})
+                keep({"kind": "find", "id": ident})
             else:
                 dropped += 1
             continue
-        m = re.match(r"\s*STEP:\s*set:\s*([a-z_.]+):\s*(\S+)\s*$", line)
+        m = re.match(r"(?i)STEP:\s*set:\s*([a-z_.]+):\s*(\S+)\s*$", line)
         if m:
-            key, raw = m.group(1), m.group(2)
-            if key in SETTINGS:
+            key, raw = m.group(1).lower(), m.group(2)
+            if key in SETTINGS and key not in stale_settings:
                 try:
                     value = _coerce_setting(key, raw)
                 except (TypeError, ValueError):
                     dropped += 1
                 else:
-                    steps.append({"kind": "set", "id": key, "value": value})
+                    keep({"kind": "set", "id": key, "value": value})
             else:
                 dropped += 1
+            continue
+        m = re.match(r"(?i)STEP:\s*node:add:\s*([A-Za-z0-9_]+)\s*$", line)
+        if m:
+            bl_idname = m.group(1)
+            if bl_idname in _NODE_ADD_TYPES:
+                keep({"kind": "node", "op": "add", "type": bl_idname})
+            else:
+                dropped += 1
+            continue
+        m = re.match(r"(?i)STEP:\s*node:set:\s*(.+)$", line)
+        if m:
+            parts = m.group(1).split(":", 2)
+            if len(parts) == 3 and all(p.strip() for p in parts):
+                keep({"kind": "node", "op": "set",
+                      "node": parts[0].strip(),
+                      "input": parts[1].strip(),
+                      "value": parts[2].strip()})
+            else:
+                dropped += 1
+            continue
+        m = re.match(r"(?i)STEP:\s*node:link:\s*(.+)$", line)
+        if m:
+            parts = m.group(1).split(":", 3)
+            if len(parts) == 4 and all(p.strip() for p in parts):
+                keep({"kind": "node", "op": "link",
+                      "from": parts[0].strip(),
+                      "from_socket": parts[1].strip(),
+                      "to": parts[2].strip(),
+                      "to_socket": parts[3].strip()})
+            else:
+                dropped += 1
+            continue
+        m = re.match(r"(?i)STEP:\s*node:remove:\s*(.+?)\s*$", line)
+        if m:
+            keep({"kind": "node", "op": "remove",
+                  "node": m.group(1).strip()})
+            continue
+        m = re.match(r"(?i)STEP:\s*ramp:\s*([^:]+):\s*(.+)$", line)
+        if m:
+            stops = []
+            ok = True
+            for chunk in m.group(2).split(";"):
+                sm = re.match(r"\s*([0-9.]+)\s*=\s*(#[0-9A-Fa-f]{6})\s*$",
+                              chunk)
+                if not sm:
+                    ok = False
+                    break
+                try:
+                    pos = float(sm.group(1))
+                    colour = _parse_hex_colour(sm.group(2))
+                except ValueError:
+                    ok = False
+                    break
+                if not 0.0 <= pos <= 1.0:
+                    ok = False
+                    break
+                stops.append((pos, colour))
+            if ok and 2 <= len(stops) <= 8:
+                keep({"kind": "ramp", "node": m.group(1).strip(),
+                      "stops": stops})
+            else:
+                dropped += 1
+            continue
+        m = re.match(r"(?i)STEP:\s*grow:\s*(tree|sprite)\s*$", line)
+        if m:
+            keep({"kind": "grow", "what": m.group(1).lower()})
+            continue
+        if re.match(r"(?i)STEP\b", line):
+            # A step-shaped line we couldn't read at all. It
+            # counts - the old parser let these vanish silently.
+            dropped += 1
     return summary, steps, dropped
+
+
+def _raise_http_fault(exc):
+    """Turn a raw HTTP failure into a named _ExpertFault."""
+    if isinstance(exc, TimeoutError) or isinstance(
+            getattr(exc, "reason", None), TimeoutError):
+        raise _ExpertFault("timeout") from exc
+    if isinstance(exc, urllib.error.HTTPError):
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        if exc.code in (401, 403):
+            raise _ExpertFault("key_refused") from exc
+        if exc.code == 429:
+            raise _ExpertFault("rate_limited") from exc
+        if exc.code == 404 and "model" in body.lower():
+            raise _ExpertFault("model_missing") from exc
+        raise _ExpertFault("service_error", str(exc.code)) from exc
+    raise _ExpertFault("unreachable",
+                       str(getattr(exc, "reason", exc))[:60]) from exc
 
 
 def _expert_http_claude(url, key, payload):
@@ -3894,8 +8251,11 @@ def _expert_http_claude(url, key, payload):
         headers={"Content-Type": "application/json",
                  "x-api-key": key,
                  "anthropic-version": _CLAUDE_VERSION})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        _raise_http_fault(exc)
 
 
 def _ask_via_claude(settings, system, user):
@@ -3907,7 +8267,7 @@ def _ask_via_claude(settings, system, user):
              if b.get("type") == "text"]
     text = "\n".join(p for p in parts if p).strip()
     if not text:
-        raise RuntimeError("Claude answered with nothing readable")
+        raise _ExpertFault("empty_reply")
     return text
 
 
@@ -3920,7 +8280,10 @@ def _ask_ai(settings, system, user):
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": user}]}
     data = _expert_http(settings["url"], settings["key"], payload)
-    return data["choices"][0]["message"]["content"].strip()
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, AttributeError):
+        raise _ExpertFault("empty_reply")
 
 
 def _step_label(step):
@@ -3932,7 +8295,24 @@ def _step_label(step):
     if step["kind"] == "style":
         return f"Style it: {STYLES[step['id']][0]}"
     if step["kind"] == "find":
-        return f"Find add-ons for: {step['id']}"
+        return f"Find real add-ons, models and textures for: {step['id']}"
+    if step["kind"] == "node":
+        if step["op"] == "add":
+            plain = _NODE_ADD_TYPES.get(step["type"], step["type"])
+            return f"Add a node: {plain}"
+        if step["op"] == "set":
+            return (f"Set '{step['node']}' {step['input']} to "
+                    f"{step['value']}")
+        if step["op"] == "link":
+            return (f"Wire '{step['from']}' {step['from_socket']} "
+                    f"into '{step['to']}' {step['to_socket']}")
+        return f"Remove the node '{step['node']}'"
+    if step["kind"] == "ramp":
+        return f"Set the colour ramp '{step['node']}' from a description"
+    if step["kind"] == "grow":
+        if step["what"] == "tree":
+            return "Grow a low tree (an ingredient to place)"
+        return "Make a flat picture of the picked thing (a sprite)"
     for e in build_index():
         if e["idname"] == step["id"]:
             return f"{e['label']} (Blender tool)"
@@ -3946,8 +8326,20 @@ def _expert_http(url, key, payload):
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"), method="POST",
         headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    # A local AI thinks on the user's own processor, and Buddy's
+    # scene description is long: on a machine without a graphics
+    # card, one honest answer can take minutes (measured on the
+    # test VM: 52s for a short advice answer from the smallest
+    # local model). A flat 30-second cap made every local answer
+    # die as a fake 'unreachable'. The wait runs off the interface
+    # thread and Esc stops it, so a local address gets the time
+    # the work actually takes; a hosted service keeps 30s.
+    timeout = 300 if _is_local_url(url) else 30
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        _raise_http_fault(exc)
 
 
 class BUDDY_OT_open_prefs(Operator):
@@ -3963,6 +8355,162 @@ class BUDDY_OT_open_prefs(Operator):
         return {"FINISHED"}
 
 
+# ---------------------------------------------------------------------
+# Asking without freezing Blender: an expert call can take 30s on
+# a service or two minutes through Codex, and it used to run
+# inside the button press - the whole interface froze, which read
+# as a crash. Now the call runs on a worker thread and a small
+# modal operator watches for it; Esc stops the wait. Headless
+# there is no interface to freeze, so the call runs inline.
+# ---------------------------------------------------------------------
+
+_EXPERT_JOB = {"id": 0, "busy": False, "kind": "", "text": "",
+               "error": None, "extra": None, "settings": None}
+
+
+def _expert_job_start(kind, settings, system, user, extra=None):
+    _EXPERT_JOB["id"] += 1
+    my_id = _EXPERT_JOB["id"]
+    _EXPERT_JOB.update(busy=True, kind=kind, text="", error=None,
+                       extra=extra, settings=settings)
+
+    def work():
+        try:
+            text, err = _ask_ai(settings, system, user), None
+        except Exception as exc:  # faults arrive named, the rest raw
+            text, err = "", exc
+        if _EXPERT_JOB["id"] != my_id:
+            return  # a newer ask (or an Esc) superseded this one
+        _EXPERT_JOB.update(text=text, error=err, busy=False)
+
+    if bpy.app.background:
+        work()
+        _expert_job_finish(bpy.context)
+    else:
+        threading.Thread(target=work, daemon=True).start()
+        bpy.ops.buddy.expert_wait("INVOKE_DEFAULT")
+
+
+def _expert_job_finish(context):
+    kind = _EXPERT_JOB["kind"]
+    _EXPERT_JOB["kind"] = ""
+    if kind == "ask":
+        _finish_ask(context)
+    elif kind == "test":
+        _finish_test(context)
+    elif kind == "replan":
+        _finish_replan(context)
+
+
+class BUDDY_OT_expert_wait(Operator):
+    bl_idname = "buddy.expert_wait"
+    bl_label = "Waiting for the Expert"
+    bl_description = ("Wait for the expert's answer without "
+                      "freezing Blender - you can keep working; "
+                      "press Esc in the 3D view to stop waiting")
+    bl_options = {"INTERNAL"}
+
+    _timer = None
+
+    def invoke(self, context, event):
+        self._timer = context.window_manager.event_timer_add(
+            0.12, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type == "ESC":
+            kind = _EXPERT_JOB["kind"]
+            _EXPERT_JOB["id"] += 1
+            _EXPERT_JOB.update(busy=False, kind="")
+            self._stop(context)
+            if kind == "ask":
+                context.window_manager.buddy_answer = (
+                    "Stopped waiting for the expert - ask again "
+                    "whenever you're ready.")
+            return {"CANCELLED"}
+        if event.type == "TIMER" and not _EXPERT_JOB["busy"]:
+            self._stop(context)
+            _expert_job_finish(context)
+            return {"FINISHED"}
+        return {"PASS_THROUGH"}
+
+    def _stop(self, context):
+        if self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+
+
+def _extract_suggestion(text):
+    """(answer_text, suggested_button_id) from an advice reply.
+    The extractor and the stripper are the same case-insensitive
+    match now - a lowercase 'button:' line used to be removed
+    from the answer while the extractor found nothing, so words
+    silently vanished."""
+    suggested = ""
+    kept = []
+    for line in (text or "").splitlines():
+        m = re.match(r"(?i)\s*BUTTON:\s*([a-z0-9_]+)[.\s]*$", line)
+        if m:
+            if any(a["id"] == m.group(1) for a in ACTIONS
+                   if a["id"] not in _stale_map()):
+                suggested = m.group(1)
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip(), suggested
+
+
+def _finish_ask(context):
+    global _EXPERT_TIP
+    wm = context.window_manager
+    settings = _EXPERT_JOB.get("settings") or _expert_settings()
+    extra = _EXPERT_JOB.get("extra") or {}
+    question = extra.get("question", "")
+    error = _EXPERT_JOB["error"]
+    text = _EXPERT_JOB["text"]
+    if error is not None:
+        wm.buddy_answer = _fault_message(settings, error)
+        wm.buddy_suggested = ""
+        return
+    if extra.get("agent"):
+        summary, steps, dropped = _parse_plan(text)
+        if steps:
+            wm.buddy_plan = json.dumps(steps)
+            wm.buddy_plan_summary = summary or question
+            wm.buddy_plan_retried = ""
+            wm.buddy_answer = ""
+            wm.buddy_suggested = ""
+            note = (f" The expert also suggested {dropped} "
+                    f"step{'s' if dropped > 1 else ''} that "
+                    "couldn't be verified, so those were left out."
+                    if dropped else "")
+            wm.buddy_plan_report = (
+                f"Plan ready: {len(steps)} steps.{note} "
+                "Check them below, then press Run.")
+            _EXPERT_TIP = (f"Plan ready: {len(steps)} steps. "
+                           "Press Run these steps.")
+            return
+        # No usable plan came back. Say so, and show what DID
+        # come back labelled as advice - the old code silently
+        # made a second call and presented its answer as if the
+        # first had never happened.
+        advice, suggested = _extract_suggestion(text)
+        wm.buddy_answer = (
+            "The expert's plan didn't come through in a shape "
+            "Buddy can run, so here is its answer as advice "
+            "instead:\n" + advice if advice else
+            "The expert answered, but not in a shape Buddy can "
+            "turn into steps or advice. Ask it another way - a "
+            "smaller, single task works best.")
+        wm.buddy_suggested = suggested
+        return
+    answer, suggested = _extract_suggestion(text)
+    wm.buddy_answer = answer
+    wm.buddy_suggested = suggested
+    first = answer.split(". ")[0].strip()
+    _EXPERT_TIP = (first[:110] + ("..." if len(first) > 110 else ""))
+
+
 class BUDDY_OT_ask_expert(Operator):
     bl_idname = "buddy.ask_expert"
     bl_label = "Ask the Expert"
@@ -3972,72 +8520,75 @@ class BUDDY_OT_ask_expert(Operator):
     bl_options = {"REGISTER"}
 
     def execute(self, context):
-        global _EXPERT_TIP
         wm = context.window_manager
         settings = _expert_settings()
         question = (wm.buddy_ask or "").strip()
+        if not question:
+            wm.buddy_answer = ("Type a question first - anything, "
+                               "in your own words.")
+            wm.buddy_suggested = ""
+            return {"CANCELLED"}
+        if _is_capability_question(question):
+            wm.buddy_answer = _capability_answer(context)
+            wm.buddy_suggested = ""
+            self.report({"INFO"}, "What the expert can do - it's "
+                                  "in the panel, no connection needed.")
+            return {"FINISHED"}
         if not _expert_ready(settings):
             wm.buddy_answer = _expert_setup_message(settings)
             wm.buddy_suggested = ""
             return {"CANCELLED"}
-        if not question:
-            wm.buddy_answer = "Type a question first - anything, in your own words."
-            return {"CANCELLED"}
-        if getattr(wm, "buddy_agent", False):
-            try:
-                text = _ask_ai(
-                    settings, _expert_agent_prompt(),
-                    f"{_scene_summary(context)}\n\nGoal: {question}")
-            except Exception:
-                text = ""
-            if text:
-                summary, steps, dropped = _parse_plan(text)
-                if steps:
-                    wm.buddy_plan = json.dumps(steps)
-                    wm.buddy_plan_summary = summary or question
-                    wm.buddy_plan_retried = ""
-                    wm.buddy_answer = ""
-                    wm.buddy_suggested = ""
-                    note = (f" The expert also suggested {dropped} "
-                            f"step{'s' if dropped > 1 else ''} that "
-                            "couldn't be verified, so those were left out."
-                            if dropped else "")
-                    wm.buddy_plan_report = (
-                        f"Plan ready: {len(steps)} steps.{note} "
-                        "Check them below, then press Run.")
-                    _EXPERT_TIP = f"Plan ready: {len(steps)} steps. Press Run these steps."
-                    self.report({"INFO"}, "The expert made a plan - it's "
-                                          "in the panel, ready to run.")
-                    return {"FINISHED"}
-            # No usable plan came back: fall through and answer as
-            # plain advice instead of failing the user.
-        try:
-            text = _ask_ai(
-                settings, _expert_system_prompt(),
-                f"{_scene_summary(context)}\n\nQuestion: {question}")
-        except Exception:
-            wm.buddy_answer = ("The expert didn't answer. Check the "
-                               "setup in the add-on's preferences, "
-                               "and that you're online - then ask "
-                               "again.")
-            wm.buddy_suggested = ""
-            return {"CANCELLED"}
-        suggested = ""
-        lines = text.splitlines()
-        kept = []
-        for line in lines:
-            m = re.match(r"\s*BUTTON:\s*([a-z0-9_]+)\s*$", line)
-            if m and any(a["id"] == m.group(1) for a in ACTIONS
-                         if a["id"] not in _stale_map()):
-                suggested = m.group(1)
-            elif not line.strip().upper().startswith("BUTTON:"):
-                kept.append(line)
-        wm.buddy_answer = "\n".join(kept).strip()
-        wm.buddy_suggested = suggested
-        first = wm.buddy_answer.split(". ")[0].strip()
-        _EXPERT_TIP = (first[:110] + ("..." if len(first) > 110 else ""))
-        self.report({"INFO"}, "The expert answered - it's in the panel.")
+        agent = bool(getattr(wm, "buddy_agent", False))
+        if agent:
+            system = _expert_agent_prompt(context)
+            user = f"{_scene_summary(context)}\n\nGoal: {question}"
+        else:
+            system = _expert_system_prompt()
+            user = f"{_scene_summary(context)}\n\nQuestion: {question}"
+        _expert_job_start("ask", settings, system, user,
+                          extra={"question": question, "agent": agent})
+        if bpy.app.background:
+            self.report({"INFO"}, "The expert answered - it's in "
+                                  "the panel.")
         return {"FINISHED"}
+
+
+def _finish_test(context):
+    settings = _EXPERT_JOB.get("settings") or _expert_settings()
+    error = _EXPERT_JOB["error"]
+    reply = _EXPERT_JOB["text"]
+    if error is not None:
+        msg = _fault_message(settings, error)
+    elif "BUDDY OK" in (reply or ""):
+        msg = ("It works - your expert answered the test "
+               "question. Ask it anything in the panel.")
+    else:
+        msg = ("Something answered, but not cleanly: "
+               + (reply or "")[:90])
+    try:
+        context.window_manager.buddy_expert_status = msg
+    except Exception:
+        pass
+
+
+def _finish_replan(context):
+    global _EXPERT_TIP
+    wm = context.window_manager
+    base = (_EXPERT_JOB.get("extra") or {}).get("base", "")
+    if _EXPERT_JOB["error"] is not None:
+        wm.buddy_plan_report = base
+        return
+    summary, new_steps, _d = _parse_plan(_EXPERT_JOB["text"])
+    if new_steps:
+        wm.buddy_plan = json.dumps(new_steps)
+        wm.buddy_plan_summary = summary or wm.buddy_plan_summary
+        wm.buddy_plan_retried = "1"
+        wm.buddy_plan_report = (
+            base + " The expert replanned around it - check the "
+            "new plan below and press Run again.")
+        _EXPERT_TIP = "The plan hit a snag; the expert replanned."
+    else:
+        wm.buddy_plan_report = base
 
 
 class BUDDY_OT_test_expert(Operator):
@@ -4045,7 +8596,7 @@ class BUDDY_OT_test_expert(Operator):
     user picked, and say plainly whether it answered. The Codex
     setup failed silently before this existed (owner, 2026-11-12:
     "setting up codex doesnt work") - now there is proof either
-    way, in words."""
+    way, in words, and a failure names the actual fault."""
     bl_idname = "buddy.test_expert"
     bl_label = "Test the Expert Connection"
     bl_description = ("Send one tiny test question through the "
@@ -4055,29 +8606,59 @@ class BUDDY_OT_test_expert(Operator):
     def execute(self, context):
         settings = _expert_settings()
         service = settings.get("service", "KEY")
+        if service == "CODEX" and _find_codex() is None:
+            try:
+                context.window_manager.buddy_expert_status = \
+                    _fault_message(settings,
+                                   _ExpertFault("codex_missing"))
+            except Exception:
+                pass
+            self.report({"WARNING"}, "Codex isn't on this computer yet")
+            return {"FINISHED"}
+        _expert_job_start("test", settings,
+                          "You are a connection test.",
+                          "Reply with exactly: BUDDY OK")
+        status = ""
         try:
-            if service == "CODEX" and _find_codex() is None:
-                raise RuntimeError(
-                    "the Codex program isn't on this computer yet. "
-                    "Install OpenAI's Codex program, open it once "
-                    "and sign in with your ChatGPT account, then "
-                    "press Test again")
-            reply = _ask_ai(settings, "You are a connection test.",
-                            "Reply with exactly: BUDDY OK")
-            if "BUDDY OK" in (reply or ""):
-                msg = ("It works - your expert answered the test "
-                       "question. Ask it anything in the panel.")
-            else:
-                msg = ("Something answered, but not cleanly: "
-                       + (reply or "")[:90])
-        except Exception as exc:
-            msg = f"Not working yet: {exc}"
-        try:
-            context.window_manager.buddy_expert_status = msg
+            status = context.window_manager.buddy_expert_status
         except Exception:
             pass
-        self.report({"INFO"} if msg.startswith("It works")
-                    else {"WARNING"}, msg[:240])
+        self.report({"INFO"} if status.startswith("It works")
+                    else {"WARNING"}, (status or "Testing...")[:240])
+        return {"FINISHED"}
+
+
+class BUDDY_OT_open_codex(Operator):
+    """Open OpenAI's Codex program so the user can sign in to it -
+    the login lives in their program, so Buddy takes the user to
+    its door instead of describing a treasure hunt."""
+    bl_idname = "buddy.open_codex"
+    bl_label = "Open Codex to Sign In"
+    bl_description = ("Open OpenAI's Codex program on this "
+                      "computer. Sign in there with your ChatGPT "
+                      "account once - then Buddy can ask through it")
+
+    @classmethod
+    def poll(cls, context):
+        return _find_codex() is not None
+
+    def execute(self, context):
+        path = _find_codex()
+        if not path:
+            self.report({"WARNING"}, "Codex isn't on this computer yet")
+            return {"CANCELLED"}
+        try:
+            if os.name == "nt" and path.lower().endswith((".cmd", ".bat")):
+                subprocess.Popen(["cmd", "/c", "start", "", path])
+            else:
+                subprocess.Popen([path])
+        except Exception as exc:
+            self.report({"WARNING"},
+                        f"Buddy found Codex but couldn't open it: {exc}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Opened Codex - sign in there with "
+                              "your ChatGPT account, then come back "
+                              "and ask.")
         return {"FINISHED"}
 
 
@@ -4122,17 +8703,67 @@ class BUDDY_OT_run_plan(Operator):
                     if not ok:
                         fail_why = (f"the setting reads back as {got}, "
                                     f"not {want}")
+                    if ok and step["id"] == "render.samples" \
+                            and context.scene.render.engine != "CYCLES":
+                        notes.append(
+                            "Heads-up: this scene renders with "
+                            "Eevee right now, so the Cycles sample "
+                            "count won't change its picture - it "
+                            "counts when a scene renders in Cycles.")
                 elif step["kind"] == "style":
-                    STYLES[step["id"]][1](context.object)
-                    ok = True
+                    changed, snote = _apply_style(step["id"],
+                                                   context.object)
+                    ok = changed
+                    if snote:
+                        notes.append(snote)
+                    if not ok:
+                        fail_why = snote
                 elif step["kind"] == "find":
-                    import urllib.parse
-                    _open_url("https://extensions.blender.org/search/"
-                              "?q=" + urllib.parse.quote(step["id"]))
-                    notes.append(f"Opened the add-on search for "
-                                 f"'{step['id']}' in your browser - "
-                                 "anything you install there shows up "
-                                 "in Blender like Buddy did.")
+                    results = _find_resources(step["id"])
+                    if results:
+                        wm.buddy_find = json.dumps(results)
+                        listing = "; ".join(
+                            f"{r['name']} ({r['source']})"
+                            for r in results)
+                        notes.append(
+                            f"Found for '{step['id']}' - every "
+                            f"link checked just now: {listing}. "
+                            "The links are under the plan - press "
+                            "one to open it; installing is your "
+                            "press, as it should be.")
+                        ok = True
+                    else:
+                        fail_why = (
+                            f"no page for '{step['id']}' could be "
+                            "checked and confirmed just now - "
+                            "results are only shown once their "
+                            "links prove real")
+                        ok = False
+                elif step["kind"] == "node":
+                    ok, note, why = _exec_node_step(context, step)
+                    if note:
+                        notes.append(note)
+                    if not ok:
+                        fail_why = why
+                elif step["kind"] == "ramp":
+                    ok, note, why = _exec_ramp_step(context, step)
+                    if note:
+                        notes.append(note)
+                    if not ok:
+                        fail_why = why
+                elif step["kind"] == "grow":
+                    if step["what"] == "tree":
+                        names = _grow_tree(context)
+                        notes.append(
+                            "Grew a low tree at the target: "
+                            + ", ".join(names) + ". Move it where "
+                            "you want it - it's yours now.")
+                    else:
+                        name = _grow_sprite(context)
+                        notes.append(
+                            f"Made '{name}' - a flat picture of "
+                            "the picked thing, standing at the "
+                            "target.")
                     ok = True
                 else:
                     ok = False
@@ -4167,18 +8798,23 @@ class BUDDY_OT_run_plan(Operator):
                 f"{done} step{'s' if done != 1 else ''} before it "
                 "did run, and they're kept - nothing was undone.")
         # One replan: send the failure back and let the expert route
-        # around it. The new plan is SHOWN, never auto-run.
+        # around it. The new plan is SHOWN, never auto-run. In a
+        # window the ask goes on the job thread like any other -
+        # a replan used to freeze the interface too.
         settings = _expert_settings()
         if _expert_ready(settings) and not wm.buddy_plan_retried:
-            try:
-                text = _ask_ai(
-                    settings, _expert_agent_prompt(),
-                    f"{_scene_summary(context)}\n\n"
+            user = (f"{_scene_summary(context)}\n\n"
                     f"Goal: {wm.buddy_ask}\n"
                     f"Your previous plan stopped at step "
                     f"{fail_at + 1} ('{label}'): {fail_why}. "
                     f"Give a revised plan that still reaches the "
                     f"goal from the scene as it is now.")
+            if bpy.app.background:
+                try:
+                    text = _ask_ai(settings,
+                                   _expert_agent_prompt(context), user)
+                except Exception:
+                    text = ""
                 summary, new_steps, _d = _parse_plan(text)
                 if new_steps:
                     wm.buddy_plan = json.dumps(new_steps)
@@ -4190,8 +8826,13 @@ class BUDDY_OT_run_plan(Operator):
                     _EXPERT_TIP = "The plan hit a snag; the expert replanned."
                     self.report({"WARNING"}, wm.buddy_plan_report)
                     return {"CANCELLED"}
-            except Exception:
-                pass
+            else:
+                wm.buddy_plan_report = (
+                    base + " Asking the expert for a revised plan...")
+                _expert_job_start("replan", settings,
+                                  _expert_agent_prompt(context), user,
+                                  extra={"base": base})
+                return {"CANCELLED"}
         wm.buddy_plan_report = base
         _EXPERT_TIP = f"Plan stopped at step {fail_at + 1} of {total}."
         self.report({"WARNING"}, base)
@@ -4305,6 +8946,7 @@ def _draw_expert_overlay():
 # ----------------------------------------------------------------------------
 
 _WRAP_CAP = 64
+_WRAP_PX = None
 
 
 def _fit_width(context):
@@ -4312,19 +8954,140 @@ def _fit_width(context):
     Blender cuts off (with '...') any label longer than the panel,
     so wrapping has to aim at the real width, not a guess. That was
     learned from actual screenshots of this panel (v0.9): at the
-    default sidebar width the old fixed guesses clipped words."""
+    default sidebar width the old fixed guesses clipped words.
+    Also records the panel's pixel width in _WRAP_PX: the char
+    estimate alone still lost words inside nested boxes (the
+    guided-project card sits two boxes deep, narrower than the
+    region it was measured against - walkthrough gap X1), so
+    _wrap now verifies every line by measurement, below."""
+    global _WRAP_PX
     try:
         w = context.region.width
     except Exception:
         return 44
     if not w:
         return 44
+    _WRAP_PX = w
     return max(26, min(64, int((w - 48) / 6.2)))
 
 
-def _wrap(layout, text, width=44):
+def _text_px(text):
+    """The measured pixel width of a line in the panel's font,
+    or None when it cannot be measured in this session."""
+    try:
+        import blf
+        scale = 1.0
+        try:
+            scale = float(
+                bpy.context.preferences.view.ui_scale) or 1.0
+        except Exception:
+            pass
+        blf.size(0, max(8, int(round(11 * scale))))
+        return blf.dimensions(0, text)[0]
+    except Exception:
+        return None
+
+
+def _fit_line(line, max_px):
+    """Split one wrapped line until every piece MEASURES
+    inside max_px. Words move whole to the next piece; a
+    single word wider than the panel is hard-split. Nothing
+    is ever dropped - losing words mid-sentence was gap X1's
+    whole injury."""
+    width = _text_px(line)
+    if width is None or width <= max_px:
+        return [line]
+    out = []
+    cur = ""
+    # A standalone dash glues to the word after it: split
+    # on its other side and the dash is stranded at a line
+    # end or alone on a line (re-walk minor m2).
+    words = []
+    for word in line.split(" "):
+        if words and words[-1] == "-":
+            words[-1] = "- " + word
+        else:
+            words.append(word)
+    for word in words:
+        trial = f"{cur} {word}" if cur else word
+        if cur and (_text_px(trial) or 0) > max_px:
+            out.append(cur)
+            cur = word
+        else:
+            cur = trial
+        while cur and (_text_px(cur) or 0) > max_px \
+                and len(cur) > 1:
+            cut = len(cur) - 1
+            while cut > 1 and (_text_px(cur[:cut]) or 0) > max_px:
+                cut -= 1
+            out.append(cur[:cut])
+            cur = cur[cut:]
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _wrap_lines(text, width=44):
+    """The lines _wrap will draw for a string: wrapped by the
+    char estimate, then - when this panel's real pixel width
+    is known - every line is re-split until it measures
+    inside the space the deepest card actually gets (region
+    width minus the nesting: section indent, card box and
+    label padding), with a safety margin for font variance.
+    The words of the text survive whole, in order - the
+    invariant the X1 regression test asserts."""
     width = max(20, min(width, _WRAP_CAP))
-    for line in textwrap.wrap(text, width=width) or [""]:
+    # break_on_hyphens=False: a key name like
+    # "Alt+left-drag" or "Ctrl+right-click" must never be
+    # chopped at its hyphen across lines - a chopped key
+    # name reads as a different, wrong instruction.
+    lines = textwrap.wrap(text, width=width,
+                          break_on_hyphens=False) or [""]
+    budget = None
+    if _WRAP_PX:
+        budget = (_WRAP_PX - 72) * 0.92
+        if budget > 40:
+            fitted = []
+            for line in lines:
+                fitted.extend(_fit_line(line, budget))
+            lines = fitted
+        else:
+            budget = None
+    # A dash that wraps onto a line of its own reads as a
+    # stray mark on the card (re-walk minor m2): glue it
+    # onto the line it belongs with - the next one when
+    # that still measures inside the budget, else the end
+    # of the previous one. Only line breaks move; the
+    # words themselves never change, so the no-lost-words
+    # invariant the tests assert still holds.
+    merged = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() == "-" and i + 1 < len(lines):
+            joined = "- " + lines[i + 1]
+            if budget is None or (_text_px(joined) or 0) <= budget:
+                merged.append(joined)
+                i += 2
+                continue
+            if merged and (_text_px(merged[-1] + " -") or 0) \
+                    <= budget:
+                merged[-1] = merged[-1] + " -"
+                i += 1
+                continue
+            if budget:
+                # Neither side has room: refit the pair as
+                # one string (the dash stays glued to its
+                # word inside _fit_line).
+                merged.extend(_fit_line(joined, budget))
+                i += 2
+                continue
+        merged.append(lines[i])
+        i += 1
+    return merged
+
+
+def _wrap(layout, text, width=44):
+    for line in _wrap_lines(text, width=width):
         layout.label(text=line)
 
 
@@ -4382,7 +9145,29 @@ def _hint(context):
             "it, or start shaping it.")
 
 
+def _query_active(context):
+    wm = getattr(context, "window_manager", None)
+    return bool(wm and (wm.buddy_query or "").strip())
+
+
+def _start_screen_active(context):
+    ws = getattr(context, "workspace", None)
+    return (ws is not None and ws.name == "Buddy Start"
+            and not getattr(context.scene, "buddy_tour_started",
+                            False))
+
+
 class VIEW3D_PT_blender_buddy(Panel):
+    """The host panel. It used to draw EVERYTHING itself - one
+    long scrolling tab (owner, 2026-11-13: "blender buddy cannot
+    be 1 long tab, needs to be collapsible sections"). Now every
+    major block is its own collapsible section under this host:
+    the guided project, Where you are, Heads up, For right now,
+    the Expert, the tool drawers, projects, search and the full
+    index. Only the live blocks open by default; the rest are a
+    tidy list of named drawers. This host draws just the Start
+    screen (a whole-panel mode) and the changed-tools notice,
+    which must never hide inside a closed drawer."""
     bl_idname = "VIEW3D_PT_blender_buddy"
     bl_label = "Blender Buddy - in plain words"
     bl_space_type = "VIEW_3D"
@@ -4393,223 +9178,342 @@ class VIEW3D_PT_blender_buddy(Panel):
         global _WRAP_CAP
         _WRAP_CAP = _fit_width(context)
         layout = self.layout
-        wm = context.window_manager
-        show_real = getattr(wm, "buddy_show_real", True)
-
-        scene = context.scene
-        if not (wm.buddy_query or "").strip():
-            ws = getattr(context, "workspace", None)
-            if (ws is not None and ws.name == "Buddy Start"
-                    and not getattr(scene, "buddy_tour_started",
-                                    False)):
-                _draw_start(layout, context)
-                return
-            if getattr(scene, "buddy_tour_started", False):
-                _draw_strip(layout, context)
-                box = layout.box()
-                global _TOUR_TIP_STEP, _EXPERT_TIP
-                pkg = _active_package(context)
-                steps = pkg["steps"]
-                checks, current = tour_state(context)
-                done = sum(checks)
-                if current != _TOUR_TIP_STEP:
-                    _TOUR_TIP_STEP = current
-                    if current >= len(steps):
-                        _EXPERT_TIP = "You finished it. Ask me anything."
-                    else:
-                        _EXPERT_TIP = (f"{pkg['name']}, step "
-                                       f"{current + 1}: "
-                                       f"{steps[current]['title']}.")
-                if current >= len(steps):
-                    box.label(text=f"You finished: {pkg['name']}",
-                              icon="CHECKMARK")
-                    skills = "; ".join(s["skill"].split(":")[0]
-                                       for s in steps)
-                    _wrap(box, "You did every step yourself, in real "
-                               "Blender. Skills this project touched: "
-                               f"{skills}. Everything after this is "
-                               "just more tools, in the drawers below.")
-                    box.operator("buddy.tour_hide", text="Hide this")
-                else:
-                    step = steps[current]
-                    box.label(text=f"{pkg['name']} - step "
-                                   f"{current + 1} of {len(steps)}",
-                              icon="MESH_TORUS")
-                    _wrap(box, step["title"])
-                    _wrap(box, step["how"])
-                    video = step.get("video")
-                    if video:
-                        op = box.operator(
-                            "wm.url_open", text=video["label"],
-                            icon="URL")
-                        op.url = video["url"]
-                    box.prop(scene, "buddy_show_lesson",
-                             text="Show the full lesson",
-                             toggle=True)
-                    if getattr(scene, "buddy_show_lesson",
-                               False):
-                        _wrap(box, f"The skill: {step['skill']}.")
-                        for line in step["teach"]:
-                            _wrap(box, line)
-                    shown = []
-                    for tid in step.get("tools") or []:
-                        act = ACTIONS_BY_ID.get(tid)
-                        if act and _action_available(act, context):
-                            shown.append(act)
-                    if shown:
-                        box.label(text="Tools for this step",
-                                  icon="TOOL_SETTINGS")
-                        for act in shown:
-                            _draw_action(box, act, show_real)
-                    if not checks[current]:
-                        _wrap(box, f"Not yet: {step['missing']}")
-                    _wrap(box, f"Done so far: {done} of {len(steps)}. "
-                               "Do the step up there in Blender - "
-                               "this card watches your scene and "
-                               "moves on by itself when it's done.")
-                    box.operator("buddy.tour_hide", text="Hide for now")
-
-        if not (wm.buddy_query or "").strip():
-            _draw_where(layout, context)
-            _draw_heads_up(layout, context)
-
-        if not (wm.buddy_query or "").strip():
-            box = layout.box()
-            box.label(text="For right now", icon="INFO")
-            _wrap(box, _hint(context))
-            facts = _scene_facts(context)
-            for act in _now_deck(context, facts=facts):
-                _draw_action(box, act, show_real)
-            _wrap(box, f"Buddy is showing the "
-                       f"{len(_available_actions(context, facts))} "
-                       f"tools (of {len(ACTIONS)}) that can be used "
-                       f"right now. The rest appear the moment "
-                       f"they're usable - pick something, switch "
-                       f"mode, and this panel keeps up. Everything "
-                       f"Blender has is always in the index at the "
-                       f"bottom.")
-
-
-        if not (wm.buddy_query or "").strip():
-            box = layout.box()
-            box.label(text="Buddy Expert", icon="USER")
-            settings = _expert_settings()
-            if not _expert_ready(settings):
-                _wrap(box, "Your own AI expert lives here. Connect "
-                           "it with your key, your ChatGPT login "
-                           "(through Codex), a Claude key, or a free "
-                           "local AI. Ask in your own words and it "
-                           "answers for YOUR scene.")
-                box.operator("buddy.open_prefs", text="Set up the expert")
-            else:
-                box.prop(wm, "buddy_agent", text="Let the expert do it")
-                _wrap(box, "On: the expert makes a plan you can check "
-                           "and run. It can press tools, set exact "
-                           "values (like the exact sculpt brush you "
-                           "ask for), style node trees, and find "
-                           "add-ons. Off: it only gives advice.")
-                box.prop(wm, "buddy_ask", text="")
-                box.operator("buddy.ask_expert", text="Ask the expert")
-                if (wm.buddy_answer or "").strip():
-                    _wrap(box, wm.buddy_answer, width=48)
-                if wm.buddy_suggested:
-                    act = next((a for a in ACTIONS
-                                if a["id"] == wm.buddy_suggested), None)
-                    if act:
-                        op = box.operator(
-                            "buddy.action",
-                            text=f"Do it: {act['plain']}")
-                        op.action_id = act["id"]
-                if (wm.buddy_plan_report or "").strip():
-                    _wrap(box, wm.buddy_plan_report, width=48)
-                plan = []
-                try:
-                    plan = json.loads(wm.buddy_plan or "[]")
-                except Exception:
-                    plan = []
-                if plan:
-                    if (wm.buddy_plan_summary or "").strip():
-                        box.label(text="The plan", icon="SEQUENCE")
-                        _wrap(box, wm.buddy_plan_summary, width=48)
-                    for number, step in enumerate(plan, start=1):
-                        try:
-                            label = _step_label(step)
-                        except Exception:
-                            label = str(step.get("id", "Step"))
-                        box.label(text=f"{number}. {label}")
-                    box.operator("buddy.run_plan", text="Run these steps")
-                    box.operator("buddy.clear_plan",
-                                 text="Throw the plan away")
-
+        if not _query_active(context) and _start_screen_active(context):
+            _draw_start(layout, context)
+            return
         stale = _stale_map()
-        if stale:
+        stale_settings = _stale_settings()
+        # Peek only: the styles probe creates and removes data,
+        # which Blender forbids during a panel draw - when it ran
+        # from here, every style failed its dry-run at once and
+        # all seven were hidden as stale on a Blender where they
+        # work (GUI proof, 2026-11-13). register() runs the probe;
+        # until it has, the notice simply omits styles.
+        stale_styles = _STALE_STYLES_CACHE or set()
+        if stale or stale_settings or stale_styles:
             box = layout.box()
             box.label(text="This Blender changed some tools",
                       icon="ERROR")
-            names = "; ".join(ACTIONS_BY_ID[i]["plain"] for i in stale)
-            _wrap(box, f"{len(stale)} of Buddy's buttons were made "
-                       f"for an older Blender and don't match this "
-                       f"one (Blender {bpy.app.version_string}), so "
-                       f"they're hidden instead of failing on you: "
-                       f"{names}. Everything else works as normal, "
-                       f"and every tool this Blender actually has is "
-                       f"in the search below.")
+            bits = []
+            if stale:
+                names = "; ".join(ACTIONS_BY_ID[i]["plain"]
+                                  for i in stale)
+                bits.append(f"{len(stale)} of Buddy's buttons: "
+                            f"{names}")
+            if stale_settings:
+                names = "; ".join(SETTINGS[k]["label"]
+                                  for k in stale_settings)
+                bits.append(f"expert settings: {names}")
+            if stale_styles:
+                names = "; ".join(STYLES[k][0] for k in stale_styles)
+                bits.append(f"expert styles: {names}")
+            _wrap(box, "Some of what Buddy offers was made for an "
+                       f"older Blender and doesn't match this one "
+                       f"(Blender {bpy.app.version_string}), so it's "
+                       f"hidden instead of failing on you - "
+                       + "; ".join(bits)
+                       + ". Everything else works as normal, and "
+                       "every tool this Blender actually has is in "
+                       "the index below.")
 
-        box = layout.box()
-        box.label(text="What do you want to do?", icon="VIEWZOOM")
-        box.prop(wm, "buddy_query", text="")
-        query = getattr(wm, "buddy_query", "")
-        if query.strip():
-            hits = search_actions(query, available_only=True,
-                                  context=context)
-            if hits:
-                for act in hits[:10]:
-                    _draw_action(box, act, show_real)
-            else:
-                _wrap(box, "Nothing you can use right now matches "
-                           "that. It may need a picked thing or a "
-                           "different mode first - or try everyday "
-                           "words: round, copy, hole, smooth, move, "
-                           "thicker, colour, delete.")
-        box.prop(wm, "buddy_show_real",
-                 text="Also show Blender's real names")
 
-        # The tool sections live in their own collapsible panels
-        # below this one (SECTION_PANELS) - a tidy list of drawers,
-        # not one endless scrolling page.
-
-        # The complete index: everything else Blender can do, searchable.
-        box = layout.box()
-        box.label(text="Everything else Blender can do", icon="QUESTION")
-        index = build_index()
-        _wrap(box, f"The plain-words buttons above are the everyday set. "
-                   f"Blender has {len(index)} tools in total in this "
-                   f"version - and every single one of them is reachable "
-                   f"from here, so nothing is lost. Type any part of a "
-                   f"name or job in the search box at the top and matches "
-                   f"appear below, with Blender's own one-line explanation.")
-        if query.strip():
-            hits = search_index(query)
-            if hits:
-                for e in hits:
-                    row = box.row(align=True)
-                    op = row.operator("buddy.run_any",
-                                      text=e["label"] or e["idname"])
-                    op.op_id = e["idname"]
-                    col = box.column()
-                    col.scale_y = 0.8
-                    if e["desc"]:
-                        _wrap(col, e["desc"])
-                    _wrap(col, f"Blender's name for it: {e['idname']}", width=52)
-                    box.separator(factor=0.6)
-            else:
-                _wrap(box, "No tool in the whole of Blender matches that. "
-                           "Try fewer or different words.")
+def _draw_tour(layout, context):
+    """The guided project's strip + step card, in its own
+    section, shown only while a project runs."""
+    global _TOUR_TIP_STEP, _EXPERT_TIP
+    wm = context.window_manager
+    show_real = getattr(wm, "buddy_show_real", True)
+    scene = context.scene
+    _draw_strip(layout, context)
+    box = layout.box()
+    pkg = _active_package(context)
+    steps = pkg["steps"]
+    checks, current = tour_state(context)
+    # Done = the passing PREFIX, the same number the
+    # header's "step N of 8" derives from. This used to be
+    # sum(checks) - every passing check anywhere - so a
+    # later step passing early (or an earlier one dropping
+    # out mid-procedure) made "Done so far" contradict the
+    # header and flip between unrelated operations
+    # (re-walk M3: 1 -> 2 -> 1 -> 2 under a header that
+    # never left step 2). One computation serves both.
+    done = current
+    if current != _TOUR_TIP_STEP:
+        _TOUR_TIP_STEP = current
+        if current >= len(steps):
+            _EXPERT_TIP = "You finished it. Ask me anything."
         else:
-            _wrap(box, "These keep Blender's own names - they're the long "
-                       "tail, there are thousands, and most people need "
-                       "only a few. If you find yourself using one a lot, "
-                       "it deserves a plain-words button above.")
+            _EXPERT_TIP = (f"{pkg['name']}, step {current + 1}: "
+                           f"{steps[current]['title']}.")
+    if current >= len(steps):
+        box.label(text=f"You finished: {pkg['name']}",
+                  icon="CHECKMARK")
+        skills = "; ".join(s["skill"].split(":")[0] for s in steps)
+        _wrap(box, "You did every step yourself, in real "
+                   "Blender. Skills this project touched: "
+                   f"{skills}. Everything after this is "
+                   "just more tools, in the drawers below.")
+        box.operator("buddy.tour_hide", text="Hide this")
+        return
+    step = steps[current]
+    box.label(text=f"{pkg['name']} - step {current + 1} of "
+                   f"{len(steps)}", icon="MESH_TORUS")
+    _wrap(box, step["title"])
+    _wrap(box, step["how"])
+    video = step.get("video")
+    if video:
+        op = box.operator("wm.url_open", text=video["label"],
+                          icon="URL")
+        op.url = video["url"]
+    box.prop(scene, "buddy_show_lesson",
+             text="Hide the full lesson"
+             if getattr(scene, "buddy_show_lesson", False)
+             else "Show the full lesson", toggle=True)
+    if getattr(scene, "buddy_show_lesson", False):
+        _wrap(box, f"The skill: {step['skill']}.")
+        for line in step["teach"]:
+            _wrap(box, line)
+    shown = []
+    for tid in step.get("tools") or []:
+        act = ACTIONS_BY_ID.get(tid)
+        if act and _action_available(act, context):
+            shown.append(act)
+    if shown:
+        box.label(text="Tools for this step", icon="TOOL_SETTINGS")
+        for act in shown:
+            _draw_action(box, act, show_real)
+    if not checks[current]:
+        _wrap(box, f"Not yet: {step['missing']}")
+    _wrap(box, f"Done so far: {done} of {len(steps)}. "
+               "Do the step up there in Blender - "
+               "this card watches your scene and "
+               "moves on by itself when it's done.")
+    box.operator("buddy.tour_hide", text="Hide for now")
+
+
+def _draw_now(layout, context):
+    wm = context.window_manager
+    show_real = getattr(wm, "buddy_show_real", True)
+    _wrap(layout, _hint(context))
+    facts = _scene_facts(context)
+    for act in _now_deck(context, facts=facts):
+        _draw_action(layout, act, show_real)
+    _wrap(layout, f"Buddy is showing the "
+                  f"{len(_available_actions(context, facts))} "
+                  f"tools (of {len(ACTIONS)}) that can be used "
+                  f"right now. The rest appear the moment "
+                  f"they're usable - pick something, switch "
+                  f"mode, and this panel keeps up. Everything "
+                  f"Blender has is always in the index at the "
+                  f"bottom.")
+
+
+def _draw_expert(layout, context):
+    """The Expert section. The question box, the Ask button and
+    the task-help toggle ALWAYS draw - readiness is words inside
+    the section naming exactly what is missing, with the remedy
+    beside it. (It used to be a gate: on the ChatGPT route, a
+    missed program search deleted the whole box - owner: "no box
+    even shows up if i use app sign in".)"""
+    wm = context.window_manager
+    settings = _expert_settings()
+    layout.prop(wm, "buddy_agent", text="Expert help with tasks")
+    _wrap(layout, "Off: advice, explanations and exact values to "
+                  "use yourself. On: describe a job and the expert "
+                  "drafts the steps - you check them, you run "
+                  "them. It can press tools, set exact values "
+                  "(like the exact sculpt brush you ask for), "
+                  "wire node trees, set colour ramps and fetch "
+                  "real resources.")
+    if not _expert_ready(settings):
+        _wrap(layout, _expert_setup_message(settings))
+        layout.operator("buddy.open_prefs", text="Set up the expert")
+        if settings.get("service") == "CODEX" and _find_codex():
+            layout.operator("buddy.open_codex",
+                            text="Open Codex to sign in")
+    if _EXPERT_JOB["busy"]:
+        _wrap(layout, "Asking the expert - this can take a while, "
+                      "especially through the ChatGPT route. You "
+                      "can keep working in Blender; press Esc in "
+                      "this view to stop waiting.")
+    ask_row = layout.row()
+    ask_row.enabled = not _EXPERT_JOB["busy"]
+    ask_row.prop(wm, "buddy_ask", text="")
+    ask_btn = layout.row()
+    ask_btn.enabled = not _EXPERT_JOB["busy"]
+    ask_btn.operator("buddy.ask_expert", text="Ask the expert")
+    if (wm.buddy_answer or "").strip():
+        _wrap(layout, wm.buddy_answer, width=48)
+    if wm.buddy_suggested:
+        act = next((a for a in ACTIONS
+                    if a["id"] == wm.buddy_suggested), None)
+        if act:
+            op = layout.operator("buddy.action",
+                                 text=f"Do it: {act['plain']}")
+            op.action_id = act["id"]
+    if (wm.buddy_plan_report or "").strip():
+        _wrap(layout, wm.buddy_plan_report, width=48)
+    plan = []
+    try:
+        plan = json.loads(wm.buddy_plan or "[]")
+    except Exception:
+        plan = []
+    if plan:
+        if (wm.buddy_plan_summary or "").strip():
+            layout.label(text="The plan", icon="SEQUENCE")
+            _wrap(layout, wm.buddy_plan_summary, width=48)
+        for number, step in enumerate(plan, start=1):
+            try:
+                label = _step_label(step)
+            except Exception:
+                label = str(step.get("id", "Step"))
+            layout.label(text=f"{number}. {label}")
+        layout.operator("buddy.run_plan", text="Run these steps")
+        layout.operator("buddy.clear_plan",
+                        text="Throw the plan away")
+    results = []
+    try:
+        results = json.loads(wm.buddy_find or "[]")
+    except Exception:
+        results = []
+    if results:
+        layout.label(text="Found for you - links checked",
+                     icon="URL")
+        for r in results:
+            op = layout.operator(
+                "wm.url_open",
+                text=f"{r['name']} ({r['source']})")
+            op.url = r["url"]
+
+
+def _draw_search(layout, context):
+    wm = context.window_manager
+    show_real = getattr(wm, "buddy_show_real", True)
+    layout.prop(wm, "buddy_query", text="")
+    query = getattr(wm, "buddy_query", "")
+    if query.strip():
+        hits = search_actions(query, available_only=True,
+                              context=context)
+        if hits:
+            for act in hits[:10]:
+                _draw_action(layout, act, show_real)
+        else:
+            _wrap(layout, "Nothing you can use right now matches "
+                          "that. It may need a picked thing or a "
+                          "different mode first - or try everyday "
+                          "words: round, copy, hole, smooth, move, "
+                          "thicker, colour, delete.")
+    layout.prop(wm, "buddy_show_real",
+                text="Also show Blender's real names")
+
+
+def _draw_index(layout, context):
+    wm = context.window_manager
+    query = getattr(wm, "buddy_query", "")
+    index = build_index()
+    _wrap(layout, f"The plain-words buttons above are the everyday set. "
+                  f"Blender has {len(index)} tools in total in this "
+                  f"version - and every single one of them is reachable "
+                  f"from here, so nothing is lost. Type any part of a "
+                  f"name or job in the search box at the top and matches "
+                  f"appear below, with Blender's own one-line explanation.")
+    if query.strip():
+        hits = search_index(query)
+        if hits:
+            for e in hits:
+                row = layout.row(align=True)
+                op = row.operator("buddy.run_any",
+                                  text=e["label"] or e["idname"])
+                op.op_id = e["idname"]
+                col = layout.column()
+                col.scale_y = 0.8
+                if e["desc"]:
+                    _wrap(col, e["desc"])
+                _wrap(col, f"Blender's name for it: {e['idname']}", width=52)
+                layout.separator(factor=0.6)
+        else:
+            _wrap(layout, "No tool in the whole of Blender matches that. "
+                          "Try fewer or different words.")
+    else:
+        _wrap(layout, "These keep Blender's own names - they're the long "
+                      "tail, there are thousands, and most people need "
+                      "only a few. If you find yourself using one a lot, "
+                      "it deserves a plain-words button above.")
+
+
+def _make_block_panel(idname, label, order, draw_fn, poll_fn=None,
+                      default_closed=False, icon=None):
+    """One collapsible section of the main panel - the same
+    factory discipline as the tool drawers (layout.panel doesn't
+    exist in 4.2.5's Python API), applied to the panel's own
+    blocks so the tab is a list of sections, not a scroll."""
+    def draw(self, context):
+        global _WRAP_CAP
+        _WRAP_CAP = _fit_width(context)
+        draw_fn(self.layout, context)
+
+    def poll(cls, context):
+        if poll_fn is None:
+            return True
+        try:
+            return poll_fn(context)
+        except Exception:
+            return True
+
+    attrs = {
+        "bl_idname": idname,
+        "bl_label": label,
+        "bl_space_type": "VIEW_3D",
+        "bl_region_type": "UI",
+        "bl_category": "Blender Buddy",
+        "bl_parent_id": "VIEW3D_PT_blender_buddy",
+        "bl_order": order,
+        "draw": draw,
+        "poll": classmethod(poll),
+    }
+    if default_closed:
+        attrs["bl_options"] = {"DEFAULT_CLOSED"}
+    return type(idname, (Panel,), attrs)
+
+
+def _poll_not_searching(context):
+    return not _query_active(context) and not _start_screen_active(context)
+
+
+def _poll_tour(context):
+    return (getattr(context.scene, "buddy_tour_started", False)
+            and not _query_active(context))
+
+
+def _poll_headsup(context):
+    return (_poll_not_searching(context)
+            and bool(_visible_traps(context)))
+
+
+VIEW3D_PT_buddy_tour = _make_block_panel(
+    "VIEW3D_PT_buddy_tour", "Guided project", -100, _draw_tour,
+    poll_fn=_poll_tour)
+VIEW3D_PT_buddy_where = _make_block_panel(
+    "VIEW3D_PT_buddy_where", "Where you are", -90,
+    lambda layout, context: _draw_where(layout, context, boxed=False),
+    poll_fn=_poll_not_searching)
+VIEW3D_PT_buddy_headsup = _make_block_panel(
+    "VIEW3D_PT_buddy_headsup", "Heads up", -80,
+    lambda layout, context: _draw_heads_up(layout, context,
+                                           boxed=False),
+    poll_fn=_poll_headsup)
+VIEW3D_PT_buddy_now = _make_block_panel(
+    "VIEW3D_PT_buddy_now", "For right now", -70, _draw_now,
+    poll_fn=_poll_not_searching)
+VIEW3D_PT_buddy_expert = _make_block_panel(
+    "VIEW3D_PT_buddy_expert", "Buddy Expert", -60, _draw_expert,
+    poll_fn=_poll_not_searching, default_closed=True)
+VIEW3D_PT_buddy_search = _make_block_panel(
+    "VIEW3D_PT_buddy_search", "What do you want to do?", 100,
+    _draw_search, default_closed=True)
+VIEW3D_PT_buddy_index = _make_block_panel(
+    "VIEW3D_PT_buddy_index", "Everything else Blender can do", 110,
+    _draw_index, default_closed=True)
 
 
 
@@ -5365,9 +10269,10 @@ def _visible_traps(context):
             if t["key"] not in muted][:2]
 
 
-def _draw_where(layout, context):
-    box = layout.box()
-    box.label(text="Where you are", icon="INFO")
+def _draw_where(layout, context, boxed=True):
+    box = layout.box() if boxed else layout
+    if boxed:
+        box.label(text="Where you are", icon="INFO")
     headline, sub = _where_am_i(context)
     _wrap(box, headline)
     _wrap(box, sub)
@@ -5381,10 +10286,11 @@ def _draw_where(layout, context):
         op.action_id = "start_shaping"
 
 
-def _draw_heads_up(layout, context):
+def _draw_heads_up(layout, context, boxed=True):
     for trap in _visible_traps(context):
-        box = layout.box()
-        box.label(text="Heads up", icon="ERROR")
+        box = layout.box() if boxed else layout
+        if boxed:
+            box.label(text="Heads up", icon="ERROR")
         _wrap(box, trap["text"])
         for idname, text in trap["fixes"]:
             box.operator(idname, text=text)
@@ -5776,6 +10682,7 @@ CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_tour_start, BUDDY_OT_tour_hide, BUDDY_OT_tour_do,
            BUDDY_OT_open_prefs, BUDDY_OT_ask_expert, BUDDY_OT_run_plan,
            BUDDY_OT_clear_plan, BUDDY_OT_test_expert,
+           BUDDY_OT_expert_wait, BUDDY_OT_open_codex,
            BUDDY_OT_pie, BUDDY_OT_build_screens,
            BUDDY_OT_mode_back, BUDDY_OT_origin_center,
            BUDDY_OT_origin_bottom, BUDDY_OT_cursor_home,
@@ -5783,6 +10690,10 @@ CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_show_everything, BUDDY_OT_mute_trap,
            VIEW3D_MT_buddy_pie,
            VIEW3D_PT_blender_buddy,
+           VIEW3D_PT_buddy_tour, VIEW3D_PT_buddy_where,
+           VIEW3D_PT_buddy_headsup, VIEW3D_PT_buddy_now,
+           VIEW3D_PT_buddy_expert, VIEW3D_PT_buddy_search,
+           VIEW3D_PT_buddy_index,
            VIEW3D_PT_buddy_projects) + SECTION_PANELS
 
 
@@ -5833,11 +10744,13 @@ def register():
     bpy.types.WindowManager.buddy_suggested = StringProperty(
         name="Expert suggested button", default="")
     bpy.types.WindowManager.buddy_agent = BoolProperty(
-        name="Let the expert do it",
-        description="On: the expert answers with a plan of steps you "
-                    "can run, so it does the work in Blender for you. "
-                    "Off: it only advises",
-        default=True)
+        name="Expert help with tasks",
+        description="On: describe a job and the expert drafts the "
+                    "steps for it - you check them, and you run "
+                    "them when you're ready. Off: the expert gives "
+                    "advice, explanations and exact values for you "
+                    "to use yourself",
+        default=False)
     bpy.types.WindowManager.buddy_plan = StringProperty(
         name="Expert plan", default="")
     bpy.types.WindowManager.buddy_plan_summary = StringProperty(
@@ -5848,6 +10761,8 @@ def register():
         name="Expert plan replanned", default="")
     bpy.types.WindowManager.buddy_expert_status = StringProperty(
         name="Expert connection test result", default="")
+    bpy.types.WindowManager.buddy_find = StringProperty(
+        name="Expert resource results", default="")
     bpy.types.WindowManager.buddy_muted = StringProperty(
         name="Heads-ups already got",
         description="Which plain-words heads-ups you've "
@@ -5871,7 +10786,23 @@ def register():
                 _conduct_check)
     except Exception:
         pass
+    try:
+        if _buddy_grade_save not in bpy.app.handlers.save_post:
+            bpy.app.handlers.save_post.append(_buddy_grade_save)
+        if _buddy_grade_save not in bpy.app.handlers.load_post:
+            bpy.app.handlers.load_post.append(_buddy_grade_save)
+    except Exception:
+        pass
     _register_tools()
+    # Run the styles dry-probe HERE, in register's context: it
+    # creates and removes a scratch object and materials, work
+    # Blender forbids while a panel is drawing. A probe failure
+    # must never break registration - it just leaves the cache
+    # unset, and operator contexts will run the probe later.
+    try:
+        _stale_styles()
+    except Exception:
+        pass
     try:
         wm = bpy.context.window_manager
         kc = wm.keyconfigs.addon if wm else None
@@ -5899,7 +10830,7 @@ def unregister():
                  "buddy_answer", "buddy_suggested", "buddy_agent",
                  "buddy_plan", "buddy_plan_summary", "buddy_plan_report",
                  "buddy_plan_retried", "buddy_expert_status",
-                 "buddy_muted"):
+                 "buddy_find", "buddy_muted"):
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
     for attr in ("buddy_tour_started", "buddy_show_lesson",
@@ -5923,6 +10854,12 @@ def unregister():
             _conduct_check)
     except Exception:
         pass
+    for _handlers in (bpy.app.handlers.save_post,
+                      bpy.app.handlers.load_post):
+        try:
+            _handlers.remove(_buddy_grade_save)
+        except Exception:
+            pass
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 

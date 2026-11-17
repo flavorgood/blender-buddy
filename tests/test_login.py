@@ -35,8 +35,17 @@ assert bb._expert_ready({"service": "KEY", "key": "", "url": "https://x"}) is Fa
 assert bb._expert_ready({"service": "KEY", "key": "k", "url": "https://x"}) is True
 assert bb._expert_ready({"service": "KEY", "key": "",
                          "url": "http://localhost:1234/v1"}) is True
-assert bb._expert_ready({"service": "LOCAL", "key": "", "url": ""}) is True
-print("LOGIN_PASS readiness: key route needs a key, local needs nothing")
+assert bb._expert_ready({"service": "LOCAL", "key": "", "url": ""}) is False
+real_local_alive = bb._local_alive
+bb._local_alive = lambda url: False
+assert bb._expert_ready({"service": "LOCAL", "key": "",
+                         "url": "http://localhost:11434/v1"}) is False
+bb._local_alive = lambda url: True
+assert bb._expert_ready({"service": "LOCAL", "key": "",
+                         "url": "http://localhost:11434/v1"}) is True
+print("LOGIN_PASS readiness: key route needs a key, local route needs "
+      "a local AI that actually answers (the probe is stubbed in this "
+      "suite; its real proof is the live failure drill)")
 
 real_which = bb.shutil.which
 bb.shutil.which = lambda name: "/usr/bin/codex" if name == "codex" else None
@@ -76,6 +85,7 @@ def no_http(url, key, payload):
 
 
 bb._expert_http = no_http
+wm.buddy_agent = True
 bpy.ops.buddy.ask_expert()
 plan = json.loads(wm.buddy_plan or "[]")
 assert plan == [{"kind": "button", "id": "add_ball"}], plan
@@ -147,5 +157,6 @@ assert wm.buddy_plan_report.startswith("Done - all 1 steps ran")
 print("LOGIN_PASS Claude key: Anthropic shape sent, text read back, plan ran")
 
 bb.shutil.which = real_which
+bb._local_alive = real_local_alive
 bb.unregister()
 print("ALL LOGIN TESTS PASSED")
