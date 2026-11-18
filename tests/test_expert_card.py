@@ -14,6 +14,7 @@ rig - see redesign/FIX11_LOG.md.
 import json
 import os
 import sys
+import time
 
 import bpy
 
@@ -119,12 +120,10 @@ assert bb._card_clamp_scroll(3, 2, 4) == 0
 print("CARD_PASS wrap, field view and scroll math")
 
 # --- status line truth ----------------------------------------------
-assert "Asking the expert" in bb._card_status_text(
-    {"service": "KEY", "key": "k", "url": "", "model": "m"}) or True
-bb._EXPERT_JOB["busy"] = True
+bb._EXPERT_JOB.update(busy=True, started=time.monotonic(), limit=140)
 try:
-    assert "Asking the expert" in bb._card_status_text(
-        {"service": "KEY", "key": "", "url": "", "model": ""})
+    status = bb._card_status_text({"service": "CODEX", "key": "", "url": "", "model": ""})
+    assert "Waiting for the expert" in status and "of 140s" in status and "Esc" in status
 finally:
     bb._EXPERT_JOB["busy"] = False
 assert "Ready" in bb._card_status_text(

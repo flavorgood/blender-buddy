@@ -22,6 +22,7 @@ own tool underneath, and Blender's normal interface stays untouched.
 """
 
 import json
+import ipaddress
 import math
 import os
 import random
@@ -30,12 +31,15 @@ import shutil
 import filecmp
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from concurrent.futures import Future
 from difflib import SequenceMatcher
 
 import bpy
@@ -46,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 2, 3),
+    "version": (3, 2, 4),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -321,6 +325,11 @@ ACTIONS = [
          does="A flat disc or ring outline: plates, lids, wheels seen from the side.",
          real="Circle", key="Shift+A", icon="MESH_CIRCLE",
          kind="op", target="mesh.primitive_circle_add", words="disc plate lid round flat"),
+    dict(id="reshape_as_circle", section="4. Shape it",
+         plain="Turn the selected mesh into a flat circle outline",
+         does="Shows a flat circle on this same object. Remove the Flat Circle modifier to bring its original shape back.",
+         real="Mesh Circle geometry modifier", key="-", icon="MESH_CIRCLE",
+         kind="custom", target="reshape_as_circle", needs="object", words="convert cube mesh ring outline flat circle"),
     dict(id="add_grid", section="8. More shapes",
          plain="Add a sheet of squares",
          does="A flat sheet already divided into a grid - good for tiled floors, cloth, and land you want to sculpt into hills.",
@@ -848,6 +857,59 @@ def _custom_duplicate(context):
     return bpy.ops.object.duplicate()
 
 
+def _custom_reshape_as_circle(context):
+    from mathutils import Vector
+
+    obj = context.object
+    if not obj or obj.type != "MESH" or context.mode != "OBJECT":
+        raise ValueError("Pick a mesh in Object Mode first.")
+    evaluated = obj.evaluated_get(context.evaluated_depsgraph_get())
+    if not len(evaluated.data.vertices):
+        raise ValueError("This mesh has no shape to size the circle from.")
+    corners = [Vector(co) for co in evaluated.bound_box]
+    center = sum(corners, Vector()) / len(corners)
+    axes = evaluated.matrix_world.to_3x3()
+    x, y = axes.col[0], axes.col[1]
+    radius = max((max(co[i] for co in corners) - min(co[i] for co in corners))
+                 * axes.col[i].length for i in (0, 1)) / 2
+    # Rotate the node's axes to compensate for both non-uniform scale and
+    # sheared parent transforms. The ring stays circular in the object's XY plane.
+    angle = 0.5 * math.atan2(2 * x.dot(y), x.length_squared - y.length_squared)
+    c, s = math.cos(angle), math.sin(angle)
+    scale_x, scale_y = (x*c + y*s).length, (y*c - x*s).length
+    if min(radius, scale_x, scale_y) <= 1e-8:
+        raise ValueError("The mesh needs a nonzero width and an uncollapsed XY plane.")
+
+    group = bpy.data.node_groups.new("Buddy Flat Circle", "GeometryNodeTree")
+    modifier = None
+    try:
+        for direction in ("INPUT", "OUTPUT"):
+            group.interface.new_socket(name="Geometry", in_out=direction,
+                                       socket_type="NodeSocketGeometry")
+        circle = group.nodes.new("GeometryNodeMeshCircle")
+        circle.location = (-400, 0)
+        circle.fill_type = "NONE"
+        circle.inputs["Vertices"].default_value = 64
+        circle.inputs["Radius"].default_value = radius
+        transform = group.nodes.new("GeometryNodeTransform")
+        transform.location = (-170, 0)
+        transform.inputs["Translation"].default_value = center
+        transform.inputs["Rotation"].default_value = (0, 0, angle)
+        transform.inputs["Scale"].default_value = (1/scale_x, 1/scale_y, 1)
+        output = group.nodes.new("NodeGroupOutput")
+        output.location = (80, 0)
+        group.links.new(circle.outputs["Mesh"], transform.inputs["Geometry"])
+        group.links.new(transform.outputs["Geometry"], output.inputs["Geometry"])
+        modifier = obj.modifiers.new("Flat Circle", "NODES")
+        modifier.node_group = group
+    except Exception:
+        if modifier is not None:
+            obj.modifiers.remove(modifier)
+        bpy.data.node_groups.remove(group)
+        raise
+    return {"FINISHED"}
+
+
 def _custom_delete_object(context):
     if context.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
@@ -927,6 +989,12 @@ def _home(filename):
     return os.path.join(os.path.expanduser("~"), filename)
 
 
+def _set_default_picture_path(scene):
+    path = (scene.render.filepath or "").strip()
+    if not path or os.path.normpath(path) == os.path.normpath("/tmp"):
+        scene.render.filepath = _home("blender_buddy_picture.png")
+
+
 def _custom_render_picture(context):
     scene = context.scene
     # A first picture must just work: if the scene has no camera or no
@@ -938,9 +1006,7 @@ def _custom_render_picture(context):
         scene.camera = context.object
     if not any(o.type == "LIGHT" for o in scene.objects):
         bpy.ops.object.light_add(type="SUN", location=(4.0, -4.0, 8.0))
-    path = (scene.render.filepath or "").strip()
-    if path in {"", "/tmp", "/tmp/"}:
-        scene.render.filepath = _home("blender_buddy_picture.png")
+    _set_default_picture_path(scene)
     return bpy.ops.render.render(write_still=True)
 
 
@@ -1014,6 +1080,7 @@ def _custom_apply_modifiers(context):
 
 _CUSTOM = {
     "duplicate": _custom_duplicate,
+    "reshape_as_circle": _custom_reshape_as_circle,
     "delete_object": _custom_delete_object,
     "colour": _custom_colour,
     "apply_transforms": _custom_apply_transforms,
@@ -1101,6 +1168,9 @@ def build_index():
             entries.append({
                 "idname": f"{cat}.{name}",
                 "cat": cat,
+                "file_operator": cat in _PLAN_TOOL_CATEGORIES and any(
+                    p.subtype in {"FILE_PATH", "DIR_PATH", "FILE_NAME"}
+                    for p in rna.properties if p.type == "STRING"),
                 "label": label,
                 "desc": desc,
                 "head_words": head_words,
@@ -3104,9 +3174,7 @@ def _tour_step_first_picture(context):
             Vector((0.04, 0.01, -0.02)) - cam.location
         ).to_track_quat("-Z", "Y").to_euler()
         cam.data.display_size = 0.1
-    path = (scene.render.filepath or "").strip()
-    if path in {"", "/tmp", "/tmp/"}:
-        scene.render.filepath = _home("blender_buddy_picture.png")
+    _set_default_picture_path(scene)
     bpy.ops.render.render(write_still=True)
 
 
@@ -6604,9 +6672,51 @@ def _expert_service_update(self, context):
             self.expert_model = _EXPERT_DEFAULT_MODEL
 
 
+_EXPERT_TASK_MODE = None
+
+
+def _task_mode_path(create=False):
+    folder = bpy.utils.user_resource("CONFIG", path="blender_buddy", create=create)
+    if not folder:
+        raise OSError("Blender's configuration folder is unavailable")
+    return os.path.join(folder, "task_mode.json")
+
+
+def _task_mode_get(_owner):
+    global _EXPERT_TASK_MODE
+    if _EXPERT_TASK_MODE is None:
+        try:
+            with open(_task_mode_path(), encoding="utf-8") as stream:
+                _EXPERT_TASK_MODE = json.load(stream) is not False
+        except (OSError, ValueError):
+            _EXPERT_TASK_MODE = True
+    return _EXPERT_TASK_MODE
+
+
+def _task_mode_set(_owner, value):
+    global _EXPERT_TASK_MODE
+    # Saving Blender's preferences here would also commit unrelated edits.
+    # Keep this single choice beside the profile, including with auto-save off.
+    path = _task_mode_path(create=True)
+    temp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                       dir=os.path.dirname(path), delete=False)
+    try:
+        with temp:
+            json.dump(bool(value), temp)
+        os.replace(temp.name, path)
+    finally:
+        if os.path.exists(temp.name):
+            os.unlink(temp.name)
+    _EXPERT_TASK_MODE = bool(value)
+
+
 class BUDDY_Preferences(AddonPreferences):
     bl_idname = __name__
 
+    expert_task_mode: BoolProperty(
+        name="Expert help with tasks",
+        description="Draft steps to review and run. Turn off for advice only",
+        default=True, get=_task_mode_get, set=_task_mode_set)
     expert_service: EnumProperty(
         name="Expert connects by",
         description="Key: an AI service key you paste below. Claude "
@@ -6684,7 +6794,9 @@ class BUDDY_Preferences(AddonPreferences):
         _WRAP_CAP = _fit_width(context)
         layout = self.layout
         layout.prop(self, "expert_service")
-        if self.expert_service == "CODEX":
+        if self.expert_service == "CODEX" and not bpy.app.online_access:
+            _wrap(layout, _OFFLINE_MESSAGE)
+        elif self.expert_service == "CODEX":
             # Status FIRST, with the remedy as a button: the login
             # is one click from here, not a treasure hunt.
             found = _find_codex()
@@ -6707,12 +6819,7 @@ class BUDDY_Preferences(AddonPreferences):
                 layout.operator("buddy.open_codex",
                                 text="Open Codex to sign in")
             else:
-                _wrap(layout, "Codex: not installed on this "
-                              "computer. Install OpenAI's Codex "
-                              "program, open it once and sign in "
-                              "with your ChatGPT account - then "
-                              "this page will say 'found' and the "
-                              "expert works.")
+                _wrap(layout, 'Codex command-line program: not located from Blender. This does not prove the desktop app is missing or that you need to sign in again. Restart Blender after Codex finishes updating, then test again.')
             _wrap(layout, "The key, address and model fields "
                           "don't apply to the ChatGPT route - "
                           "Codex uses its own - so they're hidden "
@@ -6728,6 +6835,7 @@ class BUDDY_Preferences(AddonPreferences):
             layout.prop(self, "expert_key")
             layout.prop(self, "expert_url")
             layout.prop(self, "expert_model")
+        layout.prop(self, "expert_task_mode")
         layout.prop(self, "expert_float")
         layout.operator("buddy.test_expert",
                         text="Test this connection")
@@ -6795,7 +6903,42 @@ def _expert_settings():
 
 
 def _is_local_url(url):
-    return (url or "").startswith(("http://localhost", "http://127.0.0.1"))
+    try:
+        parts = urllib.parse.urlsplit(url or "")
+        if parts.scheme not in {"http", "https"} or parts.username is not None:
+            return False
+        host = parts.hostname
+        return host == "localhost" or ipaddress.ip_address(host or "").is_loopback
+    except ValueError:
+        return False
+
+
+_OFFLINE_MESSAGE = ("Blender's online access is off. Use a local model on this computer "
+                    "or allow online access in Blender to contact the service.")
+
+
+def _expert_access_allowed(settings):
+    # Read Blender's permission only on the main thread, before starting work.
+    return (bpy.app.online_access or
+            (settings.get("service") != "CODEX" and _is_local_url(settings.get("url"))))
+
+
+class _LoopbackRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_local_url(newurl):
+            raise _ExpertFault("offline")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _expert_urlopen(request, timeout, loopback_only=False):
+    if not loopback_only:
+        return urllib.request.urlopen(request, timeout=timeout)
+    if not _is_local_url(request.full_url):
+        raise _ExpertFault("offline")
+    # A permitted local call must also stay local after redirects, and must
+    # never pick up an external HTTP proxy from the user's environment.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _LoopbackRedirect())
+    return opener.open(request, timeout=timeout)
 
 
 _LOCAL_PROBE = {"at": 0.0, "ok": False, "url": ""}
@@ -6809,6 +6952,8 @@ def _local_alive(url):
     was a guess that was always yes - so when the server was off,
     the ask failed and the one message written for exactly that
     failure could never be shown."""
+    if not bpy.app.online_access and not _is_local_url(url):
+        return False
     base = (url or "").split("/v1/")[0].rstrip("/")
     if not base:
         return False
@@ -6819,7 +6964,7 @@ def _local_alive(url):
     try:
         req = urllib.request.Request(base + "/api/version",
                                      method="GET")
-        with urllib.request.urlopen(req, timeout=0.7) as resp:
+        with _expert_urlopen(req, timeout=0.7, loopback_only=not bpy.app.online_access) as resp:
             ok = resp.status == 200
     except Exception:
         ok = False
@@ -6831,6 +6976,8 @@ def _expert_ready(settings):
     """Can the expert actually be asked right now? A key for key
     services, the Codex program for ChatGPT login, and for a local
     AI: the local AI itself, answering."""
+    if not _expert_access_allowed(settings):
+        return False
     service = settings.get("service", "KEY")
     if service == "CODEX":
         return _find_codex() is not None
@@ -6840,14 +6987,11 @@ def _expert_ready(settings):
 
 
 def _expert_setup_message(settings):
+    if not _expert_access_allowed(settings):
+        return _OFFLINE_MESSAGE
     service = settings.get("service", "KEY")
     if service == "CODEX":
-        return ("The expert is set to use your ChatGPT login, but "
-                "OpenAI's Codex program isn't on this computer yet. "
-                "Install Codex (it's OpenAI's own program), sign in "
-                "with your ChatGPT account once, then ask again - "
-                "Buddy asks through it, so your login never touches "
-                "Buddy.")
+        return ("The expert is set to use your ChatGPT login, but Buddy couldn't locate the Codex command-line program. This does not mean the desktop app is missing or that you need to sign in again.")
     if service == "LOCAL":
         return ("The expert is set to a local AI, but nothing is "
                 "answering on this computer. Start your local AI "
@@ -6886,6 +7030,8 @@ def _fault_message(settings, exc):
     model = (settings or {}).get("model", "") or "the named model"
     if isinstance(exc, _ExpertFault):
         kind, detail = exc.kind, exc.detail
+        if kind == "offline":
+            return _OFFLINE_MESSAGE
         if kind == "key_refused":
             if service == "CLAUDE":
                 return ("Your Claude key was refused by Anthropic "
@@ -6924,6 +7070,11 @@ def _fault_message(settings, exc):
                     "may be offline. Give it a moment, then ask "
                     "again.")
         if kind == "timeout":
+            if detail:
+                return f"The expert did not finish within {detail} seconds. You can ask again."
+            if service == "CODEX":
+                return ("Codex didn't finish this request within two "
+                        "minutes. You can ask again.")
             if service == "LOCAL" or _is_local_url(
                     (settings or {}).get("url")):
                 return ("Your local AI is running, but it didn't "
@@ -6945,12 +7096,7 @@ def _fault_message(settings, exc):
                     f"not your scene - give it a moment, then ask "
                     f"again.")
         if kind == "codex_missing":
-            return ("The expert is set to use your ChatGPT login, "
-                    "but OpenAI's Codex program isn't on this "
-                    "computer yet. Install Codex (it's OpenAI's own "
-                    "program), open it once and sign in with your "
-                    "ChatGPT account, then ask again - Buddy asks "
-                    "through it, so your login never touches Buddy.")
+            return ("The expert is set to use your ChatGPT login, but Buddy couldn't locate the Codex command-line program. This does not mean the desktop app is missing or that you need to sign in again.")
         if kind == "codex_signed_out":
             return ("The Codex program is on this computer, but "
                     "you're not signed in to it yet. Open Codex "
@@ -6974,7 +7120,7 @@ def _fault_message(settings, exc):
             "in the add-on's preferences shows the ways to connect.")
 
 
-def _run_cli(argv, timeout=120):
+def _run_cli(argv, timeout=120, include_stderr=False, *, input_text=None):
     """Run one of the AI companies' own programs and return what it
     prints. This is the ONLY way Buddy talks to a subscription
     login: through the company's own program, never through a
@@ -6985,13 +7131,38 @@ def _run_cli(argv, timeout=120):
         # a .cmd, which is exactly why "setting up Codex doesn't
         # work" on Windows when a program is launched naively.
         argv = ["cmd", "/c"] + list(argv)
-    proc = subprocess.run(argv, capture_output=True, text=True,
+    proc = subprocess.run(argv, input=input_text, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace",
                           timeout=timeout, cwd=tempfile.gettempdir())
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-200:]
         raise RuntimeError(tail or "the AI program didn't answer")
+    if include_stderr:
+        return "\n".join(part for part in (proc.stdout, proc.stderr) if part)
     return proc.stdout
 
+
+def _desktop_codex_candidates(local):
+    """The desktop app installs its CLI under a version/hash directory.
+    Check only that known location, never recursively scan user files or
+    run programs while drawing preferences. Hash names are not versions.
+    """
+    candidates = []
+    root = os.path.join(local, "OpenAI", "Codex", "bin")
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    executable = os.path.join(entry.path, "codex.exe")
+                    if os.path.isfile(executable):
+                        candidates.append((os.path.getmtime(executable), executable))
+                except OSError:
+                    continue  # An update may remove a version during discovery.
+    except OSError:
+        return []
+    return [path for _, path in sorted(candidates, reverse=True)]
 
 def _find_codex():
     """Find OpenAI's Codex program wherever it actually landed on
@@ -7011,6 +7182,7 @@ def _find_codex():
             guesses += [os.path.join(appdata, "npm", "codex.cmd"),
                         os.path.join(appdata, "npm", "codex.bat")]
         if local:
+            guesses += _desktop_codex_candidates(local)
             guesses += [os.path.join(local, "Programs", "Codex",
                                      "codex.exe"),
                         os.path.join(local, "Programs", "OpenAI Codex",
@@ -7032,7 +7204,7 @@ def _codex_login_status(path):
     and let the ask speak). Uses the program's own status
     command; Buddy never touches the login itself."""
     try:
-        out = _run_cli([path, "login", "status"], timeout=20)
+        out = _run_cli([path, "login", "status"], timeout=20, include_stderr=True)
     except Exception:
         return "unknown"
     text = (out or "").lower()
@@ -7059,10 +7231,13 @@ def _ask_via_codex(system, user):
     try:
         out = ""
         try:
+            # A full plan's Blender tool list exceeds the Windows command-line limit.
             out = _run_cli([path, "exec", "-s", "read-only",
                             "--skip-git-repo-check",
-                            "--output-last-message", outfile,
-                            f"{system}\n\n{user}"])
+                            "--output-last-message", outfile, "-"],
+                           input_text=f"{system}\n\n{user}")
+        except subprocess.TimeoutExpired:
+            raise _ExpertFault("timeout") from None
         except RuntimeError as exc:
             tail = str(exc)
             if "not logged in" in tail.lower() or \
@@ -7148,7 +7323,7 @@ def _scene_summary(context):
 
 
 def _expert_system_prompt():
-    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in ACTIONS)
+    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in _expert_buttons().values())
     return (
         "You are the Buddy Expert, a patient Blender teacher inside a "
         "beginner add-on called Blender Buddy. Rules: answer in plain "
@@ -7163,6 +7338,20 @@ def _expert_system_prompt():
 _AGENT_OPS_CACHE = None
 
 
+def _expert_buttons():
+    stale = _stale_map()
+    return {a["id"]: a for a in ACTIONS if a["id"] not in stale
+            and not (a["kind"] == "custom" and a["target"] in _EXPERT_MANUAL_ACTIONS)
+            and not (a["kind"] == "op" and a["target"] in _REFUSED_TOOLS)}
+
+
+def _plan_tools():
+    return {entry["idname"]: entry for entry in build_index()
+            if entry["cat"] in _PLAN_TOOL_CATEGORIES
+            and entry["idname"] not in _REFUSED_TOOLS
+            and not entry.get("file_operator")}
+
+
 def _agent_ops_list():
     """The Blender tools the expert may use in a plan: the everyday
     categories, as 'idname = name' lines. Cached. This list IS the
@@ -7173,18 +7362,14 @@ def _agent_ops_list():
     global _AGENT_OPS_CACHE
     if _AGENT_OPS_CACHE is not None:
         return _AGENT_OPS_CACHE
-    cats = {"mesh", "object", "view3d", "render", "scene",
-            "transform", "curve", "surface", "armature", "material"}
     lines = [f"{e['idname']} = {e['label']}"
-             for e in build_index() if e["cat"] in cats
-             and e["idname"] not in _REFUSED_TOOLS]
+             for e in _plan_tools().values()]
     _AGENT_OPS_CACHE = "\n".join(lines)
     return _AGENT_OPS_CACHE
 
 
 def _expert_agent_prompt(context=None):
-    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in ACTIONS
-                        if a["id"] not in _stale_map())
+    buttons = "; ".join(f"{a['id']} = {a['plain']}" for a in _expert_buttons().values())
     stale_settings = _stale_settings()
     settings = "\n".join(
         f"STEP: set:{spec['desc']}"
@@ -7207,7 +7392,9 @@ def _expert_agent_prompt(context=None):
         "creator and the author of their project; you assist with "
         "bounded tasks they ask for - you never do their whole "
         "project, and you prefer the smallest steps that do exactly "
-        "what they asked. Reply with a plan the add-on will run, "
+        "what they asked. For a request to reshape the selected object, keep "
+        "that object and prefer a reversible modifier. Replace it only if "
+        "the user requests a replacement. Reply with a plan the add-on will run, "
         "step by step, in their Blender - they check it and press "
         "Run themselves. You can press buttons, run Blender tools, "
         "adjust exact settings (like giving them the precise sculpt "
@@ -7856,7 +8043,17 @@ _NODE_ADD_TYPES = {
 # Tools a plan may never name, whatever the categories say:
 # session and file machinery (a plan never opens, saves, undoes
 # or quits the user's work) and outright deletion.
-_REFUSED_TOOLS = {"object.delete"}
+_PLAN_TOOL_CATEGORIES = {"mesh", "object", "view3d", "render", "scene",
+                         "transform", "curve", "surface", "armature", "material"}
+_REFUSED_TOOLS = {"object.delete", "scene.delete",
+                  "object.multires_external_save", "scene.freestyle_module_open",
+                  "object.simulation_nodes_cache_delete", "object.geometry_node_bake_delete_single",
+                  "object.geometry_node_bake_pack_single", "object.geometry_node_bake_unpack_single",
+                  "object.multires_external_pack", "object.collection_external_asset_drop"}
+# These shortcuts remain available for a user's direct button press. Their
+# implementations delete entire objects or write to user-visible output files.
+_EXPERT_MANUAL_ACTIONS = {"delete_object", "save_work", "export_glb", "export_stl",
+                          "export_obj", "render_picture"}
 
 
 def _fmt_value(v):
@@ -8119,7 +8316,8 @@ def _find_resources(words):
     """Named, real results whose links resolve - checked now,
     not promised. Sources: the Blender Extensions catalogue and
     Poly Haven's public asset index."""
-    import urllib.parse
+    if not bpy.app.online_access:
+        raise RuntimeError("Resource lookup needs Blender's online access. No websites were contacted.")
     results = []
     ext_url = ("https://extensions.blender.org/search/?q="
                + urllib.parse.quote(words))
@@ -8397,18 +8595,14 @@ def _parse_plan(text):
     steps = []
     dropped = 0
     valid_tools = None
-    stale_actions = _stale_map()
+    valid_buttons = _expert_buttons()
     stale_settings = _stale_settings()
     stale_styles = _stale_styles()
 
     def gate_tools():
         nonlocal valid_tools
         if valid_tools is None:
-            cats = {"mesh", "object", "view3d", "render", "scene",
-                    "transform", "curve", "surface", "armature",
-                    "material"}
-            valid_tools = {e["idname"] for e in build_index()
-                           if e["cat"] in cats} - _REFUSED_TOOLS
+            valid_tools = _plan_tools()
         return valid_tools
 
     def keep(step):
@@ -8433,9 +8627,7 @@ def _parse_plan(text):
                      line)
         if m:
             kind, ident = m.group(1).lower(), m.group(2).strip()
-            if kind == "button" and any(
-                    a["id"] == ident for a in ACTIONS
-                    if a["id"] not in stale_actions):
+            if kind == "button" and ident in valid_buttons:
                 keep({"kind": "button", "id": ident})
             elif kind == "tool" and ident in gate_tools():
                 keep({"kind": "tool", "id": ident})
@@ -8555,7 +8747,7 @@ def _raise_http_fault(exc):
                        str(getattr(exc, "reason", exc))[:60]) from exc
 
 
-def _expert_http_claude(url, key, payload):
+def _expert_http_claude(url, key, payload, *, loopback_only=False):
     """Anthropic's service speaks a different shape than the
     OpenAI-style one: the key rides in its own header, with the
     service's version header alongside."""
@@ -8565,7 +8757,7 @@ def _expert_http_claude(url, key, payload):
                  "x-api-key": key,
                  "anthropic-version": _CLAUDE_VERSION})
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with _expert_urlopen(req, timeout=30, loopback_only=loopback_only) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         _raise_http_fault(exc)
@@ -8575,7 +8767,8 @@ def _ask_via_claude(settings, system, user):
     payload = {"model": settings["model"], "max_tokens": 1024,
                "system": system,
                "messages": [{"role": "user", "content": user}]}
-    data = _expert_http_claude(settings["url"], settings["key"], payload)
+    options = {"loopback_only": True} if settings.get("_loopback_only") else {}
+    data = _expert_http_claude(settings["url"], settings["key"], payload, **options)
     parts = [b.get("text", "") for b in data.get("content", [])
              if b.get("type") == "text"]
     text = "\n".join(p for p in parts if p).strip()
@@ -8592,7 +8785,8 @@ def _ask_ai(settings, system, user):
     payload = {"model": settings["model"],
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": user}]}
-    data = _expert_http(settings["url"], settings["key"], payload)
+    options = {"loopback_only": True} if settings.get("_loopback_only") else {}
+    data = _expert_http(settings["url"], settings["key"], payload, **options)
     try:
         return data["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError, TypeError, AttributeError):
@@ -8632,7 +8826,7 @@ def _step_label(step):
     return step["id"]
 
 
-def _expert_http(url, key, payload):
+def _expert_http(url, key, payload, *, loopback_only=False):
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -8649,7 +8843,7 @@ def _expert_http(url, key, payload):
     # the work actually takes; a hosted service keeps 30s.
     timeout = 300 if _is_local_url(url) else 30
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _expert_urlopen(req, timeout=timeout, loopback_only=loopback_only) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         _raise_http_fault(exc)
@@ -8678,41 +8872,118 @@ class BUDDY_OT_open_prefs(Operator):
 # ---------------------------------------------------------------------
 
 _EXPERT_JOB = {"id": 0, "busy": False, "kind": "", "text": "",
-               "error": None, "extra": None, "settings": None}
+               "error": None, "extra": None, "settings": None, "future": None, "wm": None}
+
+
+def _expert_selection(context):
+    """Capture session-local identities, including the empty selection."""
+    def identity(item):
+        if item is None:
+            return None
+        return (item.as_pointer(), getattr(item, "session_uid", None))
+    return (identity(context.scene), context.mode, identity(context.view_layer.objects.active),
+            frozenset(identity(obj) for obj in context.selected_objects))
+
+
+@bpy.app.handlers.persistent
+def _expert_job_discard(*_args):
+    # The worker owns only its own future. A late reply can never
+    # publish into a different request, or into a newly opened file.
+    _EXPERT_JOB.update(id=_EXPERT_JOB["id"] + 1, busy=False, kind="",
+                       future=None, extra=None, settings=None, wm=None, text="", error=None)
 
 
 def _expert_job_start(kind, settings, system, user, extra=None):
-    _EXPERT_JOB["id"] += 1
-    my_id = _EXPERT_JOB["id"]
-    _EXPERT_JOB.update(busy=True, kind=kind, text="", error=None,
-                       extra=extra, settings=settings)
+    if _EXPERT_JOB["busy"]:
+        raise RuntimeError("An expert request is already running.")
+    settings = dict(settings, _loopback_only=not bpy.app.online_access)
+    future = Future()
+    if settings.get("service") == "CODEX":
+        limit = 140  # 20s for login status, then 120s for the reply.
+    elif settings.get("service") == "LOCAL" or _is_local_url(settings.get("url")):
+        limit = 300
+    else:
+        limit = 30
+    _EXPERT_JOB.update(id=_EXPERT_JOB["id"] + 1, busy=True, kind=kind,
+                       text="", error=None, extra=extra, settings=settings,
+                       future=future, started=time.monotonic(), limit=limit, last_draw=-1,
+                       wm=bpy.context.window_manager)
+
+    if not _expert_access_allowed(settings):
+        _expert_job_finish("", _ExpertFault("offline"))
+        return
 
     def work():
         try:
             text, err = _ask_ai(settings, system, user), None
-        except Exception as exc:  # faults arrive named, the rest raw
+        except Exception as exc:
             text, err = "", exc
-        if _EXPERT_JOB["id"] != my_id:
-            return  # a newer ask (or an Esc) superseded this one
-        _EXPERT_JOB.update(text=text, error=err, busy=False)
+        future.set_result((time.monotonic(), text, err))
 
     if bpy.app.background:
         work()
-        _expert_job_finish(bpy.context)
-    else:
+        _, text, err = future.result()
+        _expert_job_finish(text, err)
+        return
+    try:
+        if not bpy.app.timers.is_registered(_expert_job_tick):
+            bpy.app.timers.register(_expert_job_tick, first_interval=0.15)
         threading.Thread(target=work, daemon=True).start()
+    except Exception as exc:
+        _expert_job_finish("", exc)
+        return
+    # This operator provides Esc. The app timer delivers results even
+    # when the originating window or its modal handler disappears.
+    try:
         bpy.ops.buddy.expert_wait("INVOKE_DEFAULT")
+    except RuntimeError:
+        pass
 
 
-def _expert_job_finish(context):
+def _expert_job_tick():
+    job = _EXPERT_JOB
+    if not job["busy"]:
+        return None
+    now = time.monotonic()
+    deadline = job["started"] + job["limit"]
+    future = job["future"]
+    if future.done():
+        finished, text, err = future.result()
+        if finished <= deadline:
+            _expert_job_finish(text, err)
+            return None
+    elif now < deadline:
+        elapsed = int(now - job["started"])
+        if elapsed != job["last_draw"]:
+            job["last_draw"] = elapsed
+            _card_tag_redraw()
+        return 0.25
+    _expert_job_finish("", _ExpertFault("timeout", str(job["limit"])))
+    return None
+
+
+def _expert_job_finish(text, err):
+    wm = _EXPERT_JOB["wm"]
     kind = _EXPERT_JOB["kind"]
-    _EXPERT_JOB["kind"] = ""
-    if kind == "ask":
-        _finish_ask(context)
-    elif kind == "test":
-        _finish_test(context)
-    elif kind == "replan":
-        _finish_replan(context)
+    _EXPERT_JOB.update(kind="", busy=False, future=None, wm=None, text=text, error=err)
+    try:
+        if kind == "ask":
+            _finish_ask(wm)
+        elif kind == "test":
+            _finish_test(wm)
+        elif kind == "replan":
+            _finish_replan(wm)
+    except Exception as exc:
+        # A bad reply must leave the card usable for a fresh request.
+        _EXPERT_JOB["error"] = exc
+        message = _fault_message(_EXPERT_JOB["settings"], exc)
+        if kind == "test":
+            wm.buddy_expert_status = message
+        else:
+            wm.buddy_plan = ""
+            wm.buddy_suggested = ""
+            wm.buddy_answer = message
+    _card_tag_redraw()
 
 
 class BUDDY_OT_expert_wait(Operator):
@@ -8724,28 +8995,34 @@ class BUDDY_OT_expert_wait(Operator):
     bl_options = {"INTERNAL"}
 
     _timer = None
+    _job_id = -1
 
     def invoke(self, context, event):
+        self._job_id = _EXPERT_JOB["id"]
         self._timer = context.window_manager.event_timer_add(
-            0.12, window=context.window)
+            0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
-        if event.type == "ESC":
+        if self._job_id != _EXPERT_JOB["id"] or not _EXPERT_JOB["busy"]:
+            self._stop(context)
+            return {"FINISHED", "PASS_THROUGH"}
+        if event.type == "ESC" and event.value == "PRESS":
             kind = _EXPERT_JOB["kind"]
-            _EXPERT_JOB["id"] += 1
-            _EXPERT_JOB.update(busy=False, kind="")
+            base = (_EXPERT_JOB.get("extra") or {}).get("base", "")
+            _expert_job_discard()
             self._stop(context)
+            wm = context.window_manager
             if kind == "ask":
-                context.window_manager.buddy_answer = (
-                    "Stopped waiting for the expert - ask again "
-                    "whenever you're ready.")
+                wm.buddy_answer = "Stopped waiting for the expert. You can ask again."
+            elif kind == "test":
+                wm.buddy_expert_status = "Stopped waiting for the connection test."
+            elif kind == "replan":
+                wm.buddy_answer = (base + " Stopped waiting for revised steps.").strip()
+                wm.buddy_plan_report = wm.buddy_answer
+            _card_tag_redraw()
             return {"CANCELLED"}
-        if event.type == "TIMER" and not _EXPERT_JOB["busy"]:
-            self._stop(context)
-            _expert_job_finish(context)
-            return {"FINISHED"}
         return {"PASS_THROUGH"}
 
     def _stop(self, context):
@@ -8765,17 +9042,15 @@ def _extract_suggestion(text):
     for line in (text or "").splitlines():
         m = re.match(r"(?i)\s*BUTTON:\s*([a-z0-9_]+)[.\s]*$", line)
         if m:
-            if any(a["id"] == m.group(1) for a in ACTIONS
-                   if a["id"] not in _stale_map()):
+            if m.group(1) in _expert_buttons():
                 suggested = m.group(1)
             continue
         kept.append(line)
     return "\n".join(kept).strip(), suggested
 
 
-def _finish_ask(context):
+def _finish_ask(wm):
     global _EXPERT_TIP
-    wm = context.window_manager
     settings = _EXPERT_JOB.get("settings") or _expert_settings()
     extra = _EXPERT_JOB.get("extra") or {}
     question = extra.get("question", "")
@@ -8789,6 +9064,7 @@ def _finish_ask(context):
         summary, steps, dropped = _parse_plan(text)
         if steps:
             wm.buddy_plan = json.dumps(steps)
+            _EXPERT_JOB["reviewed_target"] = (wm.buddy_plan, extra.get("target"))
             wm.buddy_plan_summary = summary or question
             wm.buddy_plan_retried = ""
             wm.buddy_answer = ""
@@ -8832,10 +9108,19 @@ class BUDDY_OT_ask_expert(Operator):
                       "the right button when Buddy has one")
     bl_options = {"REGISTER"}
 
+    @classmethod
+    def poll(cls, context):
+        return not _EXPERT_JOB["busy"]
+
     def execute(self, context):
         wm = context.window_manager
         settings = _expert_settings()
         question = (wm.buddy_ask or "").strip()
+        # A displayed plan belongs to the preceding question. Retire it
+        # before returning any local answer, setup error, or new request.
+        _EXPERT_JOB["reviewed_target"] = None
+        wm.buddy_plan = wm.buddy_plan_summary = wm.buddy_plan_report = ""
+        wm.buddy_plan_retried = wm.buddy_answer = wm.buddy_suggested = ""
         if not question:
             wm.buddy_answer = ("Type a question first - anything, "
                                "in your own words.")
@@ -8845,13 +9130,13 @@ class BUDDY_OT_ask_expert(Operator):
             wm.buddy_answer = _capability_answer(context)
             wm.buddy_suggested = ""
             self.report({"INFO"}, "What the expert can do - it's "
-                                  "in the panel, no connection needed.")
+                                  "in the floating card, no connection needed.")
             return {"FINISHED"}
         if not _expert_ready(settings):
             wm.buddy_answer = _expert_setup_message(settings)
             wm.buddy_suggested = ""
             return {"CANCELLED"}
-        agent = bool(getattr(wm, "buddy_agent", False))
+        agent = wm.buddy_agent
         if agent:
             system = _expert_agent_prompt(context)
             user = f"{_scene_summary(context)}\n\nGoal: {question}"
@@ -8859,14 +9144,14 @@ class BUDDY_OT_ask_expert(Operator):
             system = _expert_system_prompt()
             user = f"{_scene_summary(context)}\n\nQuestion: {question}"
         _expert_job_start("ask", settings, system, user,
-                          extra={"question": question, "agent": agent})
+                          extra={"question": question, "agent": agent,
+                                 "target": _expert_selection(context) if agent else None})
         if bpy.app.background:
-            self.report({"INFO"}, "The expert answered - it's in "
-                                  "the panel.")
+            self.report({"INFO"}, "The expert answered in the floating card.")
         return {"FINISHED"}
 
 
-def _finish_test(context):
+def _finish_test(wm):
     settings = _EXPERT_JOB.get("settings") or _expert_settings()
     error = _EXPERT_JOB["error"]
     reply = _EXPERT_JOB["text"]
@@ -8874,26 +9159,29 @@ def _finish_test(context):
         msg = _fault_message(settings, error)
     elif "BUDDY OK" in (reply or ""):
         msg = ("It works - your expert answered the test "
-               "question. Ask it anything in the panel.")
+               "question. Ask it anything in the floating card.")
     else:
         msg = ("Something answered, but not cleanly: "
                + (reply or "")[:90])
     try:
-        context.window_manager.buddy_expert_status = msg
+        wm.buddy_expert_status = msg
     except Exception:
         pass
 
 
-def _finish_replan(context):
+def _finish_replan(wm):
     global _EXPERT_TIP
-    wm = context.window_manager
     base = (_EXPERT_JOB.get("extra") or {}).get("base", "")
     if _EXPERT_JOB["error"] is not None:
-        wm.buddy_plan_report = base
+        reason = _fault_message(_EXPERT_JOB["settings"], _EXPERT_JOB["error"])
+        wm.buddy_plan_report = base + " " + reason
+        wm.buddy_answer = wm.buddy_plan_report
         return
     summary, new_steps, _d = _parse_plan(_EXPERT_JOB["text"])
     if new_steps:
+        wm.buddy_answer = ""
         wm.buddy_plan = json.dumps(new_steps)
+        _EXPERT_JOB["reviewed_target"] = (wm.buddy_plan, (_EXPERT_JOB.get("extra") or {}).get("target"))
         wm.buddy_plan_summary = summary or wm.buddy_plan_summary
         wm.buddy_plan_retried = "1"
         wm.buddy_plan_report = (
@@ -8902,6 +9190,7 @@ def _finish_replan(context):
         _EXPERT_TIP = "The plan hit a snag; the expert replanned."
     else:
         wm.buddy_plan_report = base
+        wm.buddy_answer = base
 
 
 class BUDDY_OT_test_expert(Operator):
@@ -8916,17 +9205,21 @@ class BUDDY_OT_test_expert(Operator):
                       "expert route you picked above and show, in "
                       "plain words, whether it answered")
 
+    @classmethod
+    def poll(cls, context):
+        return not _EXPERT_JOB["busy"]
+
     def execute(self, context):
         settings = _expert_settings()
         service = settings.get("service", "KEY")
-        if service == "CODEX" and _find_codex() is None:
+        if service == "CODEX" and _expert_access_allowed(settings) and _find_codex() is None:
             try:
                 context.window_manager.buddy_expert_status = \
                     _fault_message(settings,
                                    _ExpertFault("codex_missing"))
             except Exception:
                 pass
-            self.report({"WARNING"}, "Codex isn't on this computer yet")
+            self.report({"WARNING"}, "Buddy couldn't locate the Codex command-line program")
             return {"FINISHED"}
         _expert_job_start("test", settings,
                           "You are a connection test.",
@@ -8958,7 +9251,7 @@ class BUDDY_OT_open_codex(Operator):
     def execute(self, context):
         path = _find_codex()
         if not path:
-            self.report({"WARNING"}, "Codex isn't on this computer yet")
+            self.report({"WARNING"}, "Buddy couldn't locate the Codex command-line program")
             return {"CANCELLED"}
         try:
             if os.name == "nt" and path.lower().endswith((".cmd", ".bat")):
@@ -8983,6 +9276,10 @@ class BUDDY_OT_run_plan(Operator):
                       "run and tells you plainly what happened")
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return not _EXPERT_JOB["busy"]
+
     def execute(self, context):
         global _EXPERT_TIP
         wm = context.window_manager
@@ -8992,6 +9289,29 @@ class BUDDY_OT_run_plan(Operator):
             steps = []
         if not steps:
             wm.buddy_plan_report = "There's no plan to run."
+            return {"CANCELLED"}
+        reviewed = _EXPERT_JOB.get("reviewed_target")
+        if (reviewed and reviewed[0] == wm.buddy_plan and reviewed[1] is not None
+                and reviewed[1] != _expert_selection(context)):
+            _EXPERT_JOB["reviewed_target"] = None
+            wm.buddy_plan = wm.buddy_plan_summary = wm.buddy_suggested = ""
+            wm.buddy_answer = wm.buddy_plan_report = (
+                "The scene, mode or selection changed since you asked. Nothing ran. "
+                "Ask for a new plan with the intended selection.")
+            self.report({"WARNING"}, wm.buddy_plan_report)
+            return {"CANCELLED"}
+        # Old or externally supplied plans may predate the parser's guard.
+        # Preflight every command before making the first scene edit.
+        buttons = _expert_buttons()
+        tools = _plan_tools()
+        if not isinstance(steps, list) or any(
+                not isinstance(s, dict)
+                or (s.get("kind") in ("button", "tool") and not isinstance(s.get("id"), str))
+                or (s.get("kind") == "button" and s.get("id") not in buttons)
+                or (s.get("kind") == "tool" and s.get("id") not in tools)
+                for s in steps):
+            wm.buddy_plan = wm.buddy_plan_summary = wm.buddy_suggested = ""
+            wm.buddy_answer = wm.buddy_plan_report = "This plan contains an unavailable Expert step. Ask for a new plan."
             return {"CANCELLED"}
         done = 0
         notes = []
@@ -9041,9 +9361,8 @@ class BUDDY_OT_run_plan(Operator):
                         notes.append(
                             f"Found for '{step['id']}' - every "
                             f"link checked just now: {listing}. "
-                            "The links are under the plan - press "
-                            "one to open it; installing is your "
-                            "press, as it should be.")
+                            "Open Found resources in the Blender Buddy "
+                            "sidebar to visit a link.")
                         ok = True
                     else:
                         fail_why = (
@@ -9098,6 +9417,7 @@ class BUDDY_OT_run_plan(Operator):
         total = len(steps)
         if fail_at is None:
             wm.buddy_plan = ""
+            _EXPERT_JOB["reviewed_target"] = None
             wm.buddy_plan_report = (
                 f"Done - all {total} steps ran. "
                 f"{wm.buddy_plan_summary}"
@@ -9110,12 +9430,17 @@ class BUDDY_OT_run_plan(Operator):
                 f"('{label}'): {fail_why}. "
                 f"{done} step{'s' if done != 1 else ''} before it "
                 "did run, and they're kept - nothing was undone.")
+        if done:
+            # Retrying an already applied prefix would duplicate scene edits.
+            wm.buddy_plan = wm.buddy_suggested = ""
+            _EXPERT_JOB["reviewed_target"] = None
         # One replan: send the failure back and let the expert route
         # around it. The new plan is SHOWN, never auto-run. In a
         # window the ask goes on the job thread like any other -
         # a replan used to freeze the interface too.
         settings = _expert_settings()
         if _expert_ready(settings) and not wm.buddy_plan_retried:
+            target = _expert_selection(context)
             user = (f"{_scene_summary(context)}\n\n"
                     f"Goal: {wm.buddy_ask}\n"
                     f"Your previous plan stopped at step "
@@ -9124,13 +9449,14 @@ class BUDDY_OT_run_plan(Operator):
                     f"goal from the scene as it is now.")
             if bpy.app.background:
                 try:
-                    text = _ask_ai(settings,
+                    text = _ask_ai(dict(settings, _loopback_only=not bpy.app.online_access),
                                    _expert_agent_prompt(context), user)
                 except Exception:
                     text = ""
                 summary, new_steps, _d = _parse_plan(text)
                 if new_steps:
                     wm.buddy_plan = json.dumps(new_steps)
+                    _EXPERT_JOB["reviewed_target"] = (wm.buddy_plan, target)
                     wm.buddy_plan_summary = summary or wm.buddy_plan_summary
                     wm.buddy_plan_retried = "1"
                     wm.buddy_plan_report = (
@@ -9142,9 +9468,14 @@ class BUDDY_OT_run_plan(Operator):
             else:
                 wm.buddy_plan_report = (
                     base + " Asking the expert for a revised plan...")
+                # Already-run steps cannot be approved a second time.
+                wm.buddy_plan = ""
+                wm.buddy_suggested = ""
+                _EXPERT_JOB["reviewed_target"] = None
+                wm.buddy_answer = wm.buddy_plan_report
                 _expert_job_start("replan", settings,
                                   _expert_agent_prompt(context), user,
-                                  extra={"base": base})
+                                  extra={"base": base, "target": target})
                 return {"CANCELLED"}
         wm.buddy_plan_report = base
         _EXPERT_TIP = f"Plan stopped at step {fail_at + 1} of {total}."
@@ -9161,6 +9492,7 @@ class BUDDY_OT_clear_plan(Operator):
     def execute(self, context):
         wm = context.window_manager
         wm.buddy_plan = ""
+        _EXPERT_JOB["reviewed_target"] = None
         wm.buddy_plan_summary = ""
         wm.buddy_plan_report = ""
         wm.buddy_plan_retried = ""
@@ -9226,7 +9558,37 @@ _CARD = {"open": True, "text": "", "caret": 0, "focused": False,
          "scroll": 0, "drag": None, "live": None, "hover": None,
          "modal": False, "sig": None, "cache_key": None,
          "cache_lines": [], "cache_footer": None,
-         "autostart_tries": 0}
+         "focus_region": None}
+
+_CARD_INPUT_WINDOWS = set()
+
+
+def _card_has_listener(window):
+    # Opening a file removes native modal handlers without calling Python.
+    operators = getattr(window, "modal_operators", None)
+    if operators is not None:
+        for op in operators:
+            # Other add-ons can leave null or invalid RNA handles after reload.
+            try:
+                if getattr(op, "bl_idname", None) == "BUDDY_OT_expert_card_modal":
+                    return True
+            except (ReferenceError, RuntimeError):
+                continue
+        return False
+    return window.as_pointer() in _CARD_INPUT_WINDOWS
+
+
+@bpy.app.handlers.persistent
+def _card_file_loaded(_unused):
+    _CARD_INPUT_WINDOWS.clear()
+    _CARD.update(modal=False, focused=False, focus_region=None, drag=None, live=None)
+    # A plan saved by an earlier version cannot identify its original objects
+    # after a file load. New programmatically supplied plans remain supported.
+    _EXPERT_JOB["reviewed_target"] = None
+    wm = bpy.context.window_manager
+    if wm and getattr(wm, "buddy_plan", ""):
+        wm.buddy_plan = wm.buddy_plan_summary = wm.buddy_suggested = ""
+        wm.buddy_answer = wm.buddy_plan_report = "Ask for a new plan in this file."
 
 _CARD_ROUTES = {"KEY": "AI key", "CLAUDE": "Claude key",
                 "CODEX": "ChatGPT login", "LOCAL": "local AI"}
@@ -9408,8 +9770,8 @@ def _card_status_text(settings):
     shows, in one line (the panel's full setup words appear in the
     card's body, exactly as in the panel)."""
     if _EXPERT_JOB["busy"]:
-        return ("Asking the expert - you can keep working; "
-                "Esc in this view stops the wait.")
+        elapsed = int(time.monotonic() - _EXPERT_JOB["started"])
+        return f"Waiting for the expert: {elapsed}s of {_EXPERT_JOB['limit']}s. Esc stops waiting."
     route = _CARD_ROUTES.get(settings.get("service", "KEY"),
                              "AI key")
     if _expert_ready(settings):
@@ -9454,9 +9816,10 @@ def _card_sync_content(context, max_px):
             lines += _card_wrap(f"{number}. {label}", max_px)
     elif answer.strip():
         lines = _card_wrap(answer, max_px)
-        if wm.buddy_suggested and any(
-                a["id"] == wm.buddy_suggested for a in ACTIONS):
+        if wm.buddy_suggested and wm.buddy_suggested in _expert_buttons():
             footer = "do"
+    elif wm.buddy_plan_report.strip():
+        lines = _card_wrap(wm.buddy_plan_report, max_px)
     elif not _expert_ready(settings):
         lines = _card_wrap(_expert_setup_message(settings), max_px)
     else:
@@ -9732,7 +10095,7 @@ def _card_do_ask(context):
     try:
         bpy.ops.buddy.ask_expert()
     except Exception:
-        pass
+        context.window_manager.buddy_answer = "Buddy couldn't submit this request. Try Ask again."
     _card_tag_redraw()
 
 
@@ -9750,14 +10113,13 @@ class BUDDY_OT_expert_card_open(Operator):
         try:
             prefs = bpy.context.preferences.addons[
                 __name__].preferences
-            prefs.expert_float = True
+            if not prefs.expert_float:
+                prefs.expert_float = True
+            if prefs.expert_card_min:
+                prefs.expert_card_min = False
         except Exception:
             pass
-        if not _CARD["modal"]:
-            try:
-                bpy.ops.buddy.expert_card_modal("INVOKE_DEFAULT")
-            except Exception:
-                pass
+        _card_autostart()
         _card_tag_redraw()
         return {"FINISHED"}
 
@@ -9773,12 +10135,13 @@ class BUDDY_OT_expert_card_modal(Operator):
     _timer = None
 
     def invoke(self, context, event):
-        if _CARD["modal"]:
+        if _card_has_listener(context.window):
             return {"CANCELLED"}
-        _CARD["modal"] = True
         self._timer = context.window_manager.event_timer_add(
             0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
+        _CARD_INPUT_WINDOWS.add(context.window.as_pointer())
+        _CARD["modal"] = True
         return {"RUNNING_MODAL"}
 
     def _stop(self, context):
@@ -9788,13 +10151,37 @@ class BUDDY_OT_expert_card_modal(Operator):
             except Exception:
                 pass
             self._timer = None
-        _CARD["modal"] = False
+        _CARD_INPUT_WINDOWS.discard(context.window.as_pointer())
+        _CARD["modal"] = bool(_CARD_INPUT_WINDOWS)
         _CARD["drag"] = None
         _CARD["live"] = None
 
     def modal(self, context, event):
         try:
-            return self._modal(context, event)
+            if not _CARD["open"] or not _card_prefs()["float"]:
+                self._stop(context)
+                return {"FINISHED"}
+            if event.type == "TIMER":
+                return self._modal(context, event)
+            # Modal context can point to the viewport where it started even
+            # when the user is interacting with a newly split 3D View.
+            for area in context.window.screen.areas:
+                if area.type != "VIEW_3D":
+                    continue
+                for region in area.regions:
+                    if region.type != "WINDOW":
+                        continue
+                    if _CARD["drag"]:
+                        accepts = _CARD["drag"].get("region") == region.as_pointer()
+                    else:
+                        accepts = (region.x <= event.mouse_x < region.x + region.width and
+                                   region.y <= event.mouse_y < region.y + region.height)
+                    if accepts:
+                        with context.temp_override(window=context.window, area=area, region=region):
+                            return self._modal(context, event)
+            if event.type == "LEFTMOUSE" and event.value == "PRESS":
+                _CARD["focused"] = False
+            return {"PASS_THROUGH"}
         except Exception:
             return {"PASS_THROUGH"}
 
@@ -9830,9 +10217,10 @@ class BUDDY_OT_expert_card_modal(Operator):
                 _CARD["focused"] = False
             return {"PASS_THROUGH"}
         lay, geo = got
-        mx, my = event.mouse_region_x, event.mouse_region_y
+        mx, my = event.mouse_x - context.region.x, event.mouse_y - context.region.y
         hit = _card_hit(lay, mx, my)
-        if _CARD["focused"] and event.value == "PRESS" and \
+        if _CARD["focused"] and _CARD["focus_region"] == context.region.as_pointer() and \
+                event.value == "PRESS" and \
                 self._type_key(context, event):
             return {"RUNNING_MODAL"}
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
@@ -9894,7 +10282,7 @@ class BUDDY_OT_expert_card_modal(Operator):
             return {"RUNNING_MODAL"}
         if hit == "btn_do":
             sid = context.window_manager.buddy_suggested
-            if sid:
+            if sid in _expert_buttons():
                 try:
                     bpy.ops.buddy.action(action_id=sid)
                 except Exception:
@@ -9903,16 +10291,17 @@ class BUDDY_OT_expert_card_modal(Operator):
             return {"RUNNING_MODAL"}
         if hit == "title":
             _CARD["drag"] = {"mode": "move", "dx": mx - geo[0],
-                             "dy": my - geo[1], "geo": geo}
+                             "dy": my - geo[1], "geo": geo, "region": context.region.as_pointer()}
             _CARD["live"] = geo
             return {"RUNNING_MODAL"}
         if hit == "grip":
             _CARD["drag"] = {"mode": "resize", "mx": mx, "my": my,
-                             "geo": geo}
+                             "geo": geo, "region": context.region.as_pointer()}
             _CARD["live"] = geo
             return {"RUNNING_MODAL"}
         if hit == "field":
             _CARD["focused"] = True
+            _CARD["focus_region"] = context.region.as_pointer()
             _CARD["caret"] = len(_CARD["text"])
             _card_tag_redraw()
             return {"RUNNING_MODAL"}
@@ -9923,16 +10312,16 @@ class BUDDY_OT_expert_card_modal(Operator):
     def _drag_move(self, context, event):
         drag = _CARD["drag"]
         region = context.region
+        mx, my = event.mouse_x - region.x, event.mouse_y - region.y
         sx, sy, sw, sh = drag["geo"]
         if drag["mode"] == "move":
-            geo = (event.mouse_region_x - drag["dx"],
-                   event.mouse_region_y - drag["dy"], sw, sh)
+            geo = (mx - drag["dx"], my - drag["dy"], sw, sh)
         else:
             # The grip is the BOTTOM-right corner and region y
             # grows upward: dragging right widens, dragging down
             # lengthens - with the card's TOP edge held fixed.
-            nw = sw + (event.mouse_region_x - drag["mx"])
-            nh = sh + (drag["my"] - event.mouse_region_y)
+            nw = sw + (mx - drag["mx"])
+            nh = sh + (drag["my"] - my)
             geo = (sx, sy + sh - nh, nw, nh)
         _CARD["live"] = _card_clamp_geo(region.width, region.height,
                                         geo)
@@ -9977,7 +10366,7 @@ class BUDDY_OT_expert_card_modal(Operator):
             _CARD["caret"] = len(text)
             _card_tag_redraw()
             return True
-        if event.ctrl and event.type == "V":
+        if event.type == "V" and (event.ctrl or (sys.platform == "darwin" and event.oskey)):
             try:
                 clip = context.window_manager.clipboard or ""
             except Exception:
@@ -9998,52 +10387,26 @@ class BUDDY_OT_expert_card_modal(Operator):
 
 
 def _card_autostart():
-    """Just after a GUI start: if the floating card is on, start
-    its modal so the card is interactive without a trip to the
-    panel. It RETRIES for a few seconds - the first tick can land
-    while the startup file is still loading or a graphics dialog
-    is up, and a single missed shot used to leave a drawn-but-dead
-    card (rig proof, fix round 11). Best effort throughout: the
-    panel's Open button is the deterministic route, and this must
-    never break startup."""
-    try:
-        if bpy.app.background:
-            return None
-        if _CARD["modal"] or not _CARD["open"] or \
-                not _card_prefs()["float"]:
-            return None
-        _CARD["autostart_tries"] += 1
-        try:
-            # A timer's own context does not reliably name a
-            # window or a 3D view, and invoking the modal with it
-            # silently never started the card (rig proof, fix
-            # round 11: the card drew, but no click ever landed).
-            # Borrow the real window, area and region explicitly.
-            target = None
-            for win in bpy.context.window_manager.windows:
-                for area in win.screen.areas:
-                    if area.type != "VIEW_3D":
-                        continue
-                    for region in area.regions:
-                        if region.type == "WINDOW":
-                            target = (win, area, region)
-                            break
-                    if target:
-                        break
-                if target:
-                    break
-            if target is not None:
-                win, area, region = target
-                with bpy.context.temp_override(
-                        window=win, area=area, region=region):
-                    bpy.ops.buddy.expert_card_modal("INVOKE_DEFAULT")
-        except Exception:
-            pass
-        if _CARD["modal"] or _CARD["autostart_tries"] >= 15:
-            return None
-        return 1.0
-    except Exception:
+    """Keep the drawn card interactive after opening a file or another window."""
+    if bpy.app.background:
         return None
+    if _CARD["open"] and _card_prefs()["float"]:
+        windows = bpy.context.window_manager.windows
+        _CARD_INPUT_WINDOWS.intersection_update(win.as_pointer() for win in windows)
+        for win in windows:
+            if _card_has_listener(win):
+                continue
+            origin = next(((a, r) for a in win.screen.areas if a.type == "VIEW_3D"
+                           for r in a.regions if r.type == "WINDOW"), None)
+            if origin is None:
+                continue
+            area, region = origin
+            try:
+                with bpy.context.temp_override(window=win, area=area, region=region):
+                    bpy.ops.buddy.expert_card_modal("INVOKE_DEFAULT")
+            except (ReferenceError, RuntimeError):
+                continue  # The window may be changing workspaces or loading a file.
+    return 0.75
 
 
 # ----------------------------------------------------------------------------
@@ -10262,6 +10625,21 @@ def _start_screen_active(context):
                             False))
 
 
+class VIEW3D_PT_buddy_expert_launcher(Panel):
+    bl_idname = "VIEW3D_PT_buddy_expert_launcher"
+    bl_label = "Buddy Expert"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Blender Buddy"
+    bl_options = {"HIDE_HEADER"}
+    bl_order = -1000
+
+    def draw(self, context):
+        row = self.layout.row()
+        row.scale_y = 1.25
+        row.operator("buddy.expert_card_open", text="Open Buddy Expert")
+
+
 class VIEW3D_PT_blender_buddy(Panel):
     """The host panel. It used to draw EVERYTHING itself - one
     long scrolling tab (owner, 2026-11-13: "blender buddy cannot
@@ -10414,72 +10792,17 @@ def _draw_now(layout, context):
 
 
 def _draw_expert(layout, context):
-    """The Expert section. The question box, the Ask button and
-    the task-help toggle ALWAYS draw - readiness is words inside
-    the section naming exactly what is missing, with the remedy
-    beside it. (It used to be a gate: on the ChatGPT route, a
-    missed program search deleted the whole box - owner: "no box
-    even shows up if i use app sign in".)"""
     wm = context.window_manager
-    settings = _expert_settings()
     layout.prop(wm, "buddy_agent", text="Expert help with tasks")
-    _wrap(layout, "Off: advice, explanations and exact values to "
-                  "use yourself. On: describe a job and the expert "
-                  "drafts the steps - you check them, you run "
-                  "them. It can press tools, set exact values "
-                  "(like the exact sculpt brush you ask for), "
-                  "wire node trees, set colour ramps and fetch "
-                  "real resources.")
+    _wrap(layout, "Turn on to review a plan before running it. Turn off for advice.")
+    settings = _expert_settings()
     if not _expert_ready(settings):
         _wrap(layout, _expert_setup_message(settings))
-        layout.operator("buddy.open_prefs", text="Set up the expert")
-        if settings.get("service") == "CODEX" and _find_codex():
-            layout.operator("buddy.open_codex",
-                            text="Open Codex to sign in")
-    if not _CARD["open"] or not settings.get("float", True) \
-            or not _CARD["modal"]:
-        layout.operator("buddy.expert_card_open",
-                        text="Open the floating Expert")
-    if _EXPERT_JOB["busy"]:
-        _wrap(layout, "Asking the expert - this can take a while, "
-                      "especially through the ChatGPT route. You "
-                      "can keep working in Blender; press Esc in "
-                      "this view to stop waiting.")
-    ask_row = layout.row()
-    ask_row.enabled = not _EXPERT_JOB["busy"]
-    ask_row.prop(wm, "buddy_ask", text="")
-    ask_btn = layout.row()
-    ask_btn.enabled = not _EXPERT_JOB["busy"]
-    ask_btn.operator("buddy.ask_expert", text="Ask the expert")
-    if (wm.buddy_answer or "").strip():
-        _wrap(layout, wm.buddy_answer, width=48)
-    if wm.buddy_suggested:
-        act = next((a for a in ACTIONS
-                    if a["id"] == wm.buddy_suggested), None)
-        if act:
-            op = layout.operator("buddy.action",
-                                 text=f"Do it: {act['plain']}")
-            op.action_id = act["id"]
-    if (wm.buddy_plan_report or "").strip():
-        _wrap(layout, wm.buddy_plan_report, width=48)
-    plan = []
-    try:
-        plan = json.loads(wm.buddy_plan or "[]")
-    except Exception:
-        plan = []
-    if plan:
-        if (wm.buddy_plan_summary or "").strip():
-            layout.label(text="The plan", icon="SEQUENCE")
-            _wrap(layout, wm.buddy_plan_summary, width=48)
-        for number, step in enumerate(plan, start=1):
-            try:
-                label = _step_label(step)
-            except Exception:
-                label = str(step.get("id", "Step"))
-            layout.label(text=f"{number}. {label}")
-        layout.operator("buddy.run_plan", text="Run these steps")
-        layout.operator("buddy.clear_plan",
-                        text="Throw the plan away")
+    layout.operator("buddy.open_prefs", text="Expert connection settings")
+
+
+def _draw_found_resources(layout, context):
+    wm = context.window_manager
     results = []
     try:
         results = json.loads(wm.buddy_find or "[]")
@@ -10615,8 +10938,11 @@ VIEW3D_PT_buddy_now = _make_block_panel(
     "VIEW3D_PT_buddy_now", "For right now", -70, _draw_now,
     poll_fn=_poll_not_searching)
 VIEW3D_PT_buddy_expert = _make_block_panel(
-    "VIEW3D_PT_buddy_expert", "Buddy Expert", -60, _draw_expert,
+    "VIEW3D_PT_buddy_expert", "Expert settings", -60, _draw_expert,
     poll_fn=_poll_not_searching, default_closed=True)
+VIEW3D_PT_buddy_found_resources = _make_block_panel(
+    "VIEW3D_PT_buddy_found_resources", "Found resources", -59, _draw_found_resources,
+    poll_fn=lambda context: bool(context.window_manager.buddy_find))
 VIEW3D_PT_buddy_search = _make_block_panel(
     "VIEW3D_PT_buddy_search", "What do you want to do?", 100,
     _draw_search, default_closed=True)
@@ -10717,6 +11043,8 @@ def _action_available(act, context, facts=None):
             return f["has_camera"]
         return True
     if kind == "custom":
+        if target == "reshape_as_circle":
+            return otype == "MESH" and mode == "OBJECT"
         if target == "apply_modifiers":
             return f["modifiers"] > 0 and mode == "OBJECT"
         if target == "colour":
@@ -11799,10 +12127,11 @@ CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_cursor_to_picked, BUDDY_OT_lock_in,
            BUDDY_OT_show_everything, BUDDY_OT_mute_trap,
            VIEW3D_MT_buddy_pie,
-           VIEW3D_PT_blender_buddy,
+           VIEW3D_PT_buddy_expert_launcher, VIEW3D_PT_blender_buddy,
            VIEW3D_PT_buddy_tour, VIEW3D_PT_buddy_where,
            VIEW3D_PT_buddy_headsup, VIEW3D_PT_buddy_now,
-           VIEW3D_PT_buddy_expert, VIEW3D_PT_buddy_search,
+           VIEW3D_PT_buddy_expert, VIEW3D_PT_buddy_found_resources,
+           VIEW3D_PT_buddy_search,
            VIEW3D_PT_buddy_index,
            VIEW3D_PT_buddy_projects) + SECTION_PANELS
 
@@ -11880,7 +12209,7 @@ def register():
                     "them when you're ready. Off: the expert gives "
                     "advice, explanations and exact values for you "
                     "to use yourself",
-        default=False)
+        default=True, options={"SKIP_SAVE"}, get=_task_mode_get, set=_task_mode_set)
     bpy.types.WindowManager.buddy_plan = StringProperty(
         name="Expert plan", default="")
     bpy.types.WindowManager.buddy_plan_summary = StringProperty(
@@ -11904,6 +12233,8 @@ def register():
             _draw_expert_card, (), "WINDOW", "POST_PIXEL")
     except Exception:
         _EXPERT_HANDLE = None
+    if _card_file_loaded not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_card_file_loaded)
     if not bpy.app.background:
         try:
             # persistent: a non-persistent timer is wiped when the
@@ -11915,6 +12246,8 @@ def register():
         except Exception:
             pass
     _install_template()
+    if _expert_job_discard not in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.append(_expert_job_discard)
     try:
         bpy.types.VIEW3D_HT_header.append(_buddy_header_draw)
     except Exception:
@@ -11966,6 +12299,14 @@ def register():
 
 def unregister():
     global _EXPERT_HANDLE
+    _expert_job_discard()
+    if _expert_job_discard in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.remove(_expert_job_discard)
+    if bpy.app.timers.is_registered(_expert_job_tick):
+        bpy.app.timers.unregister(_expert_job_tick)
+    if _card_file_loaded in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_card_file_loaded)
+    _CARD_INPUT_WINDOWS.clear()
     try:
         if bpy.app.timers.is_registered(_card_autostart):
             bpy.app.timers.unregister(_card_autostart)

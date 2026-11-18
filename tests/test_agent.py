@@ -28,17 +28,11 @@ wm = ctx.window_manager
 
 assert hasattr(bpy.ops.buddy, "run_plan")
 assert hasattr(bpy.ops.buddy, "clear_plan")
-assert wm.buddy_agent is False
-print("AGENT_PASS operators present, task help off by default "
-      "(advice is the front door - owner framing law, 2026-11-13)")
+assert wm.buddy_agent is True
+print("AGENT_PASS operators present, task help on by default")
 
 bb._expert_settings = lambda: {"key": "test-key", "url": "http://stub",
                                "model": "stub-model", "float": True}
-
-# The sections below test the task machinery, so they opt in -
-# the default-off law is asserted above, and the advice section
-# near the end toggles it back off itself.
-wm.buddy_agent = True
 
 next_reply = ""
 calls = []

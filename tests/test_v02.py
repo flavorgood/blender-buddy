@@ -13,6 +13,7 @@ Checks:
 """
 import os
 import sys
+import tempfile
 
 import bpy
 
@@ -144,6 +145,12 @@ scene.render.resolution_y = 64
 run("take_picture")
 assert os.path.getsize(os.path.join(HOME, "blender_buddy_picture.png")) > 1000
 print("TEST_PASS take the picture")
+with tempfile.TemporaryDirectory() as custom_output:
+    target = os.path.join(custom_output, "chosen-name.png")
+    scene.render.filepath = target
+    run("take_picture")
+    assert scene.render.filepath == target and os.path.getsize(target) > 1000
+print("TEST_PASS custom render destination preserved")
 
 run("save_work")
 assert os.path.exists(os.path.join(HOME, "blender_buddy_my_model.blend"))

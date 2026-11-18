@@ -23,6 +23,7 @@ import blender_buddy as bb  # noqa: E402
 bb.register()
 ctx = bpy.context
 wm = ctx.window_manager
+wm.buddy_agent = False  # This suite exercises the explicit advice setting.
 
 assert hasattr(bpy.ops.buddy, "ask_expert")
 assert hasattr(bpy.ops.buddy, "open_prefs")

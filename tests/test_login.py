@@ -15,9 +15,12 @@ readiness per route, Codex present -> questions and plans flow
 through it and never through the network function, Codex missing ->
 a plain setup message, local AI -> works with an empty key.
 """
+import hashlib
 import json
 import os
+from pathlib import Path
 import sys
+from unittest.mock import patch
 
 import bpy
 
@@ -29,6 +32,19 @@ import blender_buddy as bb  # noqa: E402
 bb.register()
 ctx = bpy.context
 wm = ctx.window_manager
+
+# A real child reads a long Unicode prompt exactly as Codex reads stdin.
+# Passing this as a Windows positional argument cannot start the child.
+python = Path(sys.executable)
+if not python.stem.lower().startswith("python"):
+    name = "python.exe" if os.name == "nt" else f"python{sys.version_info.major}.{sys.version_info.minor}"
+    python = Path(sys.prefix) / "bin" / name
+prompt = "Unicode: café \U0001f9f0\n" * 4000
+read_digest = ("import sys, hashlib; data = sys.stdin.buffer.read().replace(b'\\r\\n', b'\\n'); "
+               "print(hashlib.sha256(data).hexdigest())")
+assert bb._run_cli([str(python), "-c", read_digest], input_text=prompt).strip() == (
+    hashlib.sha256(prompt.encode("utf-8")).hexdigest())
+print("LOGIN_PASS full UTF-8 plan transported through stdin to a local child")
 
 # --- readiness per route -----------------------------------------------------
 assert bb._expert_ready({"service": "KEY", "key": "", "url": "https://x"}) is False
@@ -51,6 +67,8 @@ real_which = bb.shutil.which
 bb.shutil.which = lambda name: "/usr/bin/codex" if name == "codex" else None
 assert bb._expert_ready({"service": "CODEX", "key": "", "url": ""}) is True
 bb.shutil.which = lambda name: None
+missing_cli = patch.object(bb.os.path, "isfile", return_value=False)
+missing_cli.start()
 assert bb._expert_ready({"service": "CODEX", "key": "", "url": ""}) is False
 print("LOGIN_PASS readiness: ChatGPT route needs the Codex program present")
 
@@ -61,20 +79,27 @@ cli_calls = []
 bb._run_cli = lambda argv, timeout=120: cli_calls.append(argv) or ""
 wm.buddy_ask = "make a box"
 bpy.ops.buddy.ask_expert()
-assert "Codex program isn't on this computer" in wm.buddy_answer, wm.buddy_answer
+assert "couldn't locate the Codex command-line program" in wm.buddy_answer, wm.buddy_answer
 assert cli_calls == []
 print("LOGIN_PASS Codex missing -> plain setup message, no call")
 
 # --- Codex present: the agent plan flows through the program ------------------
+missing_cli.stop()
 bb.shutil.which = lambda name: "/usr/bin/codex" if name == "codex" else None
 
 
-def fake_cli(argv, timeout=120):
+def fake_cli(argv, timeout=120, include_stderr=False, *, input_text=None):
     cli_calls.append(argv)
-    assert argv[0].endswith("codex") and argv[1] == "exec"
+    assert argv[0].endswith("codex")
+    if argv[1:] == ["login", "status"]:
+        assert include_stderr and input_text is None
+        return "Logged in"
+    assert argv[1] == "exec" and argv[-1] == "-"
     assert "read-only" in argv, "the expert must not write files via Codex"
-    return ("SUMMARY: Make a ball.\n"
-            "STEP: button:add_ball")
+    assert "make a box" in input_text and input_text not in argv
+    with open(argv[argv.index("--output-last-message") + 1], "w", encoding="utf-8") as result:
+        result.write("SUMMARY: Make a ball.\nSTEP: button:add_ball")
+    return "Progress on stdout; only the final file is the plan."
 
 
 bb._run_cli = fake_cli
