@@ -46,7 +46,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 2, 1),
+    "version": (3, 2, 2),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -2062,9 +2062,20 @@ def _find_foam(context, mug=None):
 
 
 def _render_proof(context):
-    """A picture exists because someone rendered: the Render
-    Result still holds it, or a render file was written to the
-    scene's output path during this tour."""
+    """A picture exists because someone rendered: Buddy
+    recorded a completed render on the scene itself (the
+    record is saved with the file; the Render Result's
+    pixels are not, and on Blender 5.3 - and in any
+    background render - that image reads size (0, 0) with
+    has_data False even after a render completes, so it
+    cannot be the only witness), the Render Result still
+    holds it, or a render file was written to the scene's
+    output path during this tour."""
+    try:
+        if getattr(context.scene, "buddy_render_done", False):
+            return True
+    except Exception:
+        pass
     img = bpy.data.images.get("Render Result")
     try:
         if img is not None and img.size[0] > 0 and img.has_data:
@@ -2079,6 +2090,32 @@ def _render_proof(context):
             if epoch <= 0 or os.path.getmtime(target) >= epoch - 2:
                 return True
     return False
+
+
+def _final_render_proof(context):
+    """The finale's render clause: a render that belongs
+    to the final stage. _render_proof proves A render
+    happened during the tour - its recorded flag fires on
+    the first render of any step, and its output-path
+    branch is guarded only by the tour's start - so the
+    render that ticks Part 4 would also tick Part 8 with
+    no finale render in existence (W4, GAP 8-4: the tour
+    completed at the depth-of-field save on the strength
+    of Part 4's rescue render). This clause reads only
+    the final-stage record: the render-complete handler
+    sets buddy_final_render_done when a render finishes
+    with the finale's rig standing complete around it.
+    The record is saved with the file, so the proof still
+    reads from the scene alone. A file saved before the
+    record existed carries none, and one fresh F12 with
+    the rig standing makes it - the record cannot be
+    invented retroactively, and an earlier stage's render
+    at the same output path is not the finale's."""
+    try:
+        return bool(getattr(
+            context.scene, "buddy_final_render_done", False))
+    except Exception:
+        return False
 
 
 def _sss_weight(obj):
@@ -4135,6 +4172,50 @@ def _buddy_grade_save(*_args):
         pass
 
 
+@bpy.app.handlers.persistent
+def _buddy_mark_render(*args):
+    """A render just completed: record it on the scene that
+    was rendered. The record has to live on the scene
+    because the render itself leaves no trace the checks
+    can read back: the Render Result's pixels are never
+    saved into the file, and after a completed render that
+    image reports size (0, 0) and has_data False on
+    Blender 5.3 (and in every background render) - so a
+    learner who pressed F12 exactly as the Part 4 card
+    teaches, with no output path set (the card never sets
+    one), proved nothing to the old _render_proof and
+    step 4 could never tick (W4, GAP 4-8). render_complete
+    fires on 4.2.5 and 5.3.0, in the GUI and headless -
+    probed on both before this fix was written."""
+    try:
+        scene = args[0] if args else None
+        if not isinstance(scene, bpy.types.Scene):
+            scene = bpy.context.scene
+        if scene is not None:
+            scene.buddy_render_done = True
+    except Exception:
+        pass
+    try:
+        # The finale's own record (GAP 8-4): a render also
+        # counts toward the last step when it completed
+        # with the finale's rig standing complete around
+        # it - the state the render is OF. An earlier
+        # step's render, however it was saved, was made
+        # with no rig standing and leaves this record
+        # unset. The gate is the rig, not the tour's
+        # pointer: on a Blender where an earlier step
+        # waits for a newer version (Part 7's Scatter on
+        # pre-5.0), the tour can never stand at the final
+        # step, yet the finale's work and its render are
+        # fully performable there - the record has to be
+        # earnable in exactly that state.
+        if scene is not None and bpy.context.scene is scene:
+            if _final_picture_rig(bpy.context):
+                scene.buddy_final_render_done = True
+    except Exception:
+        pass
+
+
 def _saved_part1_ok(context):
     """The saved file holds the ring and the finished cup
     - the tick text's actual claim. The old step-1 check
@@ -4427,12 +4508,13 @@ def _check_real_surfaces(context):
 
 
 def _check_unwrap_mug(context):
-    # Part 6's end state: the mug wearing his seam layout
-    # (a real set of seams - joints, hidden side line,
-    # inside base, underside - not one stray edge), and the
-    # foam sitting inside its rim with a material of its
-    # own - the foam found by where it sits, under his name
-    # for it ("Foam") or by its place in the mug.
+    # Part 6's end state: the mug wearing a real set of
+    # seams (ten or more seam edges - the card teaches his
+    # six-cut layout, and the count is what is graded here,
+    # not the layout's placement; W4 GAP 6-6), a UV map,
+    # and the foam sitting inside its rim with a material
+    # of its own - the foam found by where it sits, under
+    # his name for it ("Foam") or by its place in the mug.
     mug = _find_mug(context)
     if mug is None:
         return False
@@ -4545,7 +4627,17 @@ def _check_scatter(context):
 
 
 def _check_final_picture(context):
-    # Part 8's end state - his rig, structurally: the
+    # Part 8's end state: his rig standing complete (see
+    # _final_picture_rig) AND a fresh render - the
+    # finale's own, recorded with the rig standing (see
+    # _final_render_proof), not any render from earlier
+    # in the tour.
+    return _final_picture_rig(context) and \
+        _final_render_proof(context)
+
+
+def _final_picture_rig(context):
+    # Part 8's rig, structurally: the
     # original lamp become a SUN at about 10 (his stated
     # strength), two blocker planes standing in its light
     # (single-face meshes, not horizontal - the table is a
@@ -4556,7 +4648,7 @@ def _check_final_picture(context):
     # field focused on the icing, the parenting he does
     # first (icing on donut, donut on plate, foam on mug,
     # plate and mug on the table), the SSS scales he retunes
-    # (icing 0.03, sprinkles 0.08), and a fresh render.
+    # (icing 0.03, sprinkles 0.08).
     dough = _find_dough(context)
     icing = _find_icing(context, dough)
     mug = _find_mug(context)
@@ -4631,7 +4723,7 @@ def _check_final_picture(context):
         return False
     if cam.data.dof.focus_object is not icing:
         return False
-    return _render_proof(context)
+    return True
 
 
 # --- the eight steps ------------------------------------------------
@@ -4730,7 +4822,15 @@ TOUR_STEPS = [
             "table, with colour - and ends with your first real "
             "picture of it.",
             "THE PLATE - from a flat circle, at about 3:57. "
-            "Shift+A, Mesh, Circle. In the Add Circle panel set "
+            "First, leave Sculpt Mode: Part 3 ended with you "
+            "sculpting the icing, and in Sculpt Mode Shift+A "
+            "does nothing at all - there is no Add menu there, "
+            "because sculpting only reshapes the one thing you "
+            "are working on. Switch the mode menu (top left of "
+            "the 3D window) from Sculpt Mode back to Object "
+            "Mode - the mode for moving whole things and "
+            "adding new ones. Now Shift+A, Mesh, Circle. In "
+            "the Add Circle panel set "
             "the Fill Type to Ngon - one big face filling the "
             "circle. The radius is yours to drag until the "
             "circle looks like his plate under the donut (he "
@@ -4748,7 +4848,16 @@ TOUR_STEPS = [
             "his rim grow and match the profile.",
             "FINISH THE PLATE. Ctrl+R and add one loop cut "
             "around the rim's wall so the curve later holds its "
-            "shape. Modifiers tab: Subdivision Surface, levels "
+            "shape. Press Tab back to Object Mode before the "
+            "next moves: the loop cut was Edit Mode work on the "
+            "plate's own edges, but a modifier is an effect "
+            "stacked on the whole object, and the section "
+            "after this one adds a brand-new object - "
+            "whole-object work, both of them. Stay in Edit "
+            "Mode and THE TABLE's Shift+A would grow the "
+            "table out of the plate's own mesh instead of "
+            "standing it beside the plate. Modifiers tab: "
+            "Subdivision Surface, levels "
             "2 - the rim curve appears. Then Solidify ABOVE it "
             "in the stack (drag it up): his order for the plate "
             "is Subdivision first, then Solidify dragged to the "
@@ -4775,15 +4884,29 @@ TOUR_STEPS = [
             "the donut AND its icing. Then select donut and "
             "icing, Shift+click the lattice last, and press "
             "Ctrl+P, Set Parent To, Object: they are parented - "
-            "they now ride with the lattice. Right-click the "
-            "donut, Modifiers, Add Modifier, Deform, Lattice, "
-            "and in its Object box pick the lattice; do the same "
-            "for the icing. Tab into Edit Mode ON THE LATTICE "
+            "they now ride with the lattice. Now hang the "
+            "Lattice modifier on the donut: click the donut, "
+            "open the Modifiers tab (the wrench tab on the "
+            "right - the same tab the plate's modifiers went "
+            "on), click Add Modifier, Deform, Lattice, and in "
+            "the new modifier's Object box pick the lattice. "
+            "The Modifiers tab is the only door for this - "
+            "the right-click menu has no Modifiers entry in "
+            "it. Do the same for the icing: click it, Add "
+            "Modifier, Deform, Lattice, Object box, the "
+            "lattice. Tab into Edit Mode ON THE LATTICE "
             "and squeeze its middle ring inward - the donut "
             "pinches slightly, like it settled under its own "
             "weight. Nudge a couple of other points while you "
             "are there; he does this by eye.",
-            "MAKE THE BEND PERMANENT. Select the donut, find its "
+            "MAKE THE BEND PERMANENT. Press Tab back to Object "
+            "Mode first: you are still in Edit Mode on the "
+            "lattice, where your clicks keep landing on the "
+            "lattice's own points - Blender will not let you "
+            "pick another object at all - and Apply does not "
+            "exist there anyway; applying a modifier is a "
+            "whole-object job, the same trap as Part 2's "
+            "walls. In Object Mode, select the donut, find its "
             "Lattice modifier, dropdown, Apply. Same for the "
             "icing. Then delete the lattice itself (select it, "
             "X). The sag stays - it is baked into the shapes "
@@ -4794,16 +4917,34 @@ TOUR_STEPS = [
             "icing, open the Material Properties tab (the "
             "checkerboard sphere), click New, and set Base Color "
             "to a hot pink; set Roughness to 0.2 - his stated "
-            "number, the slider in the same panel. The mug gets "
-            "nearly black, the plate a plain mid grey - both by "
-            "eye, both placeholders.",
+            "number, the slider in the same panel. The mug and "
+            "the plate need the same first move before any "
+            "colour can go on: neither one has a material yet "
+            "- nothing in Parts 1 to 3 ever made one - so "
+            "click the mug, open the Material Properties tab, "
+            "click New, and only then set its Base Color "
+            "nearly black. Same for the plate: click it, "
+            "click New, then set a plain mid grey. Clicking "
+            "New is what creates the material - the box every "
+            "colour and glow setting lives in; without it "
+            "there is no panel to set anything in. Both "
+            "colours by eye, both placeholders.",
             "THE FAMOUS GLOW - subsurface scattering, at about "
             "24:38. Real frosting and dough are not solid all "
             "the way through: light sinks in a little and "
             "glows back out, which is why food looks soft and "
             "edible. Blender's setting for it is called "
-            "Subsurface, in the same material panel. On the "
-            "icing and then the dough: set Subsurface Weight "
+            "Subsurface, in the same material panel. The icing "
+            "already wears the material you made in FIRST "
+            "COLOUR. The dough does not - no step has ever "
+            "given it one - so when you reach the dough, "
+            "click it, open the Material Properties tab and "
+            "click New first: a plain new material is all it "
+            "needs, because what matters here is the glow "
+            "recipe below, and the recipe needs a material to "
+            "live in (its real surface arrives in Part 5). On "
+            "the icing and then the dough: set Subsurface "
+            "Weight "
             "all the way to 1 (he says 'let's just turn the "
             "weight all the way up to one'), and set the Radius "
             "to 1, 1, 1 - he clears the default numbers and "
@@ -4819,13 +4960,21 @@ TOUR_STEPS = [
             "Tracing and switch it ON. Guru is blunt about it: "
             "it should have been on by default. It is what makes "
             "Eevee's light bounce believably.",
-            "LINE UP THE CAMERA. Click the camera, then in the "
-            "View menu (or the camera's own panel) use Lock "
-            "Camera to View, and drag your view until the frame "
-            "looks like his first picture - donut left of "
-            "centre, mug behind it. Untick Lock Camera to View "
-            "when it sits right. The framing is by eye; he "
-            "states no camera numbers anywhere in the series.",
+            "LINE UP THE CAMERA. The lock for this lives in "
+            "the sidebar: press N if the sidebar is closed, "
+            "open its View tab, find the View Lock section "
+            "and tick the box labelled Camera to View. It is "
+            "not in the 3D window's View menu and not in the "
+            "camera's own panel - the sidebar's View tab is "
+            "its only home. The tick glues the camera to your "
+            "view: drag your view around and the camera "
+            "follows, so you frame the shot by simply looking "
+            "at it. Drag until the frame looks like his first "
+            "picture - donut left of centre, mug behind it. "
+            "Untick Camera to View when it sits right, so the "
+            "camera stays where you put it. The framing is "
+            "by eye; he states no camera numbers anywhere in "
+            "the series.",
             "RENDER. Press F12 - or Render menu, Render Image. "
             "Your first picture of the donut appears. (Render "
             "Slots: each render can live in its own slot - "
@@ -4846,7 +4995,8 @@ TOUR_STEPS = [
         "title": "Part 5 - Real surfaces",
         "how": "Photo textures on every surface: the table "
                  "wired by hand, the rest by the texture "
-                 "add-on, and the dough gets real displacement.",
+                 "add-on - or by the same hand wiring - and "
+                 "the dough gets real displacement.",
         "video": {"url": "https://www.youtube.com/watch?v=h30ZJQrb4s8", "label": "Watch Part 5 on YouTube"},
         "skill": "Photo textures: wiring colour, roughness, normal and displacement pictures by hand, sRGB versus Non-Color, and real displacement on the dough",
         "missing": "Every surface wearing the recipe on its own: table, plate and dough fully wired; the icing wired with its colour set by hand and its glow re-set; the dough displaced with a level-3 Subdivision Surface.",
@@ -4858,8 +5008,28 @@ TOUR_STEPS = [
             "on with the Poliigon add-on - Buddy's tick does not "
             "care how a texture got there, only that each "
             "surface truly wears the recipe below.",
-            "THE WORKSPACE. Click the Shading tab along the top. "
-            "This is the material workshop: your object above, "
+            "NO POLIIGON? You are not stuck. The add-on is only "
+            "a shortcut: all it does is wire the same boxes you "
+            "are about to wire by hand on the table. So the hand "
+            "route IS the whole recipe - learn it on the table, "
+            "then repeat it on every other surface in this part, "
+            "as each section below describes. For the pictures "
+            "themselves you need picture FILES on your computer: "
+            "the same texture sets can be downloaded as ordinary "
+            "image files (Poliigon gives its sets away file by "
+            "file too, and other free texture libraries do the "
+            "same), and your own photographs work as well. Each "
+            "surface needs the same kinds of picture he uses: a "
+            "colour photo, a roughness map, a normal map - and "
+            "the dough needs a displacement map as well. Where "
+            "a section below says the add-on does it, your hands "
+            "do the table's wiring on that surface instead.",
+            "THE WORKSPACE. This step works in Blender's "
+            "Shading workspace - and Buddy's own screens along "
+            "the top do not include one, so add it: click the "
+            "+ at the right end of the top tab row, then "
+            "General, then Shading. This is the material "
+            "workshop: your object above, "
             "its material as a chain of boxes - nodes - below. "
             "A node's output plugs into the next node's input; "
             "the chain ends at the Principled BSDF, the box "
@@ -4867,23 +5037,39 @@ TOUR_STEPS = [
             "THE TABLE, WIRED BY HAND - about 0:00 to 7:27. He "
             "deliberately does this one manually, 'because I "
             "think it's good for you to know how to do this "
-            "stuff manually.' His concrete set has four "
+            "stuff manually.' Click the table to select it "
+            "first: it has no material yet (Part 4 coloured "
+            "only the icing, the mug and the plate), so click "
+            "New in the node editor's header to give it one - "
+            "a fresh material is a single Principled BSDF box "
+            "wired to the output, and that box is what every "
+            "picture below plugs into; with no material there "
+            "is nothing to wire into. His concrete set has four "
             "pictures: the colour photo, a roughness map (which "
             "areas shine), a normal map (fake fine bumps), and "
             "a displacement map (real height). For EACH picture: "
             "Shift+A in the node area, Texture, Image Texture, "
-            "and open the picture. Then the rule that matters: "
+            "and open the picture. (One navigation note for "
+            "this whole part: Blender 5's Add menu has no "
+            "Vector heading, though older written guides use "
+            "it - where a route below names a heading you "
+            "cannot find, type the node's name into the search "
+            "box at the top of the Add menu instead; the "
+            "search finds every node, in every version.) Then "
+            "the rule that matters: "
             "the COLOUR picture keeps its Color Space at sRGB; "
             "every other picture gets Color Space set to "
             "Non-Color - data maps are measurements, not "
             "colours, and Blender must not 'correct' them. Wire "
             "them: colour into Base Color; roughness into "
             "Roughness; normal through a Normal Map node "
-            "(Shift+A, Vector, Normal Map) into Normal; the "
+            "(Shift+A, Displacement, Normal Map) into Normal; "
+            "the "
             "displacement picture waits for the dough - the "
             "table keeps its own simpler wiring here. Above the "
             "chain, add a Texture Coordinate node and a Mapping "
-            "node (Shift+A, Input and Vector) feeding every "
+            "node (Shift+A: Texture Coordinate under Input, "
+            "Mapping under Displacement) feeding every "
             "picture's Vector socket, and raise the Mapping's "
             "Scale until the concrete's grain is the size it is "
             "in his frame.",
@@ -4896,9 +5082,17 @@ TOUR_STEPS = [
             "goes on with the Poliigon add-on: select the plate "
             "in the add-on, pick the ceramic set, and it wires "
             "colour, roughness and normal the same way you just "
-            "did by hand.",
+            "did by hand. By hand instead: wire the plate's own "
+            "material with the table's recipe - its ceramic set "
+            "as picture files: colour into Base Color, "
+            "roughness into Roughness, normal through a Normal "
+            "Map node into Normal, and a Texture Coordinate "
+            "and a Mapping node feeding every picture's Vector "
+            "socket.",
             "THE ICING - about 12:57, and a repair at 16:22. "
-            "Its glaze set goes on the same add-on way. Then "
+            "Its glaze set goes on the same add-on way - or by "
+            "hand, with the table's wiring done on the icing's "
+            "own material. Then "
             "Guru finds a mistake: Part 4's hand-set pink "
             "survived, fighting the glazed look. His fix, in the "
             "Shading workspace: DELETE the wire from the "
@@ -4912,9 +5106,12 @@ TOUR_STEPS = [
             "what it will not pass is a surface with no real "
             "texture wiring at all.",
             "THE DOUGH - about 19:05, the part's showpiece. Its "
-            "bread set goes on like the others. Then real "
-            "DISPLACEMENT: a Displacement node (Shift+A, Vector, "
-            "Displacement) takes the dough's displacement "
+            "bread set goes on like the others - by the "
+            "add-on, or wired by hand the table's way. Then "
+            "real "
+            "DISPLACEMENT: a Displacement node (Shift+A, then "
+            "type Displacement into the search) takes the "
+            "dough's displacement "
             "picture and plugs into the Material Output node's "
             "Displacement socket - the last node in the chain. "
             "In the Material Properties panel set the Surface "
@@ -4958,13 +5155,27 @@ TOUR_STEPS = [
             "properly: cutting the skin so it lies flat.",
             "PUT THE TEXTURE ON - 0:00. Through the Poliigon "
             "add-on, put the Rustic Gold Ceramic set on the "
-            "Mug. The free-rotation handles appear at the mug's "
+            "Mug. No Poliigon? Put a ceramic set on by hand, "
+            "the way Part 5's table taught: picture files of a "
+            "ceramic set (downloaded as plain images, or your "
+            "own photos), wired colour (sRGB) into Base Color, "
+            "roughness (Non-Color) into Roughness, and the "
+            "normal picture (Non-Color) through a Normal Map "
+            "node into Normal, with a Texture Coordinate and a "
+            "Mapping node feeding the pictures' Vector "
+            "sockets. Either way the pictures land the same - "
+            "the unwrapping below is what makes them sit "
+            "right. The free-rotation handles appear at the mug's "
             "base: that unfinished look is what this part fixes.",
             "A SMALL CLEANUP at 1:37: in the mug's material, "
             "find the Roughness picture's wire into the "
             "Principled and delete it (click the wire, X), then "
             "set Roughness with its plain slider - he steers it "
-            "by eye to a soft sheen.",
+            "by eye to a soft sheen. That wire exists because "
+            "the ceramic set just went on - both routes wire a "
+            "roughness picture in. If your mug still wears "
+            "only its plain Part 4 colour, there is no wire to "
+            "delete: just set the slider.",
             "TURN ON ON CAGE. In the Modifiers tab, the mug's "
             "Subdivision Surface has a small triangle button - "
             "On Cage. Switch it on: the low-poly cage stops "
@@ -4973,7 +5184,13 @@ TOUR_STEPS = [
             "MARK THE SEAMS - Ctrl+E, Mark Seam, from about "
             "2:42. A seam is a cut line: where the skin will be "
             "split to lie flat, like the seam of a garment. "
-            "Select an edge loop (Alt+click an edge), then "
+            "This needs Edit Mode with Edge Select: Tab into "
+            "Edit Mode on the mug, then press 2 (or click the "
+            "middle of the three select-mode icons at the top "
+            "left) - Alt+click only picks an edge loop in Edge "
+            "Select; in Vertex Select, where Edit Mode opens, "
+            "it picks points instead. Select an edge loop "
+            "(Alt+click an edge), then "
             "Ctrl+E and Mark Seam - it turns orange-red. His "
             "layout, all of it: one loop at the handle's TOP "
             "joint; one loop at its BOTTOM joint (the handle "
@@ -4983,10 +5200,16 @@ TOUR_STEPS = [
             "vertical line down the inside; and the loop around "
             "the UNDERSIDE. Six cuts, each where a real mug's "
             "glaze would hide them.",
-            "LIVE UNWRAP. Turn on Live Unwrap in the UV Editing "
-            "workspace's options - from then on, every seam you "
-            "mark re-flattens the map instantly, so you can "
-            "watch each cut fix the stretching. Then his UV "
+            "LIVE UNWRAP. This lives in the UV Editing "
+            "workspace, which Buddy's own screens do not "
+            "include - add it with the + at the right end of "
+            "the top tab row: Add Workspace, General, UV "
+            "Editing. In that workspace, the flat map on the "
+            "left is the UV Editor; open its UV menu (in that "
+            "editor's own header) and tick Live Unwrap - from "
+            "then on, every seam you mark re-flattens the map "
+            "instantly, so you can watch each cut fix the "
+            "stretching. Then his UV "
             "toolkit finishes the job: the Mio3 UV add-on's "
             "buttons (an extension he uses; its absence never "
             "blocks the tick) and Gridify, which straightens the "
@@ -5007,7 +5230,9 @@ TOUR_STEPS = [
             "Both amounts are by eye - match his frame.",
             "THE COFFEE FOAM - about 25:05, built from the mug "
             "itself, never a new disc. Tab into Edit Mode on "
-            "the Mug and select the loop of edges around the "
+            "the Mug, switch to Edge Select (press 2 - the "
+            "Alt+click below only picks an edge loop in Edge "
+            "Select), and select the loop of edges around the "
             "INSIDE of its rim - the coffee's edge. Shift+D "
             "duplicates it in place; press Esc; then press P "
             "(Separate) and choose Selection: the loop becomes "
@@ -5026,13 +5251,24 @@ TOUR_STEPS = [
             "until it covers just one design - he drags his "
             "onto 'that one at the top', but any of the nine is "
             "a legal coffee; his point is one design per cup, "
-            "not the whole sheet stretched across.",
+            "not the whole sheet stretched across. No atlas? "
+            "Any single photo of coffee foam does the same "
+            "job - a photo of a real cup, taken yourself, is "
+            "ideal: give the Foam its own material (Material "
+            "Properties, New), wire the photo in as an Image "
+            "Texture into Base Color, and scale the foam's UV "
+            "shape onto the part of the photo you want in the "
+            "cup.",
             "SAVE (Ctrl+S). Buddy ticks when the mug wears a "
-            "real set of seams (his six-cut layout - a stray "
-            "edge or two will not pass) and the foam sits in "
-            "the rim with its edge raised and its middle dipped "
-            "- a flat dark disc dropped in the top is not his "
-            "coffee and will not tick.",
+            "real set of seams - ten or more seam edges and a "
+            "UV map: a stray edge or two will not pass. Buddy "
+            "counts the seams; it does not grade where they "
+            "lie, so his six-cut layout above is not the tick "
+            "talking - it is what makes the unwrap actually "
+            "lie flat, which is why you follow it - and the "
+            "foam sits in the rim with its edge raised and its "
+            "middle dipped - a flat dark disc dropped in the "
+            "top is not his coffee and will not tick.",
         ],
         "check": _check_unwrap_mug,
         "run": _tour_step_unwrap_mug,
@@ -5060,11 +5296,20 @@ TOUR_STEPS = [
             "cursor is where new objects are born - it is why "
             "the sprinkle appears on the donut instead of at "
             "the world's centre.",
-            "ONE SPRINKLE. Shift+A, Mesh, Cylinder. In its "
-            "panel: drag Radius down to nearly nothing, then "
+            "ONE SPRINKLE. Shift+A, Mesh, Cylinder. Work in "
+            "the Add Cylinder panel - the small panel that "
+            "appears at the bottom left of the 3D view the "
+            "moment the cylinder is born: drag Radius down to "
+            "nearly nothing, then "
             "back up a touch; lengthen the Depth; and set "
             "Vertices to 6 - his exact number; a sprinkle is a "
-            "hexagonal sliver, not a tube. The radius and depth "
+            "hexagonal sliver, not a tube. Set those numbers "
+            "BEFORE you click anything else: that panel is the "
+            "only place Vertices can be set, and it vanishes "
+            "at your next click - if it is already gone, "
+            "delete the cylinder (select it, X) and add it "
+            "again so the panel comes back. The radius and "
+            "depth "
             "amounts are dragged by eye; there is no typed "
             "value. Add a Subdivision Surface modifier and two "
             "loop cuts (Ctrl+R) near the ends so the caps round "
@@ -5096,7 +5341,9 @@ TOUR_STEPS = [
             "Info node (Shift+A, Input, Object Info) - its "
             "Random output is a different steady number for "
             "every scattered copy - and a Color Ramp node "
-            "(Shift+A, Converter, Color Ramp). Wire Random into "
+            "(Shift+A, Color, Color Ramp - Blender 5's Add "
+            "menu has no Converter heading; the ramp lives "
+            "under Color). Wire Random into "
             "the ramp's Fac, set the ramp's interpolation to "
             "Constant (the dropdown on the ramp - Constant means "
             "each copy gets ONE flat colour, never a blend), "
@@ -5108,45 +5355,62 @@ TOUR_STEPS = [
             "bit shiny' - and the Subsurface recipe from Part "
             "4, with the Scale turned really low (his words; "
             "the finale retunes it to a stated number).",
+            "SCATTER - the modifier, about 8:35 in his order "
+            "of work and the heart of the part. Select the "
+            "Icing, Modifiers tab, Add Modifier, and add "
+            "Scatter on Surface (one of the new built-in "
+            "geometry systems in Blender 5). Its panel opens "
+            "with four rows at the top - Density Method, "
+            "Distribution Method, Density, and the "
+            "Distribution Mask - and in his order those are "
+            "set LATER (the mask needs the paint you are about "
+            "to do), so leave the top rows for now and work "
+            "the sections below them. INSTANCING: set Instance "
+            "Type to Collection, and the Collection box to "
+            "your Sprinkles collection; Pick Instance ON (each "
+            "scatter point then takes a whole variant, not a "
+            "slice of one). TRANSFORM: nudge Surface Offset up "
+            "very, very slightly, so they sit ON the icing "
+            "instead of in it, and set Alignment Axis to Y (a "
+            "sprinkle's length now follows its Y, so it lies "
+            "along the icing instead of standing on end). One "
+            "setting in this system has no button anywhere in "
+            "the panel: Reset Transform. There is nothing to "
+            "press - the scatterer starts with it already on, "
+            "and that is what lets the sprinkles lie down "
+            "along the surface; it is already doing its job. "
+            "RANDOMIZE: switch it ON, with Rotation Y at 360 "
+            "degrees and X turned just a little - his words, "
+            "no number given.",
             "PAINT WHERE THEY MAY LAND - about 12:44. Select "
             "the Icing and enter Weight Paint mode (the mode "
             "dropdown, top left). Weight painting paints an "
             "invisible strength map onto a shape: red is full "
             "strength, blue is none. Turn on Front Faces Only "
-            "in the brush options so you do not paint through "
-            "to the underside. Paint the top of the icing red; "
-            "paint softer - lighter pressure - down the edges. "
-            "The values live in a VERTEX GROUP (a named list of "
-            "points with strengths); Blender names yours "
-            "'Group' automatically, and his keeps that name - "
-            "do not rename it, the scatterer is about to look "
-            "for it.",
-            "SCATTER - the modifier, about 8:35 in his order of "
-            "work and the heart of the part. Select the Icing, "
-            "Modifiers tab, Add Modifier, and add Scatter on "
-            "Surface (one of the new built-in geometry systems "
-            "in Blender 5). Walk its panel top to bottom the "
-            "way he does: Instancing Type set to Collection, "
-            "and the Collection box set to your Sprinkles "
-            "collection; Pick Instance ON (each scatter point "
-            "then takes a whole variant); Reset Transform - he "
-            "presses it and the sprinkles lie down along the "
-            "surface; Alignment Axis to Y (a sprinkle's length "
-            "now follows its Y, so it lies along the icing "
-            "instead of standing on end); Randomize ON, with "
-            "Rotation Y at 360 degrees and X turned just a "
-            "little - his words, no number given; Surface "
-            "Offset nudged up very, very slightly, so they sit "
-            "ON the icing instead of in it.",
+            "so you do not paint through to the underside: it "
+            "lives in the header's Brush menu, in the Advanced "
+            "section - tick it there. Paint the top of the "
+            "icing red; paint softer - lighter pressure - down "
+            "the edges. The values live in a VERTEX GROUP (a "
+            "named list of points with strengths); Blender "
+            "names yours 'Group' automatically, and his keeps "
+            "that name - do not rename it: the mask in the "
+            "next section points at that exact name.",
             "THE MASK - about 17:00, and he warns about this "
-            "one himself: under Masking, the Distribution Mask "
-            "input takes your painted group - set it to the "
-            "attribute named Group. NOT the Density input "
-            "(plugging the paint there is the mistake he calls "
-            "out). Sprinkles now only grow where you painted, "
-            "thick on top, thinning at the edges, none "
-            "underneath.",
-            "DENSITY - about 26:58. Set the Density Method "
+            "one himself: the Distribution Mask is a row of "
+            "its own near the TOP of the scatter panel - it is "
+            "NOT inside the Masking section lower down (that "
+            "section holds an image picker, a different tool). "
+            "The row starts out showing a plain number; at its "
+            "right end is a small icon that switches the row "
+            "to take an attribute name instead - click it, and "
+            "type Group: your painted group. NOT the Density "
+            "input (plugging the paint there is the mistake he "
+            "calls out). Sprinkles now only grow where you "
+            "painted, thick on top, thinning at the edges, "
+            "none underneath.",
+            "DENSITY - about 26:58, back at the top rows of "
+            "the same panel. Set the Density Method "
             "dropdown to Density and the Density itself to "
             "900 - his stated number. (The other method, Total, "
             "spreads a fixed count over the whole surface "
@@ -5256,12 +5520,21 @@ TOUR_STEPS = [
             "back from. This is the gentlest light in the rig - "
             "it just lifts the shadows so they are dark, not "
             "dead.",
-            "THE CAMERA - about 15:05. Turn on Lock Camera to "
-            "View (the camera's panel, or the View menu) and "
+            "THE CAMERA - about 15:05. Turn on Camera to "
+            "View - the lock lives in the sidebar: press N "
+            "if the sidebar is closed, open its View tab, "
+            "find the View Lock section and tick the box "
+            "labelled Camera to View. It is not in the 3D "
+            "window's View menu and not in the camera's own "
+            "panel - the sidebar's View tab is its only "
+            "home. The tick glues the camera to your view, "
+            "so you frame the shot by simply looking at it: "
             "pull your view closer until the donut fills the "
             "frame the way his does - big, left of centre, the "
             "mug behind it right, the plate running off the "
-            "bottom edge. Untick the lock. No lens change is "
+            "bottom edge. Untick the lock when it sits "
+            "right, so the camera stays where you put it. "
+            "No lens change is "
             "made or stated anywhere in the series - the "
             "framing is distance and angle, both by eye.",
             "EEVEE QUALITY - about 15:36. In the Render "
@@ -5284,17 +5557,29 @@ TOUR_STEPS = [
             "Light Probe Volume is a box that samples the "
             "light around the set and feeds it back as soft "
             "bounce. Shift+right-click the donut (cursor "
-            "there), Shift+A, Light Probe, Volume. Scale the "
-            "box (S) until it just encapsulates the set, its "
-            "points sitting just above the table. Set its "
+            "there), Shift+A, Light Probe, Volume. Fit the "
+            "box to the set as one whole object: move it (G) "
+            "and scale it (S) until it just encapsulates the "
+            "set, its bottom sitting just above the table. "
+            "Set its "
             "Resolution to 4 - his stated value ('I probably "
             "only need about three. No, I'll go four'). He "
             "then nudges a couple of the box's points by hand - "
             "one to the plate's edge, one inside the donut - "
-            "and presses Bake Light Cache in the Render "
-            "Properties: Blender pre-cooks the bounce. (Baking "
-            "on some machines waits for a GPU; the probe and "
-            "its resolution are what Buddy grades.)",
+            "but in this version of Blender a Volume probe "
+            "has no Edit Mode at all (its mode menu holds "
+            "Object Mode only), so there are no points to "
+            "grab: the whole-box fit you just made, by the "
+            "object's own position and scale, is the fitting "
+            "this version offers. He also bakes the probe - "
+            "Blender pre-cooks the bounce into it - but in "
+            "this version the Render Properties carry no "
+            "Bake Light Cache button: the panel's sections "
+            "hold no indirect-lighting bake at all, so there "
+            "is nothing to press and nothing to hunt for. "
+            "The probe and its resolution are what Buddy "
+            "grades, and the picture renders without the "
+            "bake.",
             "DEPTH OF FIELD - about 22:30. Click the camera, "
             "open its Depth of Field section, switch it ON, "
             "and set Focus Object to the Icing - click the "
@@ -10733,6 +11018,26 @@ def register():
                     "picture was taken during it",
         default=0,
     )
+    bpy.types.Scene.buddy_render_done = BoolProperty(
+        name="A render was completed",
+        description="Buddy's render-complete handler sets this the "
+                    "moment a render finishes, so the picture steps "
+                    "can prove a render happened even after the "
+                    "file is saved and reopened (the Render Result "
+                    "itself is not saved, and on Blender 5.3 it "
+                    "reports no data even while it is on screen)",
+        default=False,
+    )
+    bpy.types.Scene.buddy_final_render_done = BoolProperty(
+        name="A final-stage render was completed",
+        description="Buddy's render-complete handler sets this "
+                    "when a render finishes with the finale's "
+                    "rig standing complete, so the last step can "
+                    "prove its render belongs to the finale - an "
+                    "earlier step's render cannot prove that "
+                    "(W4, GAP 8-4)",
+        default=False,
+    )
     bpy.types.WindowManager.buddy_ask = StringProperty(
         name="Ask the expert",
         description="Ask the AI expert anything about your scene, in "
@@ -10793,6 +11098,13 @@ def register():
             bpy.app.handlers.load_post.append(_buddy_grade_save)
     except Exception:
         pass
+    try:
+        if _buddy_mark_render not in \
+                bpy.app.handlers.render_complete:
+            bpy.app.handlers.render_complete.append(
+                _buddy_mark_render)
+    except Exception:
+        pass
     _register_tools()
     # Run the styles dry-probe HERE, in register's context: it
     # creates and removes a scratch object and materials, work
@@ -10834,8 +11146,8 @@ def unregister():
         if hasattr(bpy.types.WindowManager, attr):
             delattr(bpy.types.WindowManager, attr)
     for attr in ("buddy_tour_started", "buddy_show_lesson",
-                 "buddy_tour_epoch",
-                 "buddy_tour_package"):
+                 "buddy_tour_epoch", "buddy_render_done",
+                 "buddy_final_render_done", "buddy_tour_package"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
     for km, kmi in _BUDDY_KEYMAPS:
@@ -10860,6 +11172,11 @@ def unregister():
             _handlers.remove(_buddy_grade_save)
         except Exception:
             pass
+    try:
+        bpy.app.handlers.render_complete.remove(
+            _buddy_mark_render)
+    except Exception:
+        pass
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 

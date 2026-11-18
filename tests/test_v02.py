@@ -57,6 +57,24 @@ def select_only(obj):
     bpy.context.view_layer.objects.active = obj
 
 
+def action_fcurves(action):
+    """Every fcurve an action holds, on either Action API.
+
+    Blender 4.2 exposes action.fcurves directly. Blender 5's
+    layered Actions removed that attribute: the curves live in
+    the channelbags of each layer's strips instead.
+    """
+    direct = getattr(action, "fcurves", None)
+    if direct is not None:
+        return list(direct)
+    curves = []
+    for layer in action.layers:
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", ()):
+                curves.extend(bag.fcurves)
+    return curves
+
+
 # index Run button executes a real Blender tool
 clear()
 res = bpy.ops.buddy.run_any(op_id="mesh.primitive_cube_add")
@@ -93,7 +111,7 @@ print("TEST_PASS sculpt toggle")
 
 run("remember_pose")
 assert cube.animation_data and cube.animation_data.action
-assert len(cube.animation_data.action.fcurves) >= 3
+assert len(action_fcurves(cube.animation_data.action)) >= 3
 print("TEST_PASS keyframe")
 
 run("centre_world")

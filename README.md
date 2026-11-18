@@ -154,6 +154,31 @@ modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
 
+### v3.2.2: the second half of the donut, walked and fixed
+
+v3.2.1's notes said the steps 4–8 cold walk was under way.
+It finished — and it found real faults. Step 4 could never
+tick from its own instructions: a finished render left
+nothing the check could see, so the tour sat on step 4
+forever. Steps 5 and 6 dead-ended anyone without the
+Poliigon add-on — the cards named no other route to the
+textures. Step 8 pointed at a camera setting and a bake
+button that are not where the card said, and its final
+tick could be satisfied by an old render left over from
+an earlier step.
+
+v3.2.2 fixes all of it. A completed render now records
+itself in the file, and step 4 ticks on the render the
+card tells you to make. Steps 5 and 6 teach a complete
+by-hand route with your own picture files, alongside his
+Poliigon route. Step 8's card names the settings' real
+homes, and the finale now counts only a render made with
+the finished scene standing — an earlier step's picture
+no longer finishes the tutorial. Every fix was verified
+the same way the faults were found: the walked scenes
+themselves, re-graded, plus the full test battery on
+Blender 5.3.0 and 4.2.5.
+
 ### v3.2.1: the tutorial, transcribed and proven
 
 Two honest admissions first. The v3.2.0 finale picture was

@@ -1375,6 +1375,248 @@ else:
               "step3_done.blend: the finished icing "
               "ticks step 3, tour standing at step 4")
 
+# --- Fix round 6: the render proof (walk110, GAP 4-8) ---------------
+# Step 4's tick needs "a render exists". The shipped proof
+# read the Render Result image - which reports size (0, 0)
+# and has_data False after a completed render on Blender
+# 5.3 (and after every background render), and whose pixels
+# are never saved into the file - or a .png at the scene's
+# output path, which the card never sets. A learner
+# following the card exactly (F12, no output path) could
+# never tick step 4. The fix records the render on the
+# scene itself: a render_complete handler sets
+# buddy_render_done the moment a render finishes, and the
+# record is saved with the file. Locked here in both
+# directions on any Blender: never rendered -> the clause
+# fails; rendered by the card's exact route -> it passes,
+# and still passes after save + reopen. (The factory reset
+# first: the walked files above can leave the session in
+# Sculpt Mode, where the object operators below will not
+# run - and this lock wants a plain, never-rendered scene.)
+bpy.ops.wm.read_factory_settings(use_empty=True)
+wipe()
+bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
+bpy.ops.object.camera_add(location=(0, -5, 0),
+                          rotation=(1.5708, 0, 0))
+ctx.scene.camera = ctx.object
+bpy.ops.object.light_add(type="SUN", location=(0, 0, 5))
+ctx.scene.render.filepath = "/tmp/"
+assert ctx.scene.buddy_render_done is False
+assert bb._render_proof(ctx) is False, \
+    "a scene that never rendered must fail the render proof"
+print("CARDWALK_PASS render proof: a never-rendered scene "
+      "fails the clause")
+ctx.scene.render.engine = "CYCLES"
+ctx.scene.cycles.samples = 1
+ctx.scene.cycles.use_denoising = False
+ctx.scene.render.resolution_x = 16
+ctx.scene.render.resolution_y = 16
+ctx.scene.render.resolution_percentage = 100
+bpy.ops.render.render()
+assert ctx.scene.buddy_render_done is True
+assert bb._render_proof(ctx) is True, \
+    "a completed render must pass the render proof"
+print("CARDWALK_PASS render proof: a completed render with "
+      "no output path (the card's route) passes the clause")
+_save(TMP)
+bpy.ops.wm.open_mainfile(filepath=TMP)
+assert bb._render_proof(ctx) is True, \
+    "the render record must survive save + reopen"
+print("CARDWALK_PASS render proof: the record survives "
+      "save + reopen (progress reads from the scene alone)")
+
+# --- The W4 confirmation-walk checkpoint (walk110) -------------------
+# step4_done.blend: the walked, genuinely finished step 4
+# that never ticked (GAP 4-8). Its stored output path is
+# "/tmp/" - the card's own F12-only state, saved before the
+# walk's disclosed branch-2 rescue - so as it stands the
+# step must still NOT tick: nothing in the file proves a
+# render, and the fix must not invent one. Point the output
+# path at a real .png written now (branch 2, unchanged) and
+# the step ticks; then clear the path and render for real
+# (the card's route, via the new record) and it ticks - and
+# stays ticked after save + reopen. The render below runs
+# on Cycles because Eevee cannot run headless on this
+# machine; no step-4 clause reads the engine. Same guards
+# as the sections above.
+CKPT110 = os.path.expanduser("~/workspace/walk110/checkpoints")
+path = os.path.join(CKPT110, "step4_done.blend")
+if not os.path.exists(path):
+    print("CARDWALK_SKIP step4_done.blend not present on "
+          "this machine")
+else:
+    ver = _blend_version_int(path)
+    if ver is not None and ver > running_ver:
+        print("CARDWALK_SKIP step4_done.blend: file is "
+              "Blender %d.%d format, running %d.%d"
+              % (ver // 100, ver % 100,
+                 running_ver // 100, running_ver % 100))
+    elif ver is None and running_ver < 500:
+        print("CARDWALK_SKIP step4_done.blend: compressed "
+              "format a pre-5.0 Blender cannot read, "
+              "running %d.%d"
+              % (running_ver // 100, running_ver % 100))
+    else:
+        bpy.ops.wm.open_mainfile(filepath=path)
+        assert bb._render_proof(ctx) is False, \
+            "no render is proven in the walked file"
+        assert bb._check_first_picture(ctx) is False, \
+            "the unproven render must hold step 4"
+        print("CARDWALK_PASS W4 checkpoint "
+              "step4_done.blend: the finished step 4 with "
+              "no proven render still waits (no false tick)")
+        PNG = TMP + ".png"
+        with open(PNG, "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+        ctx.scene.render.filepath = PNG
+        assert bb._render_proof(ctx) is True, \
+            "branch 2 (a .png at the output path) must pass"
+        assert bb._check_first_picture(ctx) is True, \
+            "branch 2 must tick the walked step 4"
+        print("CARDWALK_PASS W4 checkpoint "
+              "step4_done.blend: branch 2 (output-path .png) "
+              "still ticks step 4")
+        ctx.scene.render.filepath = "/tmp/"
+        assert bb._render_proof(ctx) is False, \
+            "with the path cleared the clause waits again"
+        ctx.scene.render.engine = "CYCLES"
+        ctx.scene.cycles.samples = 1
+        ctx.scene.cycles.use_denoising = False
+        ctx.scene.render.resolution_x = 16
+        ctx.scene.render.resolution_y = 16
+        ctx.scene.render.resolution_percentage = 100
+        bpy.ops.render.render()
+        assert bb._check_first_picture(ctx) is True, \
+            "a genuine render must tick the walked step 4"
+        checks, current = bb.tour_state(ctx)
+        assert current == 4, checks
+        print("CARDWALK_PASS W4 checkpoint "
+              "step4_done.blend: a genuine render (the "
+              "card's F12 route) ticks step 4")
+        _save(TMP)
+        bpy.ops.wm.open_mainfile(filepath=TMP)
+        assert bb._check_first_picture(ctx) is True, \
+            "the tick must survive save + reopen"
+        print("CARDWALK_PASS W4 checkpoint "
+              "step4_done.blend: the tick survives save + "
+              "reopen")
+        try:
+            os.remove(PNG)
+        except OSError:
+            pass
+
+# --- Fix round 8: the finale's render clause (walk110, GAP 8-4) -----
+# Step 8's tick text promises "a fresh render on file", but
+# the clause was _render_proof itself: any render from
+# earlier in the tour satisfies it - in W4 the tour
+# completed at the depth-of-field save on the strength of
+# the step-4 rescue render already on file, before any
+# step-8 render existed. The finale now reads its own
+# record: the render_complete handler sets
+# buddy_final_render_done when a render finishes with
+# the finale's rig standing complete around it, and
+# _check_final_picture reads only that record (see
+# _final_render_proof). _render_proof is untouched, so
+# step 4's locks above stand as written. Locked here in
+# both directions on any Blender: no record -> the clause
+# fails; an early-stage record (buddy_render_done, the
+# strongest _render_proof witness) -> the finale still
+# fails while step 4's proof passes; the final-stage
+# record -> it passes. (The factory reset first, as in
+# the round-6 lock: this lock wants a plain scene.)
+bpy.ops.wm.read_factory_settings(use_empty=True)
+wipe()
+assert ctx.scene.buddy_final_render_done is False
+assert bb._final_render_proof(ctx) is False, \
+    "no final-stage record must fail the finale clause"
+print("CARDWALK_PASS final render proof: no final-stage "
+      "render on record fails the clause")
+ctx.scene.buddy_render_done = True
+assert bb._render_proof(ctx) is True, \
+    "step 4's proof must still accept the early record"
+assert bb._final_render_proof(ctx) is False, \
+    "an early-stage render must not satisfy the finale"
+print("CARDWALK_PASS final render proof: an early-stage "
+      "render does not tick the finale (GAP 8-4)")
+ctx.scene.buddy_final_render_done = True
+assert bb._final_render_proof(ctx) is True, \
+    "the final-stage record must pass the finale clause"
+print("CARDWALK_PASS final render proof: the final-stage "
+      "record passes the clause")
+
+# --- The W4 step-8 checkpoint (walk110) ------------------------------
+# step8_done.blend: the walked finale - every scene clause
+# dump-verified true by W4 (the parenting chain, a sun at
+# 10, the blue sky and white bounce points, two standing
+# one-face blockers, the probe at resolution 4, shadow
+# Steps 16, the retuned SSS scales, DOF focused on the
+# icing). Its render evidence is the finale Eevee render
+# saved over the scene's output path - a branch-2 file
+# guarded only by the tour's start, which cannot prove
+# the render belongs to the final stage (a step-4 render
+# at the same path passes the same guard: GAP 8-4
+# itself) - and the file was saved by the shipped build,
+# before the final-stage record existed, so it carries
+# none. The honest read is therefore that the finale
+# WAITS: tour standing at step 8 with every other clause
+# true. One genuine render with the rig standing makes
+# the record and ticks it, and the tick survives save +
+# reopen. The render below runs on Cycles because Eevee
+# cannot run headless on this machine; no step-8 clause
+# reads the engine. Same guards as the sections above.
+path = os.path.join(CKPT110, "step8_done.blend")
+if not os.path.exists(path):
+    print("CARDWALK_SKIP step8_done.blend not present on "
+          "this machine")
+else:
+    ver = _blend_version_int(path)
+    if ver is not None and ver > running_ver:
+        print("CARDWALK_SKIP step8_done.blend: file is "
+              "Blender %d.%d format, running %d.%d"
+              % (ver // 100, ver % 100,
+                 running_ver // 100, running_ver % 100))
+    elif ver is None and running_ver < 500:
+        print("CARDWALK_SKIP step8_done.blend: compressed "
+              "format a pre-5.0 Blender cannot read, "
+              "running %d.%d"
+              % (running_ver // 100, running_ver % 100))
+    else:
+        bpy.ops.wm.open_mainfile(filepath=path)
+        checks, current = bb.tour_state(ctx)
+        assert current == 7 and checks[:7] == [True] * 7 \
+            and checks[7] is False, (checks, current)
+        assert bb._final_render_proof(ctx) is False, \
+            "the walked file carries no final-stage record"
+        assert bb._check_final_picture(ctx) is False, \
+            "the finale must wait for a final-stage render"
+        print("CARDWALK_PASS W4 checkpoint "
+              "step8_done.blend: the walked finale waits - "
+              "its on-file render cannot prove the final "
+              "stage (no false tick)")
+        ctx.scene.render.engine = "CYCLES"
+        ctx.scene.cycles.samples = 1
+        ctx.scene.cycles.use_denoising = False
+        ctx.scene.render.resolution_x = 16
+        ctx.scene.render.resolution_y = 16
+        ctx.scene.render.resolution_percentage = 100
+        bpy.ops.render.render()
+        assert ctx.scene.buddy_final_render_done is True, \
+            "a render with the rig standing must set the record"
+        assert bb._check_final_picture(ctx) is True, \
+            "a fresh final-stage render must tick the finale"
+        checks, current = bb.tour_state(ctx)
+        assert current == 8, checks
+        print("CARDWALK_PASS W4 checkpoint "
+              "step8_done.blend: a fresh render at the "
+              "final step ticks the finale")
+        _save(TMP)
+        bpy.ops.wm.open_mainfile(filepath=TMP)
+        assert bb._check_final_picture(ctx) is True, \
+            "the finale tick must survive save + reopen"
+        print("CARDWALK_PASS W4 checkpoint "
+              "step8_done.blend: the tick survives save + "
+              "reopen")
+
 try:
     os.remove(TMP)
 except OSError:
