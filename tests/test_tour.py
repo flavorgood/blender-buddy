@@ -48,7 +48,7 @@ for pkg in bb.PACKAGES:
 print("TOUR_PASS every step teaches, names its skill, names what's missing")
 
 # The panel must not offer to do the step - teaching is the point.
-src = open(os.path.join(ROOT, "blender_buddy", "__init__.py")).read()
+src = open(os.path.join(ROOT, "blender_buddy", "__init__.py"), encoding="utf-8").read()
 assert 'text="Do this step"' not in src
 print("TOUR_PASS no do-it-for-you button in the panel")
 

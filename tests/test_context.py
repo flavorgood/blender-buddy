@@ -4,13 +4,14 @@ need for tools that are not needed or not usable at the moment".
 Proves: tools appear only when the scene/mode/picked thing can
 actually use them; the "For right now" deck follows the
 moment; empty drawers hide; the Donut lives in its own drawer
-now; the floating card is off by default; and Codex is found
+now; the floating card is on by default; and Codex is found
 wherever it landed, with a Test button that reports plainly.
 
 Run: blender -b --factory-startup --python tests/test_context.py
 """
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import bpy  # noqa: E402
@@ -52,9 +53,8 @@ assert not avail("glue_together"), "glue needs two picked things"
 deck = bb._now_deck(ctx)
 assert deck[0]["id"] == "tool_move", [d["id"] for d in deck]
 shape = bb._section_actions("4. Shape it", ctx)
-assert [a["id"] for a in shape] == ["start_shaping"], [a["id"] for a in shape]
-print("CONTEXT_PASS object mode: deck leads with move, "
-      "shape drawer holds only the way in")
+assert [a["id"] for a in shape] == ["start_shaping", "reshape_as_circle"]
+print("CONTEXT_PASS object mode shows shaping entry and mesh circle reshape")
 
 # --- a modifier appears -> make_permanent becomes usable ---------
 bpy.ops.buddy.action(action_id="make_smoother")
@@ -101,7 +101,7 @@ assert "VIEW3D_PT_buddy_projects" in names
 cls = next(c for c in bb.CLASSES if c.__name__ == "VIEW3D_PT_buddy_projects")
 assert "DEFAULT_CLOSED" in cls.bl_options
 src = open(os.path.join(os.path.dirname(__file__), "..",
-                        "blender_buddy", "__init__.py")).read()
+                        "blender_buddy", "__init__.py"), encoding="utf-8").read()
 main_draw = src.split("class VIEW3D_PT_blender_buddy")[1].split("def _make_section_panel")[0]
 assert 'text="Learn by doing: guided projects"' not in main_draw, \
     "project shelf still drawn at the top of the main panel"
@@ -121,6 +121,8 @@ bb.shutil.which = lambda name: "/usr/bin/codex" if name == "codex" else None
 assert bb._find_codex() == "/usr/bin/codex"
 assert bb._expert_ready({"service": "CODEX"}) is True
 bb.shutil.which = lambda name: None
+missing_cli = patch.object(bb.os.path, "isfile", return_value=False)
+missing_cli.start()
 assert bb._find_codex() is None
 assert bb._expert_ready({"service": "CODEX"}) is False
 real_settings = bb._expert_settings
@@ -128,11 +130,12 @@ bb._expert_settings = lambda: {"key": "", "url": "", "model": "",
                                "float": False, "service": "CODEX"}
 
 res = bpy.ops.buddy.test_expert()
+missing_cli.stop()
 bb._expert_settings = real_settings
 bb.shutil.which = real_which
 assert res == {"FINISHED"}
 status = ctx.window_manager.buddy_expert_status
-assert "Codex program isn't on this computer" in status, status
+assert "couldn't locate the Codex command-line program" in status, status
 print("CONTEXT_PASS codex test button:", status[:70])
 
 bb.unregister()
