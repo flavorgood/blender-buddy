@@ -96,9 +96,11 @@ changes none of Blender's functions. It makes them visible:
   Claude account at risk.) **Local AI:** run a free AI on your own
   computer (for example Ollama) — no key, no login, nothing leaves
   the machine. Ask in plain words for advice, explanations, or
-  exact values for your scene. Turn on **Expert help with tasks**
-  to let the Expert draft a plan. Read the steps and press **Run
-  these steps** to apply them. A plan can press Buddy buttons, run Blender's
+  exact values for your scene. **Expert help with tasks** starts
+  on and remembers your choice. With it on, the Expert can draft
+  a plan for you to review. Press **Run these steps** to apply
+  it. Switch task help off for advice only. A plan can press
+  Buddy buttons, run Blender's
   own everyday tools, set exact values — for example the size,
   strength and falloff of the sculpt brush you describe, a bevel's
   width, or the picture's sample count — wire your material's node
@@ -153,10 +155,7 @@ modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
 
-### Upcoming in v3.2.4 — floating Expert fixes
-
-The changes below are in the source tree. The current public download is
-[v3.2.3](https://github.com/flavorgood/blender-buddy/releases/tag/v3.2.3).
+### v3.2.4 brings reliable input and reopening to the floating Expert
 
 Choose **Open Buddy Expert** in the Blender Buddy sidebar to open or reopen
 the conversation. Type in the floating card and press **Enter** or click **Ask**.
@@ -375,26 +374,30 @@ picture, save, send it out.
 
 ## Get it (2 minutes)
 
-Blender Buddy supports Blender 4.2 or newer. The current published version is
-[3.2.3](https://github.com/flavorgood/blender-buddy/releases/tag/v3.2.3).
+Blender Buddy supports Blender 4.2 or newer. Download the package for your
+installation from [GitHub Releases](https://github.com/flavorgood/blender-buddy/releases/latest).
 
-- **Extension** (recommended). Download
-  [blender_buddy_v3.2.3_extension.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.3/blender_buddy_v3.2.3_extension.zip).
-  In **Edit → Preferences → Get Extensions**, open the upper-right menu and
-  choose **Install from Disk**. Select the ZIP. For an existing extension,
-  select its current local repository. Check for version **3.2.3** in Preferences.
-- **Classic add-on**. For a single-file installation, download
-  [blender_buddy.py from v3.2.3](https://raw.githubusercontent.com/flavorgood/blender-buddy/v3.2.3/blender_buddy.py).
-  Open **Edit → Preferences → Add-ons**, use the install-from-disk control,
-  select the Python file, and enable **Blender Buddy**. The release also includes
-  the [classic 3.2.3 ZIP](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.3/blender_buddy_v3.2.3.zip).
+- **Extension** (recommended). For 3.2.4, download
+  [blender_buddy_v3.2.4_extension.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.4/blender_buddy_v3.2.4_extension.zip). Open **Edit → Preferences → Get
+  Extensions**, use the upper-right menu, and choose **Install from Disk**.
+  Select the downloaded ZIP and confirm. To update an existing extension,
+  select the same local repository you used before. Check that Blender Buddy
+  shows version 3.2.4 in Preferences.
+- **Classic add-on**. Download [blender_buddy_v3.2.4.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.4/blender_buddy_v3.2.4.zip). In **Edit →
+  Preferences → Add-ons**, use the install-from-disk control to select the ZIP.
+  Enable **Blender Buddy**. Use the same installation format for future updates.
+- **Single-file add-on**. Download the tagged
+  [blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/v3.2.4/blender_buddy.py)
+  and use the classic add-on installation steps with the Python file.
 
-GitHub ZIP updates are manual. If you have work open, you can leave that
-Blender process open and launch a second process to install the package.
+The GitHub ZIP is a manual update. If you have work open or the Expert is
+waiting on a request, leave that Blender process open and launch a second
+Blender process to install the update. The first process keeps the code it
+already loaded. You can try the updated Expert in the second process without
+saving a project.
 
-In the 3D Viewport, press **N** and open the **Blender Buddy** tab. The
-**Floating Expert card** is enabled by default in 3.2.3. If you minimize it,
-click its corner chip to reopen it.
+In the 3D Viewport, press **N**, open the **Blender Buddy** tab, and choose
+**Open Buddy Expert**.
 
 ## Try this first (day-1 path)
 
