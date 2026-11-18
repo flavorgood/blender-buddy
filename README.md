@@ -154,6 +154,20 @@ modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
 
+### v3.2.3: the Expert moves out of the panel
+
+The Buddy Expert now lives in a floating card over the 3D
+view instead of a panel section. Drag it anywhere by its
+title bar, resize it by its corner, and minimise it to a
+small chip in the corner of the view when you want it out
+of the way — click the chip and it comes back at the size
+and place you left it. Everything the Expert does happens
+in the card: ask in your own words, read the answer, and
+run a plan it drafts only when you press Run. The panel
+keeps the setup (your key, ChatGPT login, or a local AI);
+the card starts on its own when Blender opens and is on
+by default.
+
 ### v3.2.2: the second half of the donut, walked and fixed
 
 v3.2.1's notes said the steps 4–8 cold walk was under way.

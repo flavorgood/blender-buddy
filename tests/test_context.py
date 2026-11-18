@@ -107,10 +107,13 @@ assert 'text="Learn by doing: guided projects"' not in main_draw, \
     "project shelf still drawn at the top of the main panel"
 print("CONTEXT_PASS donut demoted to its own closed drawer")
 
-# --- floating card off by default --------------------------------
+# --- floating Expert card ON by default ---------------------------
+# Owner, 2026-11-18: the Expert is a real floating card now (move,
+# resize, minimise) - this supersedes the 2026-11-12 verdict on the
+# old read-only tip float, which is what "default off" encoded.
 prop = bb.BUDDY_Preferences.__annotations__["expert_float"]
-assert prop.keywords["default"] is False, "floating card should default off"
-print("CONTEXT_PASS floating card off by default")
+assert prop.keywords["default"] is True, "floating Expert card should default on"
+print("CONTEXT_PASS floating Expert card on by default")
 
 # --- Codex: found wherever it landed, Test reports plainly -------
 real_which = bb.shutil.which

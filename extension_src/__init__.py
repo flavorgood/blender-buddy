@@ -46,7 +46,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 2, 2),
+    "version": (3, 2, 3),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -6645,10 +6645,38 @@ class BUDDY_Preferences(AddonPreferences):
         description="Which model answers you",
         default=_EXPERT_DEFAULT_MODEL)
     expert_float: BoolProperty(
-        name="Float the expert over the 3D window",
-        description="Show the expert's latest tip as a small floating "
-                    "card over the big 3D window. Off by default - "
-                    "the card got in the way more than it helped",
+        name="Floating Expert card",
+        description="Show the Buddy Expert as a floating card over "
+                    "the 3D window: drag it by its title bar, "
+                    "resize it from its bottom-right corner, "
+                    "minimise it to the corner chip, and ask the "
+                    "expert right there. On by default - the setup "
+                    "controls stay in the panel",
+        default=True)
+    expert_card_x: IntProperty(
+        name="Expert card left",
+        description="Where the floating Expert card sits in the "
+                    "3D window - set by dragging it",
+        default=-1)
+    expert_card_y: IntProperty(
+        name="Expert card bottom",
+        description="Where the floating Expert card sits in the "
+                    "3D window - set by dragging it",
+        default=-1)
+    expert_card_w: IntProperty(
+        name="Expert card width",
+        description="How wide the floating Expert card is - set "
+                    "by dragging its bottom-right corner",
+        default=440, min=320, max=1600)
+    expert_card_h: IntProperty(
+        name="Expert card height",
+        description="How tall the floating Expert card is - set "
+                    "by dragging its bottom-right corner",
+        default=360, min=240, max=1600)
+    expert_card_min: BoolProperty(
+        name="Expert card minimised",
+        description="The floating Expert card is minimised to "
+                    "its corner chip",
         default=False)
 
     def draw(self, context):
@@ -9166,64 +9194,856 @@ def _fan_tris(cx, cy, pts):
     return tris
 
 
-def _draw_expert_overlay():
-    """The floating expert: a small card over the 3D window with the
-    latest tip. Drawn by Blender itself; must never raise."""
-    try:
-        if not _EXPERT_TIP or not _expert_settings()["float"]:
-            return
-        import blf
-        import gpu
-        from gpu_extras.batch import batch_for_shader
-        region = bpy.context.region
-        if region is None:
-            return
-        lines = ["Buddy Expert"] + textwrap.wrap(_EXPERT_TIP, width=46)[:3]
-        width, height = 380, 26 + 16 * len(lines)
-        # Placement, from real screenshots (v0.9): x=72 clears the
-        # editor's left toolbar (at x=14 the toolbar icons were
-        # drawn over the card's left edge and its first words);
-        # top margin 96 clears the editor's header strip (at 14
-        # the title row sat half behind it) AND both lines of the
-        # view's own corner text, which is drawn after this card
-        # and struck through it at smaller margins.
-        x, y = 72, region.height - height - 96
+# ----------------------------------------------------------------------------
+# The floating Expert card: the Expert's full front end, floating
+# over the 3D window (owner, 2026-11-18: "a floating popup...
+# that you can resize and move freely, minimize to the corner").
+# It replaces the old read-only tip float - there is exactly ONE
+# floating thing now. The card is only a front end: every state it
+# shows lives in the same WindowManager properties and _EXPERT_JOB
+# the panel uses, asking goes through buddy.ask_expert itself, and
+# a plan still runs only when the user presses the card's (or the
+# panel's) Run button. Geometry and the minimised flag persist in
+# the addon preferences; the rest is session state in _CARD.
+# ----------------------------------------------------------------------------
 
+_CARD_MIN_W = 320
+_CARD_MIN_H = 240
+_CARD_DEF_W = 440
+_CARD_DEF_H = 360
+_CARD_TITLE_H = 26
+_CARD_STATUS_H = 15
+_CARD_NOTICE_H = 15
+_CARD_FIELD_H = 24
+_CARD_FOOTER_H = 30
+_CARD_PAD = 10
+_CARD_LINE_H = 15
+_CARD_ASK_W = 88
+_CARD_CHIP_W = 158
+_CARD_CHIP_H = 26
+
+_CARD = {"open": True, "text": "", "caret": 0, "focused": False,
+         "scroll": 0, "drag": None, "live": None, "hover": None,
+         "modal": False, "sig": None, "cache_key": None,
+         "cache_lines": [], "cache_footer": None,
+         "autostart_tries": 0}
+
+_CARD_ROUTES = {"KEY": "AI key", "CLAUDE": "Claude key",
+                "CODEX": "ChatGPT login", "LOCAL": "local AI"}
+
+
+def _card_prefs():
+    """The card's persisted state, with the designed defaults when
+    the preferences can't be read (headless test runs)."""
+    try:
+        p = bpy.context.preferences.addons[__name__].preferences
+        return {"float": bool(p.expert_float),
+                "x": int(p.expert_card_x), "y": int(p.expert_card_y),
+                "w": int(p.expert_card_w), "h": int(p.expert_card_h),
+                "min": bool(p.expert_card_min)}
+    except Exception:
+        return {"float": True, "x": -1, "y": -1,
+                "w": _CARD_DEF_W, "h": _CARD_DEF_H, "min": False}
+
+
+def _card_save_geo(geo):
+    try:
+        p = bpy.context.preferences.addons[__name__].preferences
+        p.expert_card_x, p.expert_card_y = int(geo[0]), int(geo[1])
+        p.expert_card_w, p.expert_card_h = int(geo[2]), int(geo[3])
+    except Exception:
+        pass
+
+
+def _card_save_min(flag):
+    try:
+        p = bpy.context.preferences.addons[__name__].preferences
+        p.expert_card_min = bool(flag)
+    except Exception:
+        pass
+
+
+def _card_clamp_geo(region_w, region_h, geo):
+    """Resolve a stored (x, y, w, h) into the rect the card can
+    actually occupy in this region: size clamped to the card's
+    minimums and the region, an unset position (-1) landing at the
+    old tip card's proven spot (x=72, top margin 96), and any
+    stored position pulled back inside the region. Pure math -
+    headless-tested."""
+    x, y, w, h = geo
+    w = max(_CARD_MIN_W, min(int(w), max(_CARD_MIN_W, region_w)))
+    h = max(_CARD_MIN_H, min(int(h), max(_CARD_MIN_H, region_h)))
+    if x < 0:
+        x = 72
+    if y < 0:
+        y = region_h - h - 96
+    x = max(0, min(int(x), max(0, region_w - w)))
+    y = max(0, min(int(y), max(0, region_h - h)))
+    return (x, y, w, h)
+
+
+def _card_layout(geo, minimized=False, notice=False, footer=None):
+    """Every named element rect of the card for one frame, as
+    (x0, y0, x1, y1) in region pixels. Pure - headless-tested."""
+    x, y, w, h = geo
+    if minimized:
+        chip = (10, 10, 10 + _CARD_CHIP_W, 10 + _CARD_CHIP_H)
+        return {"card": chip, "chip": chip}
+    lay = {"card": (x, y, x + w, y + h)}
+    top = y + h
+    lay["title"] = (x, top - _CARD_TITLE_H, x + w, top)
+    lay["btn_min"] = (x + w - 54, top - _CARD_TITLE_H + 4,
+                      x + w - 32, top - 4)
+    lay["btn_close"] = (x + w - 28, top - _CARD_TITLE_H + 4,
+                        x + w - 6, top - 4)
+    cy = top - _CARD_TITLE_H
+    lay["status"] = (x + _CARD_PAD, cy - _CARD_STATUS_H,
+                     x + w - _CARD_PAD, cy)
+    cy -= _CARD_STATUS_H
+    if notice:
+        lay["notice"] = (x + _CARD_PAD, cy - _CARD_NOTICE_H,
+                         x + w - _CARD_PAD, cy)
+        cy -= _CARD_NOTICE_H
+    fy1 = cy - 4
+    fy0 = fy1 - _CARD_FIELD_H
+    lay["field"] = (x + _CARD_PAD, fy0,
+                    x + w - _CARD_PAD - _CARD_ASK_W, fy1)
+    lay["btn_ask"] = (x + w - _CARD_PAD - _CARD_ASK_W + 6, fy0,
+                      x + w - _CARD_PAD, fy1)
+    cy = fy0
+    body_bottom = y + 6
+    lay["footer_kind"] = footer
+    if footer == "plan":
+        lay["footer"] = (x, y, x + w, y + _CARD_FOOTER_H)
+        lay["btn_run"] = (x + _CARD_PAD, y + 5,
+                          x + _CARD_PAD + 132, y + _CARD_FOOTER_H - 5)
+        lay["btn_clear"] = (x + _CARD_PAD + 140, y + 5,
+                            x + _CARD_PAD + 262, y + _CARD_FOOTER_H - 5)
+        body_bottom = y + _CARD_FOOTER_H + 4
+    elif footer == "do":
+        lay["footer"] = (x, y, x + w, y + _CARD_FOOTER_H)
+        lay["btn_do"] = (x + _CARD_PAD, y + 5,
+                         x + _CARD_PAD + 262, y + _CARD_FOOTER_H - 5)
+        body_bottom = y + _CARD_FOOTER_H + 4
+    lay["body"] = (x + _CARD_PAD, body_bottom,
+                   x + w - _CARD_PAD, cy - 6)
+    lay["grip"] = (x + w - 18, y, x + w, y + 18)
+    lay["body_lines"] = max(
+        1, int((lay["body"][3] - lay["body"][1]) // _CARD_LINE_H))
+    return lay
+
+
+def _card_hit(layout, mx, my):
+    """Which card element is at (mx, my), or None. Buttons and the
+    grip win over the areas they sit on. Pure - headless-tested."""
+    def inside(rect):
+        return rect and rect[0] <= mx <= rect[2] and \
+            rect[1] <= my <= rect[3]
+    if "chip" in layout:
+        return "chip" if inside(layout["chip"]) else None
+    for name in ("btn_close", "btn_min", "btn_ask", "btn_run",
+                 "btn_clear", "btn_do", "grip", "field", "title",
+                 "body"):
+        if name in layout and inside(layout[name]):
+            if name in ("btn_run", "btn_clear") and \
+                    layout.get("footer_kind") != "plan":
+                continue
+            if name == "btn_do" and layout.get("footer_kind") != "do":
+                continue
+            return name
+    if inside(layout.get("card")):
+        return "card"
+    return None
+
+
+def _card_text_px(text, size=11):
+    """Measured pixel width of text in the card's font, or None
+    when it cannot be measured in this session."""
+    try:
+        import blf
+        blf.size(0, size)
+        return blf.dimensions(0, text)[0]
+    except Exception:
+        return None
+
+
+def _card_wrap(text, max_px, size=11):
+    """Wrap text to a measured pixel width, the card's version of
+    the panel's hard-won rule: words survive whole and in order,
+    and a single word wider than the space is hard-split rather
+    than dropped. Pure when _card_text_px is stubbed - tested."""
+    out = []
+    for para in (text or "").split("\n"):
+        if not para.strip():
+            out.append("")
+            continue
+        cur = ""
+        for word in para.split(" "):
+            trial = f"{cur} {word}" if cur else word
+            width = _card_text_px(trial, size)
+            if cur and width is not None and width > max_px:
+                out.append(cur)
+                cur = word
+            else:
+                cur = trial
+            while cur and len(cur) > 1 and \
+                    (_card_text_px(cur, size) or 0) > max_px:
+                cut = len(cur) - 1
+                while cut > 1 and \
+                        (_card_text_px(cur[:cut], size) or 0) > max_px:
+                    cut -= 1
+                out.append(cur[:cut])
+                cur = cur[cut:]
+        out.append(cur)
+    return out
+
+
+def _card_clamp_scroll(scroll, total, visible):
+    """Bound a scroll offset (lines from the top). Pure - tested."""
+    return max(0, min(int(scroll), max(0, total - visible)))
+
+
+def _card_status_text(settings):
+    """The card's status line: the same readiness truth the panel
+    shows, in one line (the panel's full setup words appear in the
+    card's body, exactly as in the panel)."""
+    if _EXPERT_JOB["busy"]:
+        return ("Asking the expert - you can keep working; "
+                "Esc in this view stops the wait.")
+    route = _CARD_ROUTES.get(settings.get("service", "KEY"),
+                             "AI key")
+    if _expert_ready(settings):
+        return f"Ready - answers come through your {route}."
+    return "Not set up yet - ask anyway, I'll explain what's missing."
+
+
+def _card_sync_content(context, max_px):
+    """The body's display lines + footer kind for the current
+    Expert state, cached by content. Mirrors the panel: a plan
+    (report, summary, numbered steps) beats the plain answer; the
+    setup message fills the body before any ask on a route that
+    isn't ready, so the card explains itself like the panel does."""
+    wm = context.window_manager
+    settings = _expert_settings()
+    plan = []
+    try:
+        plan = json.loads(wm.buddy_plan or "[]")
+    except Exception:
+        plan = []
+    answer = wm.buddy_answer or ""
+    key = (answer, wm.buddy_plan or "", wm.buddy_plan_report or "",
+           wm.buddy_plan_summary or "", wm.buddy_suggested or "",
+           _expert_ready(settings), int(max_px))
+    if _CARD["cache_key"] == key:
+        return _CARD["cache_lines"], _CARD["cache_footer"]
+    lines = []
+    footer = None
+    if plan:
+        footer = "plan"
+        if (wm.buddy_plan_report or "").strip():
+            lines += _card_wrap(wm.buddy_plan_report, max_px)
+            lines.append("")
+        if (wm.buddy_plan_summary or "").strip():
+            lines += _card_wrap(
+                f"The plan: {wm.buddy_plan_summary}", max_px)
+        for number, step in enumerate(plan, start=1):
+            try:
+                label = _step_label(step)
+            except Exception:
+                label = str(step.get("id", "Step"))
+            lines += _card_wrap(f"{number}. {label}", max_px)
+    elif answer.strip():
+        lines = _card_wrap(answer, max_px)
+        if wm.buddy_suggested and any(
+                a["id"] == wm.buddy_suggested for a in ACTIONS):
+            footer = "do"
+    elif not _expert_ready(settings):
+        lines = _card_wrap(_expert_setup_message(settings), max_px)
+    else:
+        lines = _card_wrap(
+            "Ask me anything about your scene, in your own words. "
+            "Try: what can you do for me", max_px)
+    _CARD["cache_key"] = key
+    _CARD["cache_lines"] = lines
+    _CARD["cache_footer"] = footer
+    _CARD["scroll"] = _card_clamp_scroll(
+        _CARD["scroll"], len(lines), 1)
+    return lines, footer
+
+
+def _card_tag_redraw():
+    try:
+        for win in bpy.context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == "VIEW_3D":
+                    for region in area.regions:
+                        if region.type == "WINDOW":
+                            region.tag_redraw()
+    except Exception:
+        pass
+
+
+def _card_signature(context):
+    try:
+        wm = context.window_manager
+        return (bool(_EXPERT_JOB["busy"]), wm.buddy_answer,
+                wm.buddy_plan, wm.buddy_plan_report,
+                wm.buddy_suggested, _EXPERT_TIP, _CARD["open"],
+                _CARD["focused"], _CARD["text"])
+    except Exception:
+        return None
+
+
+def _card_field_view(text, caret, max_px, size=11):
+    """(visible_text, caret_px) for the question field: the window
+    of the buffer that keeps the caret on screen. Pure when
+    _card_text_px is stubbed - headless-tested."""
+    caret = max(0, min(caret, len(text)))
+    start = 0
+    while start < caret and \
+            (_card_text_px(text[start:caret], size) or 0) > max_px:
+        start += 1
+    visible = text[start:]
+    while visible and \
+            (_card_text_px(visible, size) or 0) > max_px:
+        visible = visible[:-1]
+    return visible, (_card_text_px(text[start:caret], size) or 0)
+
+
+def _card_fill(shader, rect, color, r=6):
+    from gpu_extras.batch import batch_for_shader
+    x0, y0, x1, y1 = rect
+    batch = batch_for_shader(
+        shader, "TRIS",
+        {"pos": _fan_tris((x0 + x1) / 2, (y0 + y1) / 2,
+                          _rounded_rect_points(x0, y0, x1, y1, r))})
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
+def _card_text(x, y, text, size, color):
+    import blf
+    blf.size(0, size)
+    blf.color(0, *color)
+    blf.position(0, x, y, 0)
+    blf.draw(0, text)
+
+
+def _card_button(shader, rect, label, hover=False, accent=False,
+                 dim=False):
+    fill = (0.24, 0.24, 0.30, 0.97) if hover else \
+        (0.16, 0.16, 0.20, 0.97)
+    _card_fill(shader, rect, fill, r=5)
+    colour = (0.55, 0.55, 0.58, 1.0) if dim else \
+        (1.0, 0.85, 0.4, 1.0) if accent else (0.95, 0.95, 0.95, 1.0)
+    width = _card_text_px(label, 11) or len(label) * 6.0
+    _card_text(rect[0] + (rect[2] - rect[0] - width) / 2,
+               rect[1] + 6, label, 11, colour)
+
+
+def _draw_expert_card():
+    """The floating Expert card over the 3D window. Drawn by
+    Blender itself; must never raise."""
+    try:
+        prefs = _card_prefs()
+        if not prefs["float"] or not _CARD["open"]:
+            return
+        region = bpy.context.region
+        if region is None or region.type != "WINDOW":
+            return
+        import gpu
+        wm = bpy.context.window_manager
+        settings = _expert_settings()
+        geo = _card_clamp_geo(
+            region.width, region.height,
+            _CARD["live"] or (prefs["x"], prefs["y"],
+                              prefs["w"], prefs["h"]))
         shader = gpu.shader.from_builtin("UNIFORM_COLOR")
         gpu.state.blend_set("ALPHA")
         shader.bind()
-        # The card itself: a rounded rectangle (v1.0 - the sharp
-        # rectangle read as a debug overlay, not a designed card),
-        # built as explicit triangles from the tested outline.
-        # Nearly opaque on purpose: at 0.85 the view's own corner
-        # text ghosted through the card (seen in screenshots, v0.9).
-        batch = batch_for_shader(
-            shader, "TRIS",
-            {"pos": _fan_tris(x + width / 2, y + height / 2,
-                              _rounded_rect_points(x, y, x + width,
-                                                   y + height, 10))})
-        shader.uniform_float("color", (0.05, 0.05, 0.07, 0.97))
-        batch.draw(shader)
-        # A gold stripe down its left edge, in the straight section.
-        sx0, sy0, sx1, sy1 = x, y + 10, x + 5, y + height - 10
-        stripe = batch_for_shader(
-            shader, "TRIS",
-            {"pos": [(sx0, sy0), (sx1, sy0), (sx1, sy1),
-                     (sx0, sy0), (sx1, sy1), (sx0, sy1)]})
-        shader.uniform_float("color", (1.0, 0.75, 0.25, 0.95))
-        stripe.draw(shader)
-        font = 0
-        blf.size(font, 12)
-        ty = y + height - 18
-        for i, line in enumerate(lines):
-            blf.color(font, 1.0, 0.85, 0.4, 1.0) if i == 0 else \
-                blf.color(font, 0.95, 0.95, 0.95, 1.0)
-            blf.position(font, x + 16, ty, 0)
-            blf.draw(font, line)
-            ty -= 16
+        if prefs["min"]:
+            lay = _card_layout(geo, minimized=True)
+            chip = lay["chip"]
+            _card_fill(shader, chip, (0.05, 0.05, 0.07, 0.97), r=7)
+            _card_fill(shader, (chip[0], chip[1] + 6, chip[0] + 5,
+                                chip[3] - 6),
+                       (1.0, 0.75, 0.25, 0.95), r=2)
+            _card_text(chip[0] + 13, chip[1] + 8, "Buddy Expert",
+                       11, (1.0, 0.85, 0.4, 1.0))
+            _card_text(chip[2] - 18, chip[1] + 8, "+",
+                       12, (0.95, 0.95, 0.95, 1.0))
+            gpu.state.blend_set("NONE")
+            return
+        text_w = geo[2] - 2 * _CARD_PAD
+        lines, footer = _card_sync_content(bpy.context, text_w)
+        answer = (wm.buddy_answer or "").strip()
+        plan = []
+        try:
+            plan = json.loads(wm.buddy_plan or "[]")
+        except Exception:
+            plan = []
+        notice = bool((_EXPERT_TIP or "").strip()) and not answer \
+            and not plan and not _EXPERT_JOB["busy"]
+        lay = _card_layout(geo, notice=notice, footer=footer)
+        lay["footer_kind"] = footer
+        x, y, w, h = geo
+        # The card itself, then its gold stripe and title band.
+        _card_fill(shader, lay["card"], (0.05, 0.05, 0.07, 0.97),
+                   r=10)
+        _card_fill(shader, (x, y + 10, x + 5, y + h - 10),
+                   (1.0, 0.75, 0.25, 0.95), r=2)
+        _card_fill(shader, (x, lay["title"][1], x + w, y + h),
+                   (0.10, 0.10, 0.13, 0.97), r=10)
+        _card_fill(shader, (x, lay["title"][1], x + w,
+                            lay["title"][1] + 10),
+                   (0.10, 0.10, 0.13, 0.97), r=0)
+        _card_text(x + 14, y + h - 18, "Buddy Expert", 13,
+                   (1.0, 0.85, 0.4, 1.0))
+        _card_button(shader, lay["btn_min"], "–",
+                     hover=_CARD["hover"] == "btn_min")
+        _card_button(shader, lay["btn_close"], "×",
+                     hover=_CARD["hover"] == "btn_close")
+        # Status line: the readiness truth, one line.
+        status_lines = _card_wrap(_card_status_text(settings),
+                                  text_w, 10)
+        if status_lines:
+            _card_text(lay["status"][0], lay["status"][1] + 3,
+                       status_lines[0], 10, (0.75, 0.78, 0.85, 1.0))
+        if notice:
+            tip = _card_wrap(_EXPERT_TIP, text_w, 10)
+            if tip:
+                _card_text(lay["notice"][0], lay["notice"][1] + 3,
+                           tip[0], 10, (1.0, 0.85, 0.4, 1.0))
+        # Question field + Ask button.
+        field = lay["field"]
+        border = (1.0, 0.75, 0.25, 0.9) if _CARD["focused"] else \
+            (0.35, 0.35, 0.40, 0.9)
+        _card_fill(shader, (field[0] - 1, field[1] - 1,
+                            field[2] + 1, field[3] + 1), border, r=6)
+        _card_fill(shader, field, (0.02, 0.02, 0.03, 0.97), r=5)
+        text = _CARD["text"]
+        if not text and not _CARD["focused"]:
+            _card_text(field[0] + 7, field[1] + 7,
+                       "Ask in your own words...", 11,
+                       (0.55, 0.55, 0.60, 1.0))
+        else:
+            caret = _CARD["caret"] if _CARD["focused"] else len(text)
+            visible, caret_px = _card_field_view(
+                text, caret, field[2] - field[0] - 14)
+            _card_text(field[0] + 7, field[1] + 7, visible, 11,
+                       (0.95, 0.95, 0.95, 1.0))
+            if _CARD["focused"]:
+                cx = field[0] + 7 + caret_px
+                _card_fill(shader, (cx, field[1] + 5, cx + 1.5,
+                                    field[3] - 5),
+                           (1.0, 0.85, 0.4, 1.0), r=0)
+        _card_button(shader, lay["btn_ask"], "Ask",
+                     hover=_CARD["hover"] == "btn_ask", accent=True,
+                     dim=bool(_EXPERT_JOB["busy"]))
+        # Body: the answer / plan lines, scrolled.
+        visible_n = lay["body_lines"]
+        scroll = _card_clamp_scroll(_CARD["scroll"], len(lines),
+                                    visible_n)
+        _CARD["scroll"] = scroll
+        body = lay["body"]
+        for i, line in enumerate(lines[scroll:scroll + visible_n]):
+            _card_text(body[0], body[3] - 12 - i * _CARD_LINE_H,
+                       line, 11, (0.95, 0.95, 0.95, 1.0))
+        if len(lines) > visible_n:
+            track_x = body[2] + 4
+            track = (track_x, body[1], track_x + 3, body[3])
+            _card_fill(shader, track, (0.25, 0.25, 0.30, 0.8), r=2)
+            frac = visible_n / len(lines)
+            thumb_h = max(14, (body[3] - body[1]) * frac)
+            off = (body[3] - body[1] - thumb_h) * \
+                (scroll / max(1, len(lines) - visible_n))
+            _card_fill(shader, (track_x, body[3] - thumb_h - off,
+                                track_x + 3, body[3] - off),
+                       (1.0, 0.75, 0.25, 0.9), r=2)
+        # Footer buttons: the plan's Run press, or the advice
+        # answer's one verified "Do it" press.
+        if footer == "plan":
+            _card_button(shader, lay["btn_run"], "Run these steps",
+                         hover=_CARD["hover"] == "btn_run",
+                         accent=True)
+            _card_button(shader, lay["btn_clear"], "Throw away",
+                         hover=_CARD["hover"] == "btn_clear")
+        elif footer == "do":
+            act = next((a for a in ACTIONS
+                        if a["id"] == wm.buddy_suggested), None)
+            if act:
+                _card_button(shader, lay["btn_do"],
+                             f"Do it: {act['plain']}"[:40],
+                             hover=_CARD["hover"] == "btn_do",
+                             accent=True)
+        # Resize grip: two small bars in the bottom-right corner.
+        grip = lay["grip"]
+        _card_fill(shader, (grip[0] + 5, grip[1] + 3, grip[2] - 3,
+                            grip[1] + 5), (0.45, 0.45, 0.50, 0.9), r=1)
+        _card_fill(shader, (grip[2] - 5, grip[1] + 3, grip[2] - 3,
+                            grip[3] - 4), (0.45, 0.45, 0.50, 0.9), r=1)
         gpu.state.blend_set("NONE")
     except Exception:
         pass
+
+
+def _card_current_layout(context):
+    """(layout, geo) for the event's region right now, or None when
+    the card isn't up in it."""
+    region = getattr(context, "region", None)
+    area = getattr(context, "area", None)
+    if region is None or region.type != "WINDOW":
+        return None
+    if area is None or area.type != "VIEW_3D":
+        return None
+    prefs = _card_prefs()
+    if not prefs["float"] or not _CARD["open"]:
+        return None
+    geo = _card_clamp_geo(
+        region.width, region.height,
+        _CARD["live"] or (prefs["x"], prefs["y"],
+                          prefs["w"], prefs["h"]))
+    if prefs["min"]:
+        return _card_layout(geo, minimized=True), geo
+    wm = context.window_manager
+    _lines, footer = _card_sync_content(
+        context, geo[2] - 2 * _CARD_PAD)
+    answer = (wm.buddy_answer or "").strip()
+    plan = []
+    try:
+        plan = json.loads(wm.buddy_plan or "[]")
+    except Exception:
+        plan = []
+    notice = bool((_EXPERT_TIP or "").strip()) and not answer \
+        and not plan and not _EXPERT_JOB["busy"]
+    lay = _card_layout(geo, notice=notice, footer=footer)
+    lay["footer_kind"] = footer
+    return lay, geo
+
+
+def _card_do_ask(context):
+    """Ask from the card: the exact panel path - the buffer becomes
+    wm.buddy_ask and buddy.ask_expert does the rest (capability
+    answers, setup messages, named faults, plan parsing)."""
+    if _EXPERT_JOB["busy"]:
+        return
+    context.window_manager.buddy_ask = _CARD["text"]
+    _CARD["scroll"] = 0
+    try:
+        bpy.ops.buddy.ask_expert()
+    except Exception:
+        pass
+    _card_tag_redraw()
+
+
+class BUDDY_OT_expert_card_open(Operator):
+    bl_idname = "buddy.expert_card_open"
+    bl_label = "Open the Floating Expert"
+    bl_description = ("Show the Buddy Expert as a floating card "
+                      "over the 3D window - drag it by its title "
+                      "bar, resize it from its corner, minimise "
+                      "it to the corner chip")
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        _CARD["open"] = True
+        try:
+            prefs = bpy.context.preferences.addons[
+                __name__].preferences
+            prefs.expert_float = True
+        except Exception:
+            pass
+        if not _CARD["modal"]:
+            try:
+                bpy.ops.buddy.expert_card_modal("INVOKE_DEFAULT")
+            except Exception:
+                pass
+        _card_tag_redraw()
+        return {"FINISHED"}
+
+
+class BUDDY_OT_expert_card_modal(Operator):
+    bl_idname = "buddy.expert_card_modal"
+    bl_label = "Buddy Expert Card"
+    bl_description = ("Run the floating Expert card: drag, resize, "
+                      "minimise, type - everything outside the card "
+                      "passes straight through to Blender")
+    bl_options = {"INTERNAL"}
+
+    _timer = None
+
+    def invoke(self, context, event):
+        if _CARD["modal"]:
+            return {"CANCELLED"}
+        _CARD["modal"] = True
+        self._timer = context.window_manager.event_timer_add(
+            0.25, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _stop(self, context):
+        if self._timer is not None:
+            try:
+                context.window_manager.event_timer_remove(self._timer)
+            except Exception:
+                pass
+            self._timer = None
+        _CARD["modal"] = False
+        _CARD["drag"] = None
+        _CARD["live"] = None
+
+    def modal(self, context, event):
+        try:
+            return self._modal(context, event)
+        except Exception:
+            return {"PASS_THROUGH"}
+
+    def _modal(self, context, event):
+        if event.type == "TIMER":
+            sig = _card_signature(context)
+            if sig != _CARD["sig"]:
+                _CARD["sig"] = sig
+                _card_tag_redraw()
+            return {"PASS_THROUGH"}
+        # An in-progress drag owns the mouse until it lets go,
+        # wherever the pointer has wandered.
+        if _CARD["drag"] is not None:
+            if event.type == "MOUSEMOVE":
+                self._drag_move(context, event)
+                return {"RUNNING_MODAL"}
+            if event.type == "LEFTMOUSE" and \
+                    event.value == "RELEASE":
+                if _CARD["live"] is not None:
+                    _card_save_geo(_CARD["live"])
+                _CARD["drag"] = None
+                _CARD["live"] = None
+                _card_tag_redraw()
+                return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
+        prefs = _card_prefs()
+        if not prefs["float"] or not _CARD["open"]:
+            self._stop(context)
+            return {"FINISHED"}
+        got = _card_current_layout(context)
+        if got is None:
+            if event.type == "LEFTMOUSE" and event.value == "PRESS":
+                _CARD["focused"] = False
+            return {"PASS_THROUGH"}
+        lay, geo = got
+        mx, my = event.mouse_region_x, event.mouse_region_y
+        hit = _card_hit(lay, mx, my)
+        if _CARD["focused"] and event.value == "PRESS" and \
+                self._type_key(context, event):
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            return self._click(context, lay, geo, hit, mx, my)
+        if event.type in ("WHEELUPMOUSE", "WHEELDOWNMOUSE"):
+            if hit is not None:
+                lines, _f = _card_sync_content(
+                    context, geo[2] - 2 * _CARD_PAD)
+                step = 3 if event.type == "WHEELDOWNMOUSE" else -3
+                _CARD["scroll"] = _card_clamp_scroll(
+                    _CARD["scroll"] + step, len(lines),
+                    lay.get("body_lines", 1))
+                _card_tag_redraw()
+                return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
+        if event.type == "MOUSEMOVE":
+            if hit != _CARD["hover"]:
+                _CARD["hover"] = hit
+                _card_tag_redraw()
+            return {"PASS_THROUGH"}
+        return {"PASS_THROUGH"}
+
+    def _click(self, context, lay, geo, hit, mx, my):
+        if hit is None:
+            _CARD["focused"] = False
+            return {"PASS_THROUGH"}
+        if hit == "chip":
+            _card_save_min(False)
+            _card_tag_redraw()
+            return {"RUNNING_MODAL"}
+        if hit == "btn_close":
+            _CARD["open"] = False
+            _CARD["focused"] = False
+            _card_tag_redraw()
+            self._stop(context)
+            return {"FINISHED"}
+        if hit == "btn_min":
+            _card_save_min(True)
+            _CARD["focused"] = False
+            _card_tag_redraw()
+            return {"RUNNING_MODAL"}
+        if hit == "btn_ask":
+            _card_do_ask(context)
+            return {"RUNNING_MODAL"}
+        if hit == "btn_run":
+            _CARD["scroll"] = 0
+            try:
+                bpy.ops.buddy.run_plan()
+            except Exception:
+                pass
+            _card_tag_redraw()
+            return {"RUNNING_MODAL"}
+        if hit == "btn_clear":
+            try:
+                bpy.ops.buddy.clear_plan()
+            except Exception:
+                pass
+            _card_tag_redraw()
+            return {"RUNNING_MODAL"}
+        if hit == "btn_do":
+            sid = context.window_manager.buddy_suggested
+            if sid:
+                try:
+                    bpy.ops.buddy.action(action_id=sid)
+                except Exception:
+                    pass
+            _card_tag_redraw()
+            return {"RUNNING_MODAL"}
+        if hit == "title":
+            _CARD["drag"] = {"mode": "move", "dx": mx - geo[0],
+                             "dy": my - geo[1], "geo": geo}
+            _CARD["live"] = geo
+            return {"RUNNING_MODAL"}
+        if hit == "grip":
+            _CARD["drag"] = {"mode": "resize", "mx": mx, "my": my,
+                             "geo": geo}
+            _CARD["live"] = geo
+            return {"RUNNING_MODAL"}
+        if hit == "field":
+            _CARD["focused"] = True
+            _CARD["caret"] = len(_CARD["text"])
+            _card_tag_redraw()
+            return {"RUNNING_MODAL"}
+        # Any other press on the card is the card's, not Blender's.
+        _CARD["focused"] = False
+        return {"RUNNING_MODAL"}
+
+    def _drag_move(self, context, event):
+        drag = _CARD["drag"]
+        region = context.region
+        sx, sy, sw, sh = drag["geo"]
+        if drag["mode"] == "move":
+            geo = (event.mouse_region_x - drag["dx"],
+                   event.mouse_region_y - drag["dy"], sw, sh)
+        else:
+            # The grip is the BOTTOM-right corner and region y
+            # grows upward: dragging right widens, dragging down
+            # lengthens - with the card's TOP edge held fixed.
+            nw = sw + (event.mouse_region_x - drag["mx"])
+            nh = sh + (drag["my"] - event.mouse_region_y)
+            geo = (sx, sy + sh - nh, nw, nh)
+        _CARD["live"] = _card_clamp_geo(region.width, region.height,
+                                        geo)
+        _card_tag_redraw()
+
+    def _type_key(self, context, event):
+        """One keypress while the question field is focused.
+        Returns True when the card took it."""
+        text = _CARD["text"]
+        caret = max(0, min(_CARD["caret"], len(text)))
+        if event.type == "ESC":
+            _CARD["focused"] = False
+            _card_tag_redraw()
+            return True
+        if event.type in ("RET", "NUMPAD_ENTER"):
+            _card_do_ask(context)
+            return True
+        if event.type == "BACK_SPACE":
+            if caret > 0:
+                _CARD["text"] = text[:caret - 1] + text[caret:]
+                _CARD["caret"] = caret - 1
+            _card_tag_redraw()
+            return True
+        if event.type == "DEL":
+            if caret < len(text):
+                _CARD["text"] = text[:caret] + text[caret + 1:]
+            _card_tag_redraw()
+            return True
+        if event.type == "LEFT_ARROW":
+            _CARD["caret"] = max(0, caret - 1)
+            _card_tag_redraw()
+            return True
+        if event.type == "RIGHT_ARROW":
+            _CARD["caret"] = min(len(text), caret + 1)
+            _card_tag_redraw()
+            return True
+        if event.type == "HOME":
+            _CARD["caret"] = 0
+            _card_tag_redraw()
+            return True
+        if event.type == "END":
+            _CARD["caret"] = len(text)
+            _card_tag_redraw()
+            return True
+        if event.ctrl and event.type == "V":
+            try:
+                clip = context.window_manager.clipboard or ""
+            except Exception:
+                clip = ""
+            if clip:
+                clip = " ".join(clip.split())
+                _CARD["text"] = text[:caret] + clip + text[caret:]
+                _CARD["caret"] = caret + len(clip)
+            _card_tag_redraw()
+            return True
+        ch = getattr(event, "unicode", "") or ""
+        if ch and ch.isprintable():
+            _CARD["text"] = text[:caret] + ch + text[caret:]
+            _CARD["caret"] = caret + 1
+            _card_tag_redraw()
+            return True
+        return False
+
+
+def _card_autostart():
+    """Just after a GUI start: if the floating card is on, start
+    its modal so the card is interactive without a trip to the
+    panel. It RETRIES for a few seconds - the first tick can land
+    while the startup file is still loading or a graphics dialog
+    is up, and a single missed shot used to leave a drawn-but-dead
+    card (rig proof, fix round 11). Best effort throughout: the
+    panel's Open button is the deterministic route, and this must
+    never break startup."""
+    try:
+        if bpy.app.background:
+            return None
+        if _CARD["modal"] or not _CARD["open"] or \
+                not _card_prefs()["float"]:
+            return None
+        _CARD["autostart_tries"] += 1
+        try:
+            # A timer's own context does not reliably name a
+            # window or a 3D view, and invoking the modal with it
+            # silently never started the card (rig proof, fix
+            # round 11: the card drew, but no click ever landed).
+            # Borrow the real window, area and region explicitly.
+            target = None
+            for win in bpy.context.window_manager.windows:
+                for area in win.screen.areas:
+                    if area.type != "VIEW_3D":
+                        continue
+                    for region in area.regions:
+                        if region.type == "WINDOW":
+                            target = (win, area, region)
+                            break
+                    if target:
+                        break
+                if target:
+                    break
+            if target is not None:
+                win, area, region = target
+                with bpy.context.temp_override(
+                        window=win, area=area, region=region):
+                    bpy.ops.buddy.expert_card_modal("INVOKE_DEFAULT")
+        except Exception:
+            pass
+        if _CARD["modal"] or _CARD["autostart_tries"] >= 15:
+            return None
+        return 1.0
+    except Exception:
+        return None
 
 
 # ----------------------------------------------------------------------------
@@ -9616,6 +10436,10 @@ def _draw_expert(layout, context):
         if settings.get("service") == "CODEX" and _find_codex():
             layout.operator("buddy.open_codex",
                             text="Open Codex to sign in")
+    if not _CARD["open"] or not settings.get("float", True) \
+            or not _CARD["modal"]:
+        layout.operator("buddy.expert_card_open",
+                        text="Open the floating Expert")
     if _EXPERT_JOB["busy"]:
         _wrap(layout, "Asking the expert - this can take a while, "
                       "especially through the ChatGPT route. You "
@@ -10968,6 +11792,7 @@ CLASSES = (BUDDY_Preferences, BUDDY_OT_action, BUDDY_OT_run_any,
            BUDDY_OT_open_prefs, BUDDY_OT_ask_expert, BUDDY_OT_run_plan,
            BUDDY_OT_clear_plan, BUDDY_OT_test_expert,
            BUDDY_OT_expert_wait, BUDDY_OT_open_codex,
+           BUDDY_OT_expert_card_open, BUDDY_OT_expert_card_modal,
            BUDDY_OT_pie, BUDDY_OT_build_screens,
            BUDDY_OT_mode_back, BUDDY_OT_origin_center,
            BUDDY_OT_origin_bottom, BUDDY_OT_cursor_home,
@@ -11076,9 +11901,19 @@ def register():
     global _EXPERT_HANDLE
     try:
         _EXPERT_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
-            _draw_expert_overlay, (), "WINDOW", "POST_PIXEL")
+            _draw_expert_card, (), "WINDOW", "POST_PIXEL")
     except Exception:
         _EXPERT_HANDLE = None
+    if not bpy.app.background:
+        try:
+            # persistent: a non-persistent timer is wiped when the
+            # startup file loads, which is exactly when this one
+            # is registered (rig proof, fix round 11).
+            bpy.app.timers.register(_card_autostart,
+                                    first_interval=0.6,
+                                    persistent=True)
+        except Exception:
+            pass
     _install_template()
     try:
         bpy.types.VIEW3D_HT_header.append(_buddy_header_draw)
@@ -11131,6 +11966,11 @@ def register():
 
 def unregister():
     global _EXPERT_HANDLE
+    try:
+        if bpy.app.timers.is_registered(_card_autostart):
+            bpy.app.timers.unregister(_card_autostart)
+    except Exception:
+        pass
     if _EXPERT_HANDLE is not None:
         try:
             bpy.types.SpaceView3D.draw_handler_remove(
