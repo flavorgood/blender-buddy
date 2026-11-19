@@ -79,6 +79,51 @@ assert "VIEW3D_PT_buddy_start" not in names
 print("INTERFACE_PASS Start screen + step strip draw inside the "
       "main panel")
 
+# --- the Start screen states the honest scope, up high ------------
+# (Owner, 2026-11-19: Buddy covers modeling follow-alongs today;
+# it does not yet cover sculpting, animation, or the other crafts,
+# and the limit is acknowledged where learners see it.) Drive the
+# real draw path with a recording layout and read back what a
+# learner would read: the coverage box must be drawn, carry the
+# truths, and sit BEFORE the package shelf - visible without
+# expanding or scrolling past the jobs.
+class _FakeOp:
+    pass
+
+
+class _FakeLayout:
+    def __init__(self, events):
+        self._events = events
+
+    def label(self, text="", icon="NONE"):
+        self._events.append(("label", text))
+
+    def box(self):
+        self._events.append(("box", None))
+        return _FakeLayout(self._events)
+
+    def operator(self, idname, text="", icon="NONE"):
+        self._events.append(("op", text))
+        return _FakeOp()
+
+
+_events = []
+bb._draw_start(_FakeLayout(_events), ctx)
+_labels = [t for kind, t in _events if kind == "label"]
+_joined = " ".join(_labels)
+assert bb._COVERAGE_TITLE in _labels, _labels
+for _line in bb._COVERAGE_LINES:
+    assert " ".join(_line.split()) in " ".join(_joined.split()), _line
+assert "does not teach sculpting, animation" in _joined, _joined
+assert "not sculpting lessons" in _joined, _joined
+assert "one at a time" in _joined, _joined
+_title_at = _events.index(("label", bb._COVERAGE_TITLE))
+_first_pkg_at = next(i for i, (kind, t) in enumerate(_events)
+                     if kind == "op" and t.startswith("Start:"))
+assert _title_at < _first_pkg_at, "coverage box must precede the shelf"
+print("INTERFACE_PASS Start screen draws the honest coverage box "
+      "before the package shelf")
+
 # --- the hint tells the truth about the picked thing ---------------
 bpy.ops.mesh.primitive_cube_add()
 cube = ctx.object
