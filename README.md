@@ -115,11 +115,12 @@ changes none of Blender's functions. It makes them visible:
   since 2026 with accounts blocked for it — Buddy won't put your
   Claude account at risk.) **Local AI:** run a free AI on your own
   computer (for example Ollama) — no key, no login, nothing leaves
-  the machine. Asking in plain words gets you advice, explanations
-  and exact values for your scene. Turn on **Expert help with
-  tasks** and the expert can also draft a short plan of steps —
-  which you read first, and run only by pressing **Run these
-  steps** yourself. A plan can press Buddy buttons, run Blender's
+  the machine. Ask in plain words for advice, explanations, or
+  exact values for your scene. **Expert help with tasks** starts
+  on and remembers your choice. With it on, the Expert can draft
+  a plan for you to review. Press **Run these steps** to apply
+  it. Switch task help off for advice only. A plan can press
+  Buddy buttons, run Blender's
   own everyday tools, set exact values — for example the size,
   strength and falloff of the sculpt brush you describe, a bevel's
   width, or the picture's sample count — wire your material's node
@@ -174,9 +175,22 @@ modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
 
-### v3.2.4: what Buddy covers, said plainly
+### v3.2.5: what Buddy covers, said plainly
 
-The Start screen now opens with a "What Buddy covers today" box, and the same note sits near the top of this README. Buddy teaches modeling today. Sculpting, animation, and the other crafts are not covered yet - the Donut's little sculpting step is a finishing touch, not sculpting lessons - and each craft is being added one at a time, taught the way that craft actually works. No tools changed in this release; what changed is that Buddy says its limits out loud, where a learner sees them first.
+The Start screen now opens with a "What Buddy covers today" box, and the same note sits near the top of this README. Buddy teaches modeling today. Sculpting, animation, and the other crafts are not covered yet - the Donut's little sculpting step is a finishing touch, not sculpting lessons - and each craft is being added one at a time, taught the way that craft actually works. This release carries forward everything in v3.2.4 (the floating Expert repairs) unchanged; the only addition is that Buddy says its limits out loud, where a learner sees them first.
+
+### v3.2.4 brings reliable input and reopening to the floating Expert
+
+Choose **Open Buddy Expert** in the Blender Buddy sidebar to open or reopen
+the conversation. Type in the floating card and press **Enter** or click **Ask**.
+You can use the Expert in a new, unsaved project. Task help remembers your
+choice across Blender launches. For example, select a mesh and ask to turn it
+into a flat circle. Review the plan and press **Run these steps** to add a
+removable modifier that keeps the original mesh.
+
+Windows ChatGPT-login requests now find supported Codex desktop installations
+and can send long scene descriptions. The card reports when waiting times out
+and lets you stop waiting with **Esc** in the 3D Viewport.
 
 ### v3.2.3: the Expert moves out of the panel
 
@@ -384,44 +398,30 @@ picture, save, send it out.
 
 ## Get it (2 minutes)
 
-You need Blender 4.2 or newer (free at blender.org). Verified on
-Blender 4.2.5 and on Blender 5.2.0.
+Blender Buddy supports Blender 4.2 or newer. Download the package for your
+installation from [GitHub Releases](https://github.com/flavorgood/blender-buddy/releases/latest).
 
-**First, the trap that catches everyone:** do NOT search for
-Blender Buddy inside Blender's **Get Extensions** window. That
-search only covers Blender's official online store, and Buddy
-isn't published there yet — the search comes back empty even
-though nothing is wrong. You install Buddy **from a file**, one
-of these three ways (same plugin in all three):
+- **Extension** (recommended). For 3.2.4, download
+  [blender_buddy_v3.2.5_extension.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.5/blender_buddy_v3.2.5_extension.zip). Open **Edit → Preferences → Get
+  Extensions**, use the upper-right menu, and choose **Install from Disk**.
+  Select the downloaded ZIP and confirm. To update an existing extension,
+  select the same local repository you used before. Check that Blender Buddy
+  shows version 3.2.5 in Preferences.
+- **Classic add-on**. Download [blender_buddy_v3.2.5.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.5/blender_buddy_v3.2.5.zip). In **Edit →
+  Preferences → Add-ons**, use the install-from-disk control to select the ZIP.
+  Enable **Blender Buddy**. Use the same installation format for future updates.
+- **Single-file add-on**. Download the tagged
+  [blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/v3.2.5/blender_buddy.py)
+  and use the classic add-on installation steps with the Python file.
 
-**Way 1 — the extension zip (Blender 4.2+):** grab
-`blender_buddy_v1.2.1_extension.zip` from the
-[latest release](https://github.com/flavorgood/blender-buddy/releases/latest).
-In Blender: **Edit → Preferences → Get Extensions**, click the
-small dropdown arrow at the top right of that window →
-**Install from Disk…** → pick the zip. It switches on by itself.
+The GitHub ZIP is a manual update. If you have work open or the Expert is
+waiting on a request, leave that Blender process open and launch a second
+Blender process to install the update. The first process keeps the code it
+already loaded. You can try the updated Expert in the second process without
+saving a project.
 
-**Way 2 — the add-on zip:** grab `blender_buddy_v1.2.1.zip` from
-the same release. **Edit → Preferences → Add-ons → Install…** →
-pick the zip → then **tick the checkbox** next to "Blender
-Buddy" in the list. Until you tick it, nothing appears — Blender
-never tells you this step exists.
-
-**Way 3 — no zip at all, one single file:** download
-**[blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/main/blender_buddy.py)**
-(right-click → Save link as… if it opens in the browser instead
-of downloading), then Way 2's steps, picking the `.py` file.
-
-Don't feed one door the other door's file: the **extension** zip
-only goes through **Get Extensions**, the plain zip and the
-`.py` only through **Add-ons**. The wrong pairing fails quietly.
-
-Whichever way you used: in the 3D Viewport press **N** and open
-the **Blender Buddy** tab on the right edge.
-
-Developers: the `blender_buddy/` folder in this repo is the same
-add-on in package form (zip it and install the zip), and
-`tests/` holds the headless proof suites.
+In the 3D Viewport, press **N**, open the **Blender Buddy** tab, and choose
+**Open Buddy Expert**.
 
 ## Try this first (day-1 path)
 
