@@ -175,6 +175,10 @@ modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
 
+### v3.2.6: the first-session walk fixes
+
+Blender Buddy was walked cold, exactly as a new learner meets it - fresh install of the v3.2.5 download, first open, first job. Three things the walk found are fixed. Starting a job now lands you on the Blender Buddy panel itself: before, the workspace opened on Blender's Item tab while the status bar pointed at the Buddy panel, so the card it named was not on screen (on Blender 5.3 the workspaces now open on the Buddy tab; Blender 4.2's template loading ignores the saved tab, so there it opens as it did before). The step counter can no longer be clipped away: step labels lead with "Step 1 of 8:" and let the package name take the clipping instead. And the "What do you want to do?" search box now says what it is for - type what you want to do in your own words, with examples. Everything else the walk read - the coverage box, the Donut's first lesson, the Expert's plain answer with no AI connected, the pie, the loose search - read clean and is unchanged.
+
 ### v3.2.5: what Buddy covers, said plainly
 
 The Start screen now opens with a "What Buddy covers today" box, and the same note sits near the top of this README. Buddy teaches modeling today. Sculpting, animation, and the other crafts are not covered yet - the Donut's little sculpting step is a finishing touch, not sculpting lessons - and each craft is being added one at a time, taught the way that craft actually works. This release carries forward everything in v3.2.4 (the floating Expert repairs) unchanged; the only addition is that Buddy says its limits out loud, where a learner sees them first.
@@ -401,17 +405,17 @@ picture, save, send it out.
 Blender Buddy supports Blender 4.2 or newer. Download the package for your
 installation from [GitHub Releases](https://github.com/flavorgood/blender-buddy/releases/latest).
 
-- **Extension** (recommended). For 3.2.4, download
-  [blender_buddy_v3.2.5_extension.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.5/blender_buddy_v3.2.5_extension.zip). Open **Edit → Preferences → Get
+- **Extension** (recommended). For 3.2.6, download
+  [blender_buddy_v3.2.6_extension.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.6/blender_buddy_v3.2.6_extension.zip). Open **Edit → Preferences → Get
   Extensions**, use the upper-right menu, and choose **Install from Disk**.
   Select the downloaded ZIP and confirm. To update an existing extension,
   select the same local repository you used before. Check that Blender Buddy
-  shows version 3.2.5 in Preferences.
-- **Classic add-on**. Download [blender_buddy_v3.2.5.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.5/blender_buddy_v3.2.5.zip). In **Edit →
+  shows version 3.2.6 in Preferences.
+- **Classic add-on**. Download [blender_buddy_v3.2.6.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.6/blender_buddy_v3.2.6.zip). In **Edit →
   Preferences → Add-ons**, use the install-from-disk control to select the ZIP.
   Enable **Blender Buddy**. Use the same installation format for future updates.
 - **Single-file add-on**. Download the tagged
-  [blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/v3.2.5/blender_buddy.py)
+  [blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/v3.2.6/blender_buddy.py)
   and use the classic add-on installation steps with the Python file.
 
 The GitHub ZIP is a manual update. If you have work open or the Expert is

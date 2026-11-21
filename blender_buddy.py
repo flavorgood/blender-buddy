@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 2, 5),
+    "version": (3, 2, 6),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -10739,8 +10739,8 @@ def _draw_tour(layout, context):
         box.operator("buddy.tour_hide", text="Hide this")
         return
     step = steps[current]
-    box.label(text=f"{pkg['name']} - step {current + 1} of "
-                   f"{len(steps)}", icon="MESH_TORUS")
+    box.label(text=f"Step {current + 1} of {len(steps)}: "
+                   f"{pkg['name']}", icon="MESH_TORUS")
     _wrap(box, step["title"])
     _wrap(box, step["how"])
     video = step.get("video")
@@ -10821,6 +10821,10 @@ def _draw_found_resources(layout, context):
 def _draw_search(layout, context):
     wm = context.window_manager
     show_real = getattr(wm, "buddy_show_real", True)
+    _wrap(layout, "Type what you want to do in your own "
+                  "words - 'make it round', 'copy it', 'make "
+                  "a hole'. What you can use right now appears "
+                  "below.")
     layout.prop(wm, "buddy_query", text="")
     query = getattr(wm, "buddy_query", "")
     if query.strip():
@@ -11327,6 +11331,24 @@ def _conduct_apply():
         ws = bpy.data.workspaces.get(ws_name)
         if ws is not None and window.workspace != ws:
             window.workspace = ws
+        # Land the learner on Buddy's own panel: starting a job
+        # promises "step 1 is at the top of the Blender Buddy
+        # panel", so the sidebar must at least be OPEN when
+        # conducting moves the learner (fix round 13, finding
+        # F1). Which tab it shows is the workspace's saved
+        # state - Python cannot set a region's active panel
+        # category (read-only at runtime, proven on 4.2.5 and
+        # 5.3.0 in that round) - so the Buddy template's screens
+        # are saved with Buddy's own tab active instead.
+        for area in window.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for space in area.spaces:
+                if space.type == "VIEW_3D":
+                    try:
+                        space.show_region_ui = True
+                    except Exception:
+                        pass
         if shading or view:
             for area in window.screen.areas:
                 if area.type != "VIEW_3D":
@@ -11985,11 +12007,11 @@ def _buddy_header_draw(self, context):
             pkg = _active_package(context)
             _c, current = tour_state(context)
             if current < len(pkg["steps"]):
-                row.label(text=f"{pkg['name']}: step "
-                               f"{current + 1} of "
-                               f"{len(pkg['steps'])}")
+                row.label(text=f"Step {current + 1} of "
+                               f"{len(pkg['steps'])}: "
+                               f"{pkg['name']}")
             else:
-                row.label(text=f"{pkg['name']}: finished")
+                row.label(text=f"Finished: {pkg['name']}")
     except Exception:
         pass
 
@@ -12018,8 +12040,9 @@ def _draw_strip(layout, context):
                   icon="CHECKMARK")
         return
     step = pkg["steps"][current]
-    box.label(text=f"{pkg['name']} - step {current + 1} of "
-                   f"{len(pkg['steps'])}", icon="INFO")
+    box.label(text=f"Step {current + 1} of "
+                   f"{len(pkg['steps'])}: {pkg['name']}",
+              icon="INFO")
     _wrap(box, step["title"])
     for act in _now_deck(context, limit=4):
         _draw_action_compact(box, act)
