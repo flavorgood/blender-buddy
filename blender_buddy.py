@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 2, 6),
+    "version": (3, 2, 7),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -5391,7 +5391,17 @@ TOUR_STEPS = [
             "all selected, right-click and Set Origin, Origin "
             "to Geometry - each sprinkle's centre dot moves "
             "into its middle, so scattered copies sit INTO the "
-            "icing instead of floating on their ends.",
+            "icing instead of floating on their ends. Watch "
+            "that submenu as you pick: Origin to 3D Cursor "
+            "sits right next to Origin to Geometry in it, and "
+            "it is the wrong row - it moves the centre dots "
+            "onto the 3D cursor instead of into each "
+            "sprinkle's middle, and a sprinkle thrown that far "
+            "out of shape can momentarily read as a plain cup "
+            "and drop the tour back. If you pick it by "
+            "mistake, no harm done: Ctrl+Z undoes it, or just "
+            "run Set Origin, Origin to Geometry again on the "
+            "same selection.",
             "FILE THEM AWAY. Select all the variants and press "
             "M, Move to Collection, New Collection, and name it "
             "Sprinkles. Then, in the Outliner (the list of "
