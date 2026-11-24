@@ -23,13 +23,14 @@ bb.register()
 
 flows = [p for p in bb.PACKAGES if p.get("kind") == "flow"]
 assert {p["id"] for p in flows} == {"hard_surface", "look_real",
-                                    "print_ready"}, [p["id"] for p in bb.PACKAGES]
+                                    "print_ready",
+                                    "sculpt_clay"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS three community flows registered; every step's "
+print("FLOWS_PASS four flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -57,6 +58,7 @@ def walk(pkg_id, cycles=False):
 walk("hard_surface")
 walk("look_real", cycles=True)
 walk("print_ready")
+walk("sculpt_clay")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

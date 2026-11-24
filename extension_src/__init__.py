@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 2, 7),
+    "version": (3, 3, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -6331,6 +6331,350 @@ PRINT_STEPS = [
      "run": _flow_run_save, "check": _check_saved},
 ]
 
+# -- sculpting flow ------------------------------------------------------
+# Sculpting is its own craft, taught the way sculptors actually
+# work: start from a ball of clay, block the big forms at low
+# resolution, add resolution only when the forms are right
+# (remesh), then detail, then finish. The checks read the clay
+# itself: a perfect ball has every point the same distance from
+# its centre, so a blocked form PROVES itself by the spread of
+# those distances; fine detail proves itself by how much the
+# surface wiggles against a smoothed copy of itself. Nothing
+# here does the sculpting for the learner - the reference runs
+# below exist so the test suites can prove the checks, the way
+# every other flow's runs do.
+
+def _sculpt_radii(obj):
+    verts = [tuple(v.co) for v in obj.data.vertices]
+    if not verts:
+        return []
+    n = len(verts)
+    centre = tuple(sum(v[i] for v in verts) / n for i in range(3))
+    return [math.dist(v, centre) for v in verts]
+
+
+def _sculpt_spread(obj):
+    """How far the shape has moved from a perfect ball: the
+    spread (pstdev) of point distances from the centre, as a
+    share of the average distance. A ball reads ~0."""
+    radii = _sculpt_radii(obj)
+    if len(radii) < 50:
+        return 0.0
+    mean = sum(radii) / len(radii)
+    if mean <= 0:
+        return 0.0
+    var = sum((r - mean) ** 2 for r in radii) / len(radii)
+    return math.sqrt(var) / mean
+
+
+def _sculpt_displaced(obj):
+    return obj is not None and _sculpt_spread(obj) > 0.03
+
+
+def _sculpt_detail(obj):
+    """Fine detail, read honestly: smooth the distance field
+    over the surface again and again until only the big forms
+    survive in it, then measure how much of the real surface
+    the smoothing had to erase. Big smooth forms erase to
+    almost nothing; worked detail does not."""
+    if obj is None or len(obj.data.vertices) < 2500:
+        return False
+    radii = _sculpt_radii(obj)
+    n = len(radii)
+    stride = 1 if n <= 30000 else 4
+    adj = {}
+    for e in obj.data.edges:
+        a, b = e.vertices
+        if a % stride or b % stride:
+            continue
+        adj.setdefault(a, []).append(b)
+        adj.setdefault(b, []).append(a)
+    if not adj:
+        return False
+    smooth = list(radii)
+    for _ in range(10):
+        smooth = [(smooth[i] + sum(smooth[j] for j in adj.get(i, ())))
+                  / (1 + len(adj.get(i, ()))) if i in adj else smooth[i]
+                  for i in range(n)]
+    resid = [abs(radii[i] - smooth[i]) for i in adj]
+    return bool(resid) and (sum(resid) / len(resid)) > 0.0042
+
+
+def _sculpt_push(obj, blobs):
+    """Move the surface the way a brush does: each blob pulls
+    every point toward or away from the centre, fading with
+    the angle from the blob's direction. (dir, amount, width)"""
+    normed = []
+    for dirv, amount, width in blobs:
+        ln = math.sqrt(sum(c * c for c in dirv)) or 1.0
+        normed.append((tuple(c / ln for c in dirv), amount, width))
+    for v in obj.data.vertices:
+        co = tuple(v.co)
+        ln = math.sqrt(sum(c * c for c in co))
+        if ln == 0:
+            continue
+        d = tuple(c / ln for c in co)
+        delta = 0.0
+        for dirv, amount, width in normed:
+            dot = max(-1.0, min(1.0, sum(d[i] * dirv[i]
+                                         for i in range(3))))
+            ang = math.acos(dot)
+            delta += amount * math.exp(-(ang * ang)
+                                       / (2 * width * width))
+        if delta:
+            v.co = tuple(co[i] + d[i] * delta for i in range(3))
+    obj.data.update()
+
+
+def _check_sculpt_clay(context):
+    main = _flow_main(context)
+    return main is not None and len(main.data.vertices) >= 500
+
+
+def _sculpt_run_clay(context):
+    if _check_sculpt_clay(context):
+        return
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=48,
+                                         ring_count=24,
+                                         radius=1.0)
+    main = context.object
+    bpy.ops.object.shade_smooth()
+    if main is not None:
+        main.name = "Clay"
+
+
+def _check_sculpt_brushes(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    return context.mode == "SCULPT" or _sculpt_displaced(main)
+
+
+def _sculpt_run_brushes(context):
+    main = _flow_pick_main(context)
+    if main is not None and context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_blocked(context):
+    return _sculpt_displaced(_flow_main(context))
+
+
+def _sculpt_run_blocked(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    _sculpt_push(main, [((1, 0.2, 0.3), 0.38, 0.55),
+                        ((-0.4, 0.1, 1), -0.30, 0.50),
+                        ((0.1, -1, 0.2), 0.22, 0.45),
+                        ((-1, -0.3, -0.2), 0.18, 0.50)])
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_remeshed(context):
+    main = _flow_main(context)
+    return (main is not None and len(main.data.vertices) >= 2500
+            and _sculpt_displaced(main))
+
+
+def _sculpt_run_remeshed(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    main.data.remesh_voxel_size = 0.07
+    bpy.ops.object.voxel_remesh()
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_detail(context):
+    return _sculpt_detail(_flow_main(context))
+
+
+def _sculpt_run_detail(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    rng = random.Random(20261124)
+    blobs = []
+    for _ in range(64):
+        dirv = (rng.uniform(-1, 1), rng.uniform(-1, 1),
+                rng.uniform(-1, 1))
+        if sum(c * c for c in dirv) < 0.05:
+            continue
+        blobs.append((dirv, rng.choice([-1, 1])
+                      * rng.uniform(0.03, 0.06), 0.11))
+    _sculpt_push(main, blobs)
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_finish(context):
+    main = _flow_main(context)
+    if main is None or not _check_saved(context):
+        return False
+    polys = main.data.polygons
+    if not polys:
+        return False
+    smooth = sum(1 for p in polys if p.use_smooth)
+    return smooth >= 0.9 * len(polys)
+
+
+def _sculpt_run_finish(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    bpy.ops.object.shade_smooth()
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+SCULPT_STEPS = [
+    {"title": "Start with a ball of clay",
+     "skill": "The sculptor's starting point: one simple, even "
+              "shape with enough surface to push around",
+     "how": "Sculptors don't start from a finished mesh - they "
+            "start from clay. One plain ball, smooth and even, "
+            "with enough points in it that a brush has something "
+            "to move. Everything else in this flow happens to "
+            "this ball.",
+     "teach": [
+         "1. Press Add a ball above. A ball appears, already "
+         "picked - that is your clay.",
+         "2. If you would rather start from the monkey (Blender's "
+         "own test shape, already full of forms to find), Add a "
+         "monkey works too - but the ball teaches more, because "
+         "every form in it will be one you made.",
+         "3. Leave it the size it is. Sculpting is about the "
+         "surface, not the size."],
+     "missing": "No clay yet - add a ball with enough surface "
+                "(500+ points) to sculpt.",
+     "tools": ["add_ball", "add_monkey"],
+     "run": _sculpt_run_clay, "check": _check_sculpt_clay},
+    {"title": "Pick up the brushes",
+     "skill": "Sculpt Mode: brushes instead of corners, and the "
+              "three controls every brush shares",
+     "how": "Sculpting is a different way of touching a shape: "
+            "not corner by corner, but with brushes that push, "
+            "pull and smooth the surface like clay under a thumb. "
+            "It happens in Sculpt Mode, and the brushes live in "
+            "the toolbar down the left of the 3D window.",
+     "teach": [
+         "1. With the clay picked, press Start sculpting above "
+         "(or the mode menu at the top left of the 3D window: "
+         "Sculpt Mode). The toolbar changes to brushes.",
+         "2. Meet the size control first: press F and move the "
+         "mouse - the circle grows and shrinks; click when it "
+         "fits the area you want to work. Shift+F does the same "
+         "for strength - how hard the brush pushes.",
+         "3. The three brushes this flow uses: Draw (pushes the "
+         "surface out, or in if you hold Ctrl), Grab (takes hold "
+         "of an area and pulls it where you drag), and Smooth "
+         "(hold Shift and brush to smooth with any brush). Pick "
+         "them from the toolbar - their pictures say what they "
+         "do."],
+     "missing": "Not sculpting yet - pick the clay and press "
+                "Start sculpting.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_brushes, "check": _check_sculpt_brushes},
+    {"title": "Block the big forms",
+     "skill": "Blocking: the whole shape read from its biggest "
+              "movements, before any detail",
+     "how": "Every sculpt starts the same way: big brush, big "
+            "movements, the whole form decided while the surface "
+            "is still coarse. A head is an egg pulled long; a "
+            "creature is lumps in the right places. If the big "
+            "forms are wrong, detail only hides it for a while.",
+     "teach": [
+         "1. Choose the Grab brush, make it BIG with F - a third "
+         "of the shape across - and pull the ball into your "
+         "thing's main gesture: long, squat, leaning, whatever "
+         "the form is.",
+         "2. Switch to Draw and build up the big lumps (cheeks, "
+         "brow, belly) - and hold Ctrl with Draw to carve the "
+         "big hollows (eye sockets, the neck under a jaw).",
+         "3. Keep turning the view as you work (middle-mouse "
+         "drag). A form that only reads from the front isn't "
+         "blocked yet. Stay with big movements - no detail in "
+         "this step, on purpose."],
+     "missing": "The clay is still a plain ball - no big forms "
+                "blocked in yet.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_blocked, "check": _check_sculpt_blocked},
+    {"title": "Give it more clay (remesh)",
+     "skill": "Remeshing: rebuilding the surface evenly, finer, "
+              "when the brushes start to tear it",
+     "how": "Blocking stretches the surface thin in places - "
+            "brushes start to pull unevenly and pinch. The "
+            "sculptor's answer is a remesh: the shape is rebuilt "
+            "as a fresh, even, finer net with the same form. "
+            "Forms first, THEN more clay - remeshing a ball "
+            "would just give you a more expensive ball.",
+     "teach": [
+         "1. Stay in Sculpt Mode. At the top of the 3D window "
+         "there is a Remesh menu - open it and set the Voxel "
+         "Size to about 0.07: smaller numbers mean a finer net "
+         "and slower work; 0.07 suits a shape this size.",
+         "2. Press Ctrl+R (or Remesh in that menu). The surface "
+         "rebuilds - same form, even new clay everywhere.",
+         "3. Feel the difference with a brush: strokes now land "
+         "evenly where they used to pinch. If an area still "
+         "needs more, remesh once more a little finer - but "
+         "only where the work is going."],
+     "missing": "Still the coarse starting clay (under 2,500 "
+                "points) - remesh to give it a finer, even "
+                "surface.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_remeshed, "check": _check_sculpt_remeshed},
+    {"title": "Work the finer detail",
+     "skill": "Detail: small brush, small movements, on top of "
+              "forms that are already right",
+     "how": "Now - and only now - the small work: creases, "
+            "ridges, bumps, the texture of the thing. Small "
+            "brush, light strength, and the Smooth brush (Shift) "
+            "to take the roughness back off anywhere the detail "
+            "shouts louder than the form underneath it.",
+     "teach": [
+         "1. Shrink the brush with F until it fits the detail "
+         "you're making - a crease wants a brush no wider than "
+         "the crease.",
+         "2. Draw the ridges and bumps in; hold Ctrl to carve "
+         "the creases and lines. Lower the strength (Shift+F) "
+         "for skin-like detail - several light passes beat one "
+         "hard one.",
+         "3. Hold Shift and brush over anything that came out "
+         "ragged: Smooth is the eraser end of the pencil. The "
+         "tick comes when the surface carries real fine work "
+         "on top of the blocked forms - it reads the surface "
+         "itself, not the time you spent."],
+     "missing": "No fine detail yet - the surface is still only "
+                "the big blocked forms.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_detail, "check": _check_sculpt_detail},
+    {"title": "Smooth finish, then save the clay",
+     "skill": "Finishing a sculpt: smooth shading, and the "
+              "source file kept",
+     "how": "A sculpt is finished the way it will be seen: "
+            "shaded smooth, so the surface reads as one skin "
+            "instead of a net of flat faces. Then save - the "
+            ".blend keeps the clay exactly as you left it, "
+            "ready to sculpt further tomorrow.",
+     "teach": [
+         "1. Go back to moving whole things (the mode menu: "
+         "Object Mode) and press Shade it smooth below - watch "
+         "the net of faces melt into one surface.",
+         "2. Turn it in the light once. Lumps that read as "
+         "mistakes are one Sculpt Mode visit away from fixed - "
+         "that loop never really closes, and that's the craft.",
+         "3. Save the file (Ctrl+S). This file IS the sculpt - "
+         "pictures and exports are copies made from it."],
+     "missing": "Not finished: the sculpt needs smooth shading "
+                "and the file saved.",
+     "tools": ["look_smooth", "save_work"],
+     "run": _sculpt_run_finish, "check": _check_sculpt_finish},
+]
+
+
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -6384,6 +6728,23 @@ PACKAGES = [
               "when the scene proves it, and the last check "
               "still happens in your slicer, where it belongs.",
      "steps": PRINT_STEPS},
+    {"id": "sculpt_clay",
+     "kind": "flow",
+     "name": "Sculpt it like clay",
+     "byline": "The sculptor's order: a ball of clay, big "
+               "forms blocked first, more clay when the forms "
+               "are right, detail last.",
+     "intro": "Buddy's first sculpting piece - a way of "
+              "working, in the order sculptors actually do "
+              "it: block the big forms while the clay is "
+              "coarse, remesh for an even finer surface only "
+              "once the forms read, then work the detail "
+              "small and light, and finish smooth. Start it "
+              "beside a shape of your own, or from an empty "
+              "scene and let step 1 hand you the clay. Each "
+              "step ticks only when the surface itself "
+              "proves it.",
+     "steps": SCULPT_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -11280,6 +11641,12 @@ _STEP_SCREENS = {
     ("print_ready", 2): ("Buddy Model", None, None, None),
     ("print_ready", 3): ("Buddy Model", None, None, None),
     ("print_ready", 4): ("Buddy Finish", None, None, None),
+    ("sculpt_clay", 0): ("Buddy Model", None, None, None),
+    ("sculpt_clay", 1): ("Buddy Model", None, None, None),
+    ("sculpt_clay", 2): ("Buddy Model", None, None, None),
+    ("sculpt_clay", 3): ("Buddy Model", None, None, None),
+    ("sculpt_clay", 4): ("Buddy Model", None, None, None),
+    ("sculpt_clay", 5): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -12059,24 +12426,26 @@ def _draw_strip(layout, context):
 
 
 # The honest scope, stated where a learner lands first
-# (owner, 2026-11-19): Buddy covers modeling follow-alongs
-# today; it does not yet cover sculpting, animation, or the
-# other crafts, and nothing may imply it does. The Donut's
-# little sculpting passage is a finishing touch inside a
-# modeling project, not sculpting coverage - the box says
-# so. Each craft arrives in its own shape, taught the way
-# that craft actually works.
+# (owner, 2026-11-19): Buddy covers modeling follow-alongs;
+# crafts it does not cover must be named as not covered, and
+# nothing may imply otherwise. Sculpting's first piece
+# arrived in v3.3.0 as its own flow, taught the way
+# sculpting actually works - the box says it is a first
+# piece, not the whole craft. Animation and the other
+# crafts are still not taught. Each craft arrives in its
+# own shape, one at a time.
 _COVERAGE_TITLE = "What Buddy covers today"
 _COVERAGE_LINES = (
     "Buddy teaches modeling. The Donut below is a "
     "follow-along: empty scene to finished picture, your "
     "work checked as you go. The tools are plain-words "
     "buttons for the everyday modeling jobs.",
-    "It does not teach sculpting, animation, or the other "
-    "crafts yet.",
-    "The Donut does use a little sculpting near the end, "
-    "as a finishing touch on the icing. That is a taste "
-    "of it - not sculpting lessons.",
+    "Sculpting has its first guided piece: 'Sculpt it "
+    "like clay', under Learn by doing - a ball of clay "
+    "blocked out, given more clay, detailed and saved, "
+    "checked as you go. It is a first piece of the "
+    "craft, not the whole of it.",
+    "Animation and the other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "
     "made the way a model is.",
