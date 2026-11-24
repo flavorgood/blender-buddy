@@ -24,13 +24,13 @@ bb.register()
 flows = [p for p in bb.PACKAGES if p.get("kind") == "flow"]
 assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "print_ready", "sculpt_clay",
-                                    "sculpt_symmetry"}, [p["id"] for p in bb.PACKAGES]
+                                    "sculpt_symmetry", "sculpt_dyntopo"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS five flows registered; every step's "
+print("FLOWS_PASS six flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -60,6 +60,7 @@ walk("look_real", cycles=True)
 walk("print_ready")
 walk("sculpt_clay")
 walk("sculpt_symmetry")
+walk("sculpt_dyntopo")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -80,6 +81,40 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[1], checks
 print("FLOWS_PASS sculpt_symmetry negative: one-sided work "
       "does not prove the mirror")
+
+# --- sculpt_dyntopo negatives: the contrast must be proven ----
+# A plain coarse ball ticks only step 1; DynTopo switched on
+# with no work does not tick the worked step; and an EVEN fine
+# surface (a subdivided ball - the remesh signature) worked
+# one-sidedly does not tick it either: even is not DynTopo.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="sculpt_dyntopo")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS sculpt_dyntopo negative: a plain coarse ball "
+      "ticks only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS sculpt_dyntopo negative: DynTopo on with no "
+      "work does not prove the worked step")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="sculpt_dyntopo")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=1)
+main = bb._flow_main(ctx)
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="SELECT")
+bpy.ops.mesh.subdivide(number_cuts=2)
+bpy.ops.object.mode_set(mode="SCULPT")
+bb._sculpt_push(main, [((0.6, -0.7, 0.4), 0.20, 0.35)])
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS sculpt_dyntopo negative: an even fine surface "
+      "does not prove DynTopo work")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 4, 0),
+    "version": (3, 5, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -6908,6 +6908,304 @@ SCULPT_SYMMETRY_STEPS = [
 ]
 
 
+# -- sculpting, third piece: DynTopo ------------------------------------
+# Remeshing (first piece) rebuilds the WHOLE surface evenly.
+# DynTopo - Dynamic Topology - does the opposite: while it is
+# on, the surface gains detail only where the brush is working,
+# at the detail size you set, and stays coarse everywhere else.
+# Sculptors use it to explore and to put fine detail into one
+# area without paying for it across the whole sculpt. Its
+# cost, taught plainly in the flow: the neat net is gone -
+# DynTopo work has no tidy topology and no UVs to paint on,
+# so it is a detailing and exploring tool, not a finishing
+# net. The checks read the surface's own spacing: DynTopo
+# work leaves one worked area packed with close points while
+# the rest of the clay keeps its wide coarse spacing, a
+# contrast an even remesh never produces.
+
+def _sculpt_dyntopo_on(obj):
+    if obj is None:
+        return False
+    # Blender 5.x keeps the flag on the object; 4.x kept it
+    # on the mesh. Read whichever this Blender has.
+    val = getattr(obj, "use_dynamic_topology_sculpting", None)
+    if val is None:
+        val = getattr(obj.data, "use_dynamic_topology_sculpting",
+                      False)
+    return bool(val)
+
+
+def _sculpt_set_dyntopo(context, on):
+    main = _flow_pick_main(context)
+    if main is None or _sculpt_dyntopo_on(main) == on:
+        return
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+    try:
+        bpy.ops.sculpt.dynamic_topology_toggle()
+    except Exception:
+        try:
+            main.use_dynamic_topology_sculpting = on
+        except Exception:
+            try:
+                main.data.use_dynamic_topology_sculpting = on
+            except Exception:
+                pass
+
+
+def _sculpt_density_contrast(obj):
+    """How uneven the surface spacing is: the wide spacing
+    (90th percentile nearest-neighbour distance) over the
+    typical spacing (median). Even clay - a plain ball, a
+    subdivided ball, a remesh - reads near 1.0 however fine
+    it is. DynTopo work reads high: most points sit packed
+    in the worked area while a coarse tenth keeps the wide
+    original spacing."""
+    if obj is None or len(obj.data.vertices) < 50:
+        return 0.0
+    from mathutils import kdtree
+    verts = [tuple(v.co) for v in obj.data.vertices]
+    n = len(verts)
+    tree = kdtree.KDTree(n)
+    for i, co in enumerate(verts):
+        tree.insert(co, i)
+    tree.balance()
+    dists = []
+    for co in verts:
+        hits = tree.find_n(co, 2)
+        if len(hits) > 1:
+            dists.append(hits[1][2])
+    if len(dists) < 50:
+        return 0.0
+    dists.sort()
+    median = dists[len(dists) // 2]
+    if median <= 0:
+        return 0.0
+    return dists[int(len(dists) * 0.9)] / median
+
+
+def _check_sculpt_dyn_clay(context):
+    main = _flow_main(context)
+    return main is not None and len(main.data.vertices) >= 100
+
+
+def _sculpt_run_dyn_clay(context):
+    if _check_sculpt_dyn_clay(context):
+        return
+    # Deliberately COARSE clay - the opposite of the mirror
+    # flow's fine ball. DynTopo's whole point is that the
+    # detail is not there yet: it arrives where you brush.
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=24,
+                                         ring_count=12,
+                                         radius=1.0)
+    main = context.object
+    bpy.ops.object.shade_smooth()
+    if main is not None:
+        main.name = "Clay"
+
+
+def _check_sculpt_dyn_on(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    if _sculpt_dyntopo_on(main):
+        return True
+    # After the finish step turns DynTopo back off, the
+    # worked surface itself is the record that it was on:
+    # the packed-patch contrast cannot exist without it.
+    return (len(main.data.vertices) >= 600
+            and _sculpt_density_contrast(main) >= 1.6)
+
+
+def _sculpt_run_dyn_on(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+    # Constant detail: the detail size means the same size
+    # everywhere on the surface, which is the setting a
+    # beginner can reason about.
+    try:
+        context.tool_settings.sculpt.detail_type_method = \
+            "CONSTANT"
+    except Exception:
+        pass
+    _sculpt_set_dyntopo(context, True)
+
+
+def _check_sculpt_dyn_worked(context):
+    main = _flow_main(context)
+    if main is None or not _sculpt_displaced(main):
+        return False
+    return (len(main.data.vertices) >= 600
+            and _sculpt_density_contrast(main) >= 1.6)
+
+
+def _sculpt_run_dyn_worked(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    # What a DynTopo brush does to one small area, done the
+    # reference way: the worked patch gains close-packed
+    # points, the rest of the clay keeps its coarse spacing,
+    # and the patch is then actually sculpted. The refining
+    # itself is done with DynTopo off and the flag restored
+    # at the end - entering Edit Mode drops the flag, and
+    # subdividing with it live multiplies the whole surface.
+    _sculpt_set_dyntopo(context, False)
+    patch = (0.6, -0.7, 0.4)
+    ln = math.sqrt(sum(c * c for c in patch)) or 1.0
+    patch = tuple(c / ln for c in patch)
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="DESELECT")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for poly in main.data.polygons:
+        cen = poly.center
+        cl = cen.length
+        poly.select = bool(cl and sum(cen[i] / cl * patch[i]
+                                      for i in range(3)) > 0.82)
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        bpy.ops.mesh.subdivide(number_cuts=2)
+        bpy.ops.mesh.subdivide(number_cuts=1)
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+    _sculpt_push(main, [(patch, 0.32, 0.45),
+                        ((0.3, -0.9, 0.1), -0.22, 0.35)])
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+    _sculpt_set_dyntopo(context, True)
+
+
+def _check_sculpt_dyn_finish(context):
+    main = _flow_main(context)
+    if main is None or _sculpt_dyntopo_on(main):
+        return False
+    if not _check_sculpt_finish(context):
+        return False
+    return _sculpt_density_contrast(main) >= 1.6
+
+
+def _sculpt_run_dyn_finish(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    _sculpt_set_dyntopo(context, False)
+    _sculpt_run_finish(context)
+
+
+SCULPT_DYNTOPO_STEPS = [
+    {"title": "Start with coarse clay",
+     "skill": "A coarse ball on purpose: the detail is not "
+              "there yet, and that is the point",
+     "how": "DynTopo work starts from clay that is too "
+            "coarse for the detail you want - a plain ball "
+            "whose surface is wide, even netting. That is not "
+            "a problem to fix first: with DynTopo, the detail "
+            "arrives where you brush, so the starting clay "
+            "only needs the big form's size and nothing more.",
+     "teach": [
+         "1. Press Add a ball above. That is your clay - "
+         "coarser than the other sculpting flows start "
+         "with, on purpose.",
+         "2. Look at its net if you like (the net is the "
+         "surface's wiring): wide, even, and far too open "
+         "for an eyelid or a crease. Leave it that way.",
+         "3. Decide WHERE the detail will go - one face, one "
+         "hand, one worn corner. DynTopo is for detail in a "
+         "place, not detail everywhere."],
+     "missing": "No clay yet - add a ball to sculpt.",
+     "tools": ["add_ball", "add_monkey"],
+     "run": _sculpt_run_dyn_clay, "check": _check_sculpt_dyn_clay},
+    {"title": "Turn DynTopo on",
+     "skill": "Dynamic Topology: the surface grows detail "
+              "under the brush, at the size you set",
+     "how": "DynTopo (Dynamic Topology) rebuilds the surface "
+            "as you brush: where the brush works, the net is "
+            "re-made fine enough for the stroke; where it "
+            "does not, nothing changes. Set it to Constant "
+            "detail and the fineness means the same size "
+            "everywhere you work. Know its price before you "
+            "start: the tidy net is gone - DynTopo clay has "
+            "no neat topology and no UV map to paint on, so "
+            "this is exploring and detailing clay, not a "
+            "finished net for painting or animating.",
+     "teach": [
+         "1. Get sculpting (Start sculpting above). At the "
+         "top of the 3D window, open the DynTopo menu (it "
+         "says DynTopo, with a tick box) and tick it on. "
+         "Blender may warn that attributes will be lost - "
+         "that warning is the price above, and on fresh "
+         "clay there is nothing to lose yet.",
+         "2. In that same menu, set Detailing to Constant "
+         "Detail and leave the resolution as it is for now: "
+         "smaller strokes of detail come from raising it "
+         "later, when a stroke shows you it is too coarse.",
+         "3. The tick comes when DynTopo is on for this "
+         "clay - the next step is where its work shows."],
+     "missing": "DynTopo is not on yet - enter Sculpt Mode "
+                "and tick DynTopo at the top of the 3D window.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_dyn_on, "check": _check_sculpt_dyn_on},
+    {"title": "Work one small area",
+     "skill": "Detail in a place: brush a small area and "
+              "watch only that area gain the net for it",
+     "how": "Now brush ONE small area - carve the eye, raise "
+            "the ridge, wear the corner - and turn the clay "
+            "over: the worked patch carries a close, fine net "
+            "and the rest is still the wide coarse ball you "
+            "started with. That contrast is DynTopo's whole "
+            "signature, and it is what the tick reads: the "
+            "surface's own spacing, packed where you worked, "
+            "wide where you did not. An even remesh, however "
+            "fine, does not tick this step - even is the other "
+            "tool's signature.",
+     "teach": [
+         "1. Pick the one area you named in step 1 and work "
+         "only there: Draw and Ctrl+Draw for the ridges and "
+         "hollows, small brush (F), several passes.",
+         "2. If the strokes look chunky, raise the Constant "
+         "Detail resolution a little in the DynTopo menu and "
+         "brush again - the new strokes land finer.",
+         "3. Resist spreading out. Detail everywhere is a "
+         "remesh's job; DynTopo earns its place by keeping "
+         "the rest of the clay cheap and coarse."],
+     "missing": "No DynTopo work yet - the surface spacing is "
+                "still even; work one small area with DynTopo "
+                "on until that area alone is packed fine.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_dyn_worked,
+     "check": _check_sculpt_dyn_worked},
+    {"title": "Turn it off, finish, and save",
+     "skill": "Closing DynTopo down: detail level set, back "
+              "to a stable surface, file kept",
+     "how": "When the area carries its detail, turn DynTopo "
+            "OFF: the surface stops rebuilding under the "
+            "brush, so finishing strokes smooth what is there "
+            "instead of growing more of it. Then finish the "
+            "way every sculpt here finishes - smooth shading, "
+            "and the file saved with its packed patch and its "
+            "coarse rest exactly as you left them.",
+     "teach": [
+         "1. Untick DynTopo in the same menu at the top of "
+         "the 3D window.",
+         "2. Go back to moving whole things (Object Mode) and "
+         "press Shade it smooth below.",
+         "3. Save the file (Ctrl+S). If this clay goes on to "
+         "be painted or animated, it will need a tidy net "
+         "built over it first (retopology - a later craft "
+         "piece); as a sculpt, it is finished."],
+     "missing": "Not finished: DynTopo is still on, or the "
+                "sculpt lacks smooth shading or a save.",
+     "tools": ["look_smooth", "save_work"],
+     "run": _sculpt_run_dyn_finish,
+     "check": _check_sculpt_dyn_finish},
+]
+
+
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -6994,6 +7292,22 @@ PACKAGES = [
               "surface itself proves it - the checks read the "
               "clay against its own mirror image.",
      "steps": SCULPT_SYMMETRY_STEPS},
+    {"id": "sculpt_dyntopo",
+     "kind": "flow",
+     "name": "Detail where you brush",
+     "byline": "DynTopo: detail that grows only where "
+               "you work, on clay that stays coarse "
+               "everywhere else.",
+     "intro": "Buddy's third sculpting piece - DynTopo "
+              "(Dynamic Topology). A remesh rebuilds the "
+              "whole surface evenly; DynTopo does the "
+              "opposite, growing a fine net only under the "
+              "brush while the rest of the clay stays "
+              "coarse. Each step ticks only when the "
+              "surface itself proves it - the checks read "
+              "the clay's own spacing, packed where you "
+              "worked and wide where you did not.",
+     "steps": SCULPT_DYNTOPO_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -11900,6 +12214,10 @@ _STEP_SCREENS = {
     ("sculpt_symmetry", 1): ("Buddy Model", None, None, None),
     ("sculpt_symmetry", 2): ("Buddy Model", None, None, None),
     ("sculpt_symmetry", 3): ("Buddy Finish", None, None, None),
+    ("sculpt_dyntopo", 0): ("Buddy Model", None, None, None),
+    ("sculpt_dyntopo", 1): ("Buddy Model", None, None, None),
+    ("sculpt_dyntopo", 2): ("Buddy Model", None, None, None),
+    ("sculpt_dyntopo", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -12697,8 +13015,10 @@ _COVERAGE_LINES = (
     "like clay', under Learn by doing - a ball of clay "
     "blocked out, given more clay, detailed and saved, "
     "checked as you go. A second piece, 'Sculpt both "
-    "sides at once', teaches the mirror. It is a first "
-    "piece of the craft, not the whole of it.",
+    "sides at once', teaches the mirror, and a third, "
+    "'Detail where you brush', teaches DynTopo - detail "
+    "that grows only where you work. They are first "
+    "pieces of the craft, not the whole of it.",
     "Animation and the other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "
