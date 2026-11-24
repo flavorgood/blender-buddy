@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 3, 0),
+    "version": (3, 4, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -6675,6 +6675,239 @@ SCULPT_STEPS = [
 ]
 
 
+# -- sculpting, second piece: the mirror --------------------------------
+# Most things a beginner sculpts first - faces, creatures, helmets,
+# cars - are built in pairs: two eyes, two ears, two sides that
+# should match. Sculptors do that work with the mirror on (Blender
+# calls it symmetry): work one side and the other side follows.
+# Then, late, they turn it OFF on purpose, because real faces are
+# not perfectly even and a sculpt that stays perfectly mirrored
+# reads as fake. The checks read the surface against its own
+# mirror image: mirrored work leaves every worked point with a
+# twin the same distance out on the other side; one-sided work
+# does not, however it was made.
+
+def _sculpt_mirror_stats(obj):
+    """(share of points whose mirror twin is really there, worst
+    gap to a twin), reading the surface against its own mirror
+    image across X. A plain ball and a mirror-worked form both
+    read a share near 1.0 - the ball is why the steps below also
+    demand real displacement. One-sided work drops the share."""
+    if obj is None or len(obj.data.vertices) < 50:
+        return 0.0, 0.0
+    from mathutils import kdtree
+    verts = [tuple(v.co) for v in obj.data.vertices]
+    n = len(verts)
+    centre = tuple(sum(v[i] for v in verts) / n for i in range(3))
+    scale = sum(math.dist(v, centre) for v in verts) / n
+    if scale <= 0:
+        return 0.0, 0.0
+    tol = 0.03 * scale
+    tree = kdtree.KDTree(n)
+    for i, co in enumerate(verts):
+        tree.insert(co, i)
+    tree.balance()
+    stride = 1 if n <= 4000 else 2
+    matched = 0
+    sampled = 0
+    worst = 0.0
+    for co in verts[::stride]:
+        _hit, _idx, dist = tree.find((-co[0], co[1], co[2]))
+        sampled += 1
+        if dist <= tol:
+            matched += 1
+        if dist > worst:
+            worst = dist
+    return (matched / sampled if sampled else 0.0), worst
+
+
+def _check_sculpt_mirror_clay(context):
+    return _check_sculpt_clay(context)
+
+
+def _sculpt_run_mirror_clay(context):
+    if _check_sculpt_clay(context):
+        return
+    # A finer ball than the first flow's: paired features -
+    # an eye hollow, a cheek - need the points to read in.
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=96,
+                                         ring_count=48,
+                                         radius=1.0)
+    main = context.object
+    bpy.ops.object.shade_smooth()
+    if main is not None:
+        main.name = "Clay"
+
+
+def _check_sculpt_mirrored(context):
+    main = _flow_main(context)
+    if main is None or not _sculpt_displaced(main):
+        return False
+    share, _worst = _sculpt_mirror_stats(main)
+    return share >= 0.85
+
+
+def _sculpt_run_mirrored(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    context.tool_settings.sculpt.use_symmetry_x = True
+    # Worked on the +X side only, the way the step teaches: an
+    # eye hollow carved, a cheek and a brow built up, a jaw
+    # suggested - the mirror list below is what the X symmetry
+    # does to every stroke in the learner's Blender.
+    blobs = [((0.52, -0.78, 0.28), -0.23, 0.20),
+             ((0.62, -0.62, -0.12), 0.22, 0.24),
+             ((0.35, -0.85, 0.48), 0.16, 0.22),
+             ((0.30, -0.80, -0.50), 0.14, 0.23),
+             ((0, 0.3, 1), -0.10, 0.50)]
+    mirrored = [((-d[0], d[1], d[2]), amount, width)
+                for d, amount, width in blobs if d[0] != 0]
+    _sculpt_push(main, blobs + mirrored)
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_asym(context):
+    main = _flow_main(context)
+    if main is None or not _sculpt_displaced(main):
+        return False
+    share, worst = _sculpt_mirror_stats(main)
+    return share >= 0.85 and worst > 0.05
+
+
+def _sculpt_run_asym(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    context.tool_settings.sculpt.use_symmetry_x = False
+    rng = random.Random(20261131)
+    blobs = []
+    for _ in range(8):
+        dirv = (rng.uniform(0.55, 1.0), rng.uniform(-0.45, 0.45),
+                rng.uniform(-0.45, 0.65))
+        blobs.append((dirv, rng.choice([-1, 1])
+                      * rng.uniform(0.05, 0.09), 0.16))
+    _sculpt_push(main, blobs)
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_mirror_finish(context):
+    main = _flow_main(context)
+    if main is None or not _check_sculpt_finish(context):
+        return False
+    share, _worst = _sculpt_mirror_stats(main)
+    return share >= 0.85
+
+
+SCULPT_SYMMETRY_STEPS = [
+    {"title": "Start with fresh clay",
+     "skill": "A fresh, even ball: the honest starting point for "
+              "anything built in pairs",
+     "how": "Faces, creatures, helmets, cars - most first "
+            "sculpts are built in pairs: two eyes, two ears, two "
+            "sides that should match. That work starts the same "
+            "way all sculpting starts, with one plain ball of "
+            "clay - even everywhere, so the mirror has an honest "
+            "surface to work on.",
+     "teach": [
+         "1. Press Add a ball above. That is your clay - leave "
+         "it the size it is.",
+         "2. Picture the thing you are making and its line down "
+         "the middle: everything on one side of that line has a "
+         "partner on the other. That line is what the mirror "
+         "works around.",
+         "3. If your thing has no such line - a rock, a wave - "
+         "this is the wrong flow; 'Sculpt it like clay' is the "
+         "one for free-form work."],
+     "missing": "No clay yet - add a ball with enough surface "
+                "(500+ points) to sculpt.",
+     "tools": ["add_ball", "add_monkey"],
+     "run": _sculpt_run_mirror_clay,
+     "check": _check_sculpt_mirror_clay},
+    {"title": "Work one side - the mirror works the other",
+     "skill": "Symmetry: the brush writes on both sides at once, "
+              "so paired forms can never drift apart",
+     "how": "With the mirror on, every stroke lands twice: where "
+            "you put it, and flipped, on the other side. Sculptors "
+            "block every paired form this way - it halves the "
+            "work and makes lopsidedness impossible while it "
+            "lasts. The tick reads the clay itself: work done "
+            "with the mirror leaves both sides matching; work "
+            "done without it does not, however careful it looks "
+            "from the front.",
+     "teach": [
+         "1. Get sculpting (Start sculpting above). At the top "
+         "of the 3D window, in Sculpt Mode, sit the Symmetry "
+         "buttons: X, Y, Z. X is left-to-right - make sure X is "
+         "lit. (Blender often starts with X already on; what "
+         "matters is that you checked before the big work.)",
+         "2. Now work ONE side only, with a big brush: pull the "
+         "cheek out, carve the eye socket, raise the brow - "
+         "then turn the view and look at the side you never "
+         "touched. It carries the same work, flipped.",
+         "3. Keep to big forms in this step, exactly as in "
+         "blocking: pairs first, while the mirror makes them "
+         "agree. The tick comes when the big forms read the "
+         "same on both sides of the surface itself."],
+     "missing": "The two sides do not match yet - turn the X "
+                "mirror on and block the big forms working one "
+                "side only.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_mirrored, "check": _check_sculpt_mirrored},
+    {"title": "Break the mirror on purpose",
+     "skill": "Deliberate unevenness: real faces are not mirror "
+              "images, and the last work is one-sided",
+     "how": "A sculpt that stays perfectly mirrored reads as "
+            "fake - real faces have one brow a touch higher, one "
+            "cheek fuller. So the sculptor's last pass turns the "
+            "mirror OFF and adds the small one-sided life: a "
+            "raised eyebrow, a crooked grin, a scar. Small and "
+            "late - the pairs underneath stay matched, which is "
+            "what makes the unevenness read as character instead "
+            "of a mistake.",
+     "teach": [
+         "1. Turn the X Symmetry button off (same row at the "
+         "top of the 3D window). From here, strokes land only "
+         "where you put them.",
+         "2. Shrink the brush (F) and lighten it (Shift+F), and "
+         "add ONE side's worth of life: raise one brow a "
+         "little, deepen one cheek line, tilt the grin.",
+         "3. Do not rebuild anything - if a change needs both "
+         "sides, it belongs to the step before, with the mirror "
+         "back on. The tick reads a surface whose big forms "
+         "still match side to side, carrying real one-sided "
+         "work on top."],
+     "missing": "Still perfectly even - turn the mirror off and "
+                "add a little one-sided life.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_asym, "check": _check_sculpt_asym},
+    {"title": "Smooth finish, then save",
+     "skill": "Finishing a mirrored sculpt: smooth shading, and "
+              "the source file kept",
+     "how": "Finish the way it will be seen: shaded smooth, so "
+            "the two sides read as one skin. Then save - the "
+            ".blend keeps the clay exactly as you left it, "
+            "mirror history and all.",
+     "teach": [
+         "1. Go back to moving whole things (the mode menu: "
+         "Object Mode) and press Shade it smooth below.",
+         "2. Turn it slowly once. The pairs should still agree; "
+         "the one-sided touches should read as life, not "
+         "errors. Anything bigger is one Sculpt Mode visit "
+         "away - mirror back on for paired fixes, off for "
+         "one-sided ones.",
+         "3. Save the file (Ctrl+S). This file IS the sculpt."],
+     "missing": "Not finished: the sculpt needs smooth shading "
+                "and the file saved, with its sides still "
+                "matching.",
+     "tools": ["look_smooth", "save_work"],
+     "run": _sculpt_run_finish,
+     "check": _check_sculpt_mirror_finish},
+]
+
+
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -6745,6 +6978,22 @@ PACKAGES = [
               "step ticks only when the surface itself "
               "proves it.",
      "steps": SCULPT_STEPS},
+    {"id": "sculpt_symmetry",
+     "kind": "flow",
+     "name": "Sculpt both sides at once",
+     "byline": "The sculptor's mirror: block both sides "
+               "working one, then break the mirror on "
+               "purpose for the finishing touches.",
+     "intro": "Buddy's second sculpting piece - the mirror. "
+              "Most first sculpts are built in pairs, and "
+              "sculptors block them with symmetry on: work "
+              "one side and the other follows, so pairs can "
+              "never drift apart. Then they turn it off for "
+              "the last pass, because real faces are not "
+              "perfectly even. Each step ticks only when the "
+              "surface itself proves it - the checks read the "
+              "clay against its own mirror image.",
+     "steps": SCULPT_SYMMETRY_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -11647,6 +11896,10 @@ _STEP_SCREENS = {
     ("sculpt_clay", 3): ("Buddy Model", None, None, None),
     ("sculpt_clay", 4): ("Buddy Model", None, None, None),
     ("sculpt_clay", 5): ("Buddy Finish", None, None, None),
+    ("sculpt_symmetry", 0): ("Buddy Model", None, None, None),
+    ("sculpt_symmetry", 1): ("Buddy Model", None, None, None),
+    ("sculpt_symmetry", 2): ("Buddy Model", None, None, None),
+    ("sculpt_symmetry", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -12443,8 +12696,9 @@ _COVERAGE_LINES = (
     "Sculpting has its first guided piece: 'Sculpt it "
     "like clay', under Learn by doing - a ball of clay "
     "blocked out, given more clay, detailed and saved, "
-    "checked as you go. It is a first piece of the "
-    "craft, not the whole of it.",
+    "checked as you go. A second piece, 'Sculpt both "
+    "sides at once', teaches the mirror. It is a first "
+    "piece of the craft, not the whole of it.",
     "Animation and the other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "

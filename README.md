@@ -37,13 +37,16 @@ Honest scope, in plain words:
   go, and the panel's plain-words tools cover the everyday
   modeling jobs. The other guided projects — hard-surface,
   look-real, print-ready — are modeling work too.
-- **Sculpting has its first guided piece** (new in v3.3.0):
+- **Sculpting has its first guided pieces** (v3.3.0, v3.4.0):
   "Sculpt it like clay", a guided way of working under Learn by
   doing — a ball of clay blocked into its big forms, remeshed
   for a finer even surface, worked with finer detail, and
   finished smooth and saved, each step ticking only when the
-  surface itself proves it. It is a first piece of the craft,
-  not the whole of it, and nothing here should be read as more.
+  surface itself proves it — and "Sculpt both sides at once",
+  which teaches the mirror: block both sides working one, then
+  break the mirror on purpose for the finishing touches. They
+  are first pieces of the craft, not the whole of it, and
+  nothing here should be read as more.
 - **Animation and the other crafts are not covered yet.** Buddy
   does not teach them, and nothing here should be read as if
   it does.
@@ -183,6 +186,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.4.0: sculpting's second piece — "Sculpt both sides at once"
+
+Sculpting's second piece teaches the mirror, in four steps: fresh clay (a finer ball, so paired features have the points to read in), block the big paired forms working one side only with X symmetry on, then turn the mirror off on purpose and add the small one-sided life real faces have, then finish smooth and save. The checks read the clay against its own mirror image: mirrored work leaves every worked point with a twin the same distance out on the other side, so the mirrored step ticks only when both sides of the surface itself match — and the battery's negative cases prove a plain ball ticks only step 1 and one-sided work without the mirror does not tick step 2. The coverage box now names both sculpting pieces and still calls them a first piece, not the whole craft; DynTopo, masks/face sets and Multires remain untaught later pieces. Verified on Blender 5.3.0: the flows battery (all five flows, plus the symmetry negatives), the interface battery, and the plain-layer and search batteries. test_context fails at its Codex-availability assertion in this environment — confirmed identical on the untouched v3.3.0 baseline, an environment gap, not this version. The 4.2.5 pass is still owed (no 4.2.5 binary on the build machine this run), as is the full parallel battery on an unloaded machine.
 
 ### v3.3.0: sculpting's first piece — "Sculpt it like clay"
 
