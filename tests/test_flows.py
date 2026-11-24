@@ -24,13 +24,14 @@ bb.register()
 flows = [p for p in bb.PACKAGES if p.get("kind") == "flow"]
 assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "print_ready", "sculpt_clay",
-                                    "sculpt_symmetry", "sculpt_dyntopo"}, [p["id"] for p in bb.PACKAGES]
+                                    "sculpt_symmetry", "sculpt_dyntopo",
+                                    "sculpt_masks"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS six flows registered; every step's "
+print("FLOWS_PASS seven flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -61,6 +62,7 @@ walk("print_ready")
 walk("sculpt_clay")
 walk("sculpt_symmetry")
 walk("sculpt_dyntopo")
+walk("sculpt_masks")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -115,6 +117,50 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[2], checks
 print("FLOWS_PASS sculpt_dyntopo negative: an even fine surface "
       "does not prove DynTopo work")
+
+# --- sculpt_masks negatives: the divisions must be proven --
+# A plain ball ticks only step 1; a face set alone does not
+# tick the mask step; a mask over EVERYTHING does not tick
+# it either (masking everything protects nothing); and work
+# done ignoring the mask - the patch dragged along with the
+# rest - does not tick the protected-work step.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="sculpt_masks")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS sculpt_masks negative: a plain ball ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS sculpt_masks negative: a face set alone "
+      "does not prove the mask")
+bpy.ops.buddy.tour_do(step=2)
+main = bb._flow_main(ctx)
+attr = main.data.attributes[".sculpt_mask"]
+for d in attr.data:
+    d.value = 1.0
+main.data.update()
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS sculpt_masks negative: a mask over "
+      "everything does not prove the mask step")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="sculpt_masks")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=1)
+bpy.ops.buddy.tour_do(step=2)
+main = bb._flow_main(ctx)
+bb._sculpt_push(main, [(bb._MASK_DIR, 0.30, 0.35),
+                       ((1, 0.2, 0.3), 0.38, 0.55),
+                       ((-0.4, 0.1, 1), -0.30, 0.50)])
+checks, _current = bb.tour_state(ctx)
+assert not checks[3], checks
+print("FLOWS_PASS sculpt_masks negative: work that drags "
+      "the masked patch does not prove protection")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

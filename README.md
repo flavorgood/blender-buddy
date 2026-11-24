@@ -37,7 +37,7 @@ Honest scope, in plain words:
   go, and the panel's plain-words tools cover the everyday
   modeling jobs. The other guided projects — hard-surface,
   look-real, print-ready — are modeling work too.
-- **Sculpting has its first guided pieces** (v3.3.0, v3.4.0, v3.5.0):
+- **Sculpting has its first guided pieces** (v3.3.0, v3.4.0, v3.5.0, v3.6.0):
   "Sculpt it like clay", a guided way of working under Learn by
   doing — a ball of clay blocked into its big forms, remeshed
   for a finer even surface, worked with finer detail, and
@@ -47,7 +47,10 @@ Honest scope, in plain words:
   break the mirror on purpose for the finishing touches — and
   "Detail where you brush", which teaches DynTopo: detail that
   grows only where you work, on clay that stays coarse
-  everywhere else. They
+  everywhere else — and "Keep one part safe", which teaches
+  masks and face sets: protect the part that is already
+  right, divide the clay into regions, and work the rest.
+  They
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation and the other crafts are not covered yet.** Buddy
@@ -189,6 +192,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.6.0: sculpting's fourth piece — "Keep one part safe"
+
+Sculpting's fourth piece teaches masks and face sets — working selectively — in five steps: fresh clay, give one area its own face set (a region with its own colour that can be hidden, shown and worked alone), mask the part you will protect (painted protection: where the mask sits, the brushes stop moving the clay), work the rest with the mask on — big work straight across the masked patch included — then finish smooth and save with the divisions kept in the file. The checks read the stores Blender keeps on the surface itself: the per-face set numbers (a real second set covering a real area, 3–70% of faces outside the biggest set), the per-point mask values (a real patch covered, 3–90% — masking everything protects nothing and does not tick), and, for the worked step, the protection itself: the masked points still sit tight together on the original ball's surface while the clay around them is displaced. The battery's negative cases prove a plain ball ticks only step 1, a face set alone does not tick the mask step, a mask over everything does not tick it either, and work that drags the masked patch along does not tick the protected-work step. The coverage box now names all four sculpting pieces and still calls them first pieces, not the whole craft; Multires remains the one untaught sculpting piece. Verified on Blender 5.3.0: the flows battery (all seven flows, plus the masks, DynTopo and symmetry negatives), the interface battery, and the plain-layer and search batteries. The 4.2.5 pass is still owed (no 4.2.5 binary on the build machine), as is the full parallel battery on an unloaded machine. Proof picture: demo/sculpt_masks_final.png — the reference build's finished clay: the pale region is the second face set, divided on the surface itself, and the smooth patch on top is the masked area the big work never moved.
 
 ### v3.5.0: sculpting's third piece — "Detail where you brush"
 

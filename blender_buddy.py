@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 5, 0),
+    "version": (3, 6, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -7206,6 +7206,372 @@ SCULPT_DYNTOPO_STEPS = [
 ]
 
 
+# -- sculpting, fourth piece: masks and face sets -----------------------
+# The first three pieces work the whole clay at once. Real
+# sculpting is selective: you protect the eye you just got
+# right while you rework the jaw around it, and you keep a
+# creature's shell separate from its belly so each can be
+# hidden, shown and worked alone. Blender gives sculptors
+# two tools for that. A MASK paints protection onto points:
+# brushed-over points stop moving under the brushes until
+# the mask is cleared. FACE SETS divide the surface into
+# named-by-colour regions that can be hidden, shown and
+# selected as units. Both live ON the surface itself -
+# Blender stores the mask as a per-point value and the
+# sets as a per-face number - so the checks below read
+# those stores directly, and the worked step reads the
+# protection the way a sculptor would prove it: the masked
+# patch still sits on the original ball while everything
+# around it has moved.
+
+_MASK_DIR = (0.1, 0.15, 1.0)
+_FACESET_DIR = (0.55, -0.75, 0.35)
+
+
+def _unit(vec):
+    ln = math.sqrt(sum(c * c for c in vec)) or 1.0
+    return tuple(c / ln for c in vec)
+
+
+def _sculpt_face_set_stats(obj):
+    """(how many different face sets, share of faces NOT in
+    the biggest set). No set store at all reads as Blender's
+    default: everything is the one set."""
+    if obj is None or not obj.data.polygons:
+        return 0, 0.0
+    attr = obj.data.attributes.get(".sculpt_face_set")
+    if attr is None:
+        return 1, 0.0
+    counts = {}
+    for d in attr.data:
+        counts[d.value] = counts.get(d.value, 0) + 1
+    if len(counts) < 2:
+        return len(counts), 0.0
+    total = sum(counts.values())
+    return len(counts), (total - max(counts.values())) / total
+
+
+def _sculpt_mask_values(obj):
+    if obj is None:
+        return None
+    attr = obj.data.attributes.get(".sculpt_mask")
+    if attr is None:
+        return None
+    return [d.value for d in attr.data]
+
+
+def _sculpt_mask_share(obj):
+    """Share of points the mask really covers (value over
+    half). No mask store reads 0."""
+    vals = _sculpt_mask_values(obj)
+    if not vals:
+        return 0.0
+    return sum(1 for v in vals if v > 0.5) / len(vals)
+
+
+def _sculpt_mask_held(obj):
+    """(True when the masked patch still sits where it
+    started, as one even patch) - the masked points' own
+    distances from the centre stay tight together and near
+    the clay's average distance, while work done ignoring
+    a mask drags them unevenly like everything else."""
+    vals = _sculpt_mask_values(obj)
+    if not vals:
+        return False
+    radii = _sculpt_radii(obj)
+    if len(radii) != len(vals) or len(radii) < 50:
+        return False
+    masked = [r for r, v in zip(radii, vals) if v > 0.5]
+    if len(masked) < 20:
+        return False
+    mean_all = sum(radii) / len(radii)
+    mean_m = sum(masked) / len(masked)
+    if mean_all <= 0 or not (0.94 <= mean_m / mean_all <= 1.06):
+        return False
+    var = sum((r - mean_m) ** 2 for r in masked) / len(masked)
+    return math.sqrt(var) / mean_m <= 0.025
+
+
+def _sculpt_push_masked(obj, blobs):
+    """_sculpt_push, honouring the mask the way a brush
+    does: a point moves by (1 - its mask value), so a fully
+    masked point does not move at all."""
+    vals = _sculpt_mask_values(obj) or [0.0] * len(obj.data.vertices)
+    normed = []
+    for dirv, amount, width in blobs:
+        normed.append((_unit(dirv), amount, width))
+    for i, v in enumerate(obj.data.vertices):
+        weight = 1.0 - (vals[i] if i < len(vals) else 0.0)
+        if weight <= 0.01:
+            continue
+        co = tuple(v.co)
+        ln = math.sqrt(sum(c * c for c in co))
+        if ln == 0:
+            continue
+        d = tuple(c / ln for c in co)
+        delta = 0.0
+        for dirv, amount, width in normed:
+            dot = max(-1.0, min(1.0, sum(d[j] * dirv[j]
+                                         for j in range(3))))
+            ang = math.acos(dot)
+            delta += amount * math.exp(-(ang * ang)
+                                       / (2 * width * width))
+        if delta:
+            v.co = tuple(co[j] + d[j] * delta * weight
+                         for j in range(3))
+    obj.data.update()
+
+
+def _check_sculpt_select_clay(context):
+    return _check_sculpt_clay(context)
+
+
+def _sculpt_run_select_clay(context):
+    if _check_sculpt_clay(context):
+        return
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=64,
+                                         ring_count=32,
+                                         radius=1.0)
+    main = context.object
+    bpy.ops.object.shade_smooth()
+    if main is not None:
+        main.name = "Clay"
+
+
+def _check_sculpt_face_set(context):
+    distinct, outside = _sculpt_face_set_stats(_flow_main(context))
+    return distinct >= 2 and 0.03 <= outside <= 0.70
+
+
+def _sculpt_run_face_set(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    attr = main.data.attributes.get(".sculpt_face_set")
+    if attr is None:
+        attr = main.data.attributes.new(name=".sculpt_face_set",
+                                        type="INT", domain="FACE")
+    direction = _unit(_FACESET_DIR)
+    for poly, d in zip(main.data.polygons, attr.data):
+        cen = poly.center
+        cl = cen.length
+        d.value = 2 if (cl and sum(cen[i] / cl * direction[i]
+                                   for i in range(3)) > 0.80) else 1
+    main.data.update()
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_masked(context):
+    share = _sculpt_mask_share(_flow_main(context))
+    return 0.03 <= share <= 0.90
+
+
+def _sculpt_run_masked(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    attr = main.data.attributes.get(".sculpt_mask")
+    if attr is None:
+        attr = main.data.attributes.new(name=".sculpt_mask",
+                                        type="FLOAT", domain="POINT")
+    direction = _unit(_MASK_DIR)
+    for v, d in zip(main.data.vertices, attr.data):
+        co = v.co
+        cl = co.length
+        d.value = 1.0 if (cl and sum(co[i] / cl * direction[i]
+                                     for i in range(3)) > 0.84) else 0.0
+    main.data.update()
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_protected_work(context):
+    main = _flow_main(context)
+    if main is None or not _sculpt_displaced(main):
+        return False
+    if not (0.03 <= _sculpt_mask_share(main) <= 0.90):
+        return False
+    return _sculpt_mask_held(main)
+
+
+def _sculpt_run_protected_work(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    # Work everywhere, INCLUDING straight at the masked
+    # patch - the mask is what keeps that patch where it
+    # was, the way a learner's brushes would test it.
+    _sculpt_push_masked(main, [(_MASK_DIR, 0.30, 0.35),
+                               ((1, 0.2, 0.3), 0.38, 0.55),
+                               ((-0.4, 0.1, 1), -0.30, 0.50),
+                               ((0.1, -1, 0.2), 0.22, 0.45),
+                               ((-1, -0.3, -0.2), 0.18, 0.50)])
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_select_finish(context):
+    main = _flow_main(context)
+    if main is None or not _check_sculpt_finish(context):
+        return False
+    if not _check_sculpt_face_set(context):
+        return False
+    return _check_sculpt_masked(context)
+
+
+SCULPT_MASKS_STEPS = [
+    {"title": "Start with fresh clay",
+     "skill": "A fresh, even ball: selective work still "
+              "starts from honest clay",
+     "how": "Protecting one part while you work another "
+            "only means something on clay you are actually "
+            "sculpting, so this piece starts where every "
+            "sculpting piece starts: one plain ball, even "
+            "everywhere, with enough surface to divide up.",
+     "teach": [
+         "1. Press Add a ball above. That is your clay - "
+         "leave it the size it is.",
+         "2. Picture the thing you are making and choose, "
+         "now, the part you will want to protect later - "
+         "the eye, the face, the finished corner. Masks "
+         "are planned, not improvised.",
+         "3. If your work has no parts - one free form, "
+         "worked all over at once - 'Sculpt it like clay' "
+         "is the flow you want; this one is for work in "
+         "pieces."],
+     "missing": "No clay yet - add a ball with enough surface "
+                "(500+ points) to sculpt.",
+     "tools": ["add_ball", "add_monkey"],
+     "run": _sculpt_run_select_clay,
+     "check": _check_sculpt_select_clay},
+    {"title": "Give one area its own face set",
+     "skill": "Face sets: the surface divided into regions "
+              "you can hide, show and work one at a time",
+     "how": "A face set is a region of the surface with its "
+            "own colour and its own boundary: the shell, the "
+            "belly, the lid, the base. Sculptors divide the "
+            "clay into sets early, because a set can be "
+            "hidden while you work behind it, shown alone "
+            "while you work on it, and picked as one piece "
+            "instead of point by point. The tick reads the "
+            "surface's own set numbers: a real second set "
+            "covering a real area, not a token corner.",
+     "teach": [
+         "1. Get sculpting (Start sculpting above). In the "
+         "toolbar there is a Draw Face Sets brush - pick it "
+         "and brush over ONE area of the clay: the area "
+         "takes a new colour. That colour is its set.",
+         "2. Look at the Face Sets menu at the top of the "
+         "3D window: from there a set under your pointer "
+         "can be hidden or shown alone, which is how you "
+         "will work one region at a time later.",
+         "3. Keep the set honest: one connected area that "
+         "means something in the thing you are making - "
+         "not a speckle, not half the clay."],
+     "missing": "Only one face set so far - paint a second "
+                "set over one real area of the clay.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_face_set, "check": _check_sculpt_face_set},
+    {"title": "Mask the part you will protect",
+     "skill": "The mask: paint protection onto the part "
+              "that is already right",
+     "how": "A mask is protection painted on with a brush: "
+            "where the mask sits dark on the surface, the "
+            "sculpting brushes stop moving the clay. "
+            "Sculptors mask what is finished - an eye, a "
+            "lip, a crisp edge - before reworking everything "
+            "around it, so a stray stroke cannot ruin the "
+            "one part that was already right. The tick "
+            "reads the mask itself: a real patch covered, "
+            "and the rest of the clay left bare - masking "
+            "everything protects nothing.",
+     "teach": [
+         "1. Pick the Mask brush from the toolbar and "
+         "paint over the part you chose in step 1. It "
+         "darkens as the mask takes - that dark patch is "
+         "protected now.",
+         "2. Feel it: brush a sculpting stroke straight "
+         "across the masked patch. The bare clay moves; "
+         "the masked clay stays. That staying is the "
+         "whole point of this piece.",
+         "3. The Mask menu at the top of the 3D window "
+         "holds the housekeeping: Invert Mask swaps what "
+         "is protected, Clear Mask takes it all off. You "
+         "will want both on real work - leave the mask "
+         "ON for the next step here."],
+     "missing": "No protective mask yet - paint the Mask "
+                "brush over one part of the clay, and leave "
+                "the rest bare.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_masked, "check": _check_sculpt_masked},
+    {"title": "Work the rest - the mask holds",
+     "skill": "Selective work: big work everywhere else, "
+              "and the protected part untouched by it",
+     "how": "Now do the big work - block and pull the "
+            "whole form, straight across the masked patch "
+            "included - and turn the clay over: everything "
+            "moved except the masked patch, which still "
+            "sits exactly where it started. That is what "
+            "the tick reads: the surface itself, worked "
+            "all over, with one even patch of the original "
+            "ball still in it. Work done by clearing the "
+            "mask first, or by tiptoeing around the patch, "
+            "does not read the same - the patch has to have "
+            "SURVIVED being brushed over.",
+     "teach": [
+         "1. With the mask still on, go back to the big "
+         "brushes: Grab and Draw, big movements, the "
+         "whole form - do not steer around the masked "
+         "area; brush over it like it is not special.",
+         "2. Turn the clay in the light and find the "
+         "patch: one piece of the original surface, "
+         "sitting calm inside the worked form. That "
+         "contrast is the proof, and it is visible.",
+         "3. On real work this is where the mask comes "
+         "off (Mask menu, Clear Mask) and the protected "
+         "part gets its own finishing pass - here, leave "
+         "it on for the finish."],
+     "missing": "The clay is not worked yet, or the masked "
+                "patch moved with the rest - work the whole "
+                "form with the mask on and let it hold.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_protected_work,
+     "check": _check_sculpt_protected_work},
+    {"title": "Finish, and save the divisions too",
+     "skill": "Finishing selective work: smooth, saved, "
+              "with its sets and mask kept in the file",
+     "how": "Finish the way every sculpt here finishes - "
+            "smooth shading and the file saved - and know "
+            "what the file now holds: not just the form, "
+            "but its divisions. The face sets and the mask "
+            "are saved with the clay, so tomorrow this "
+            "sculpt opens still divided into its working "
+            "parts, ready to pick up selectively again.",
+     "teach": [
+         "1. Go back to moving whole things (Object Mode) "
+         "and press Shade it smooth below.",
+         "2. Save the file (Ctrl+S). The tick checks the "
+         "save, the smooth finish, and that the sets and "
+         "the mask are still on the clay - a finish that "
+         "threw the divisions away is not this finish.",
+         "3. One piece of sculpting depth remains after "
+         "this: Multires, working one sculpt at several "
+         "levels of detail at once. It is a later piece; "
+         "selective work is yours now."],
+     "missing": "Not finished: the sculpt needs smooth "
+                "shading and a save, with its face sets and "
+                "mask still on it.",
+     "tools": ["look_smooth", "save_work"],
+     "run": _sculpt_run_finish,
+     "check": _check_sculpt_select_finish},
+]
+
+
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -7308,6 +7674,25 @@ PACKAGES = [
               "the clay's own spacing, packed where you "
               "worked and wide where you did not.",
      "steps": SCULPT_DYNTOPO_STEPS},
+    {"id": "sculpt_masks",
+     "kind": "flow",
+     "name": "Keep one part safe",
+     "byline": "Masks and face sets: protect the part "
+               "that is right, divide the clay into "
+               "regions, and work the rest.",
+     "intro": "Buddy's fourth sculpting piece - working "
+              "selectively. A mask paints protection onto "
+              "the part that is already right, so big work "
+              "around it cannot ruin it; face sets divide "
+              "the surface into regions that can be "
+              "hidden, shown and worked one at a time. "
+              "Each step ticks only when the surface "
+              "itself proves it - the checks read the "
+              "clay's own mask and set stores, and the "
+              "worked step reads the protected patch "
+              "still sitting on the original clay inside "
+              "a worked form.",
+     "steps": SCULPT_MASKS_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -12218,6 +12603,11 @@ _STEP_SCREENS = {
     ("sculpt_dyntopo", 1): ("Buddy Model", None, None, None),
     ("sculpt_dyntopo", 2): ("Buddy Model", None, None, None),
     ("sculpt_dyntopo", 3): ("Buddy Finish", None, None, None),
+    ("sculpt_masks", 0): ("Buddy Model", None, None, None),
+    ("sculpt_masks", 1): ("Buddy Model", None, None, None),
+    ("sculpt_masks", 2): ("Buddy Model", None, None, None),
+    ("sculpt_masks", 3): ("Buddy Model", None, None, None),
+    ("sculpt_masks", 4): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -13017,8 +13407,10 @@ _COVERAGE_LINES = (
     "checked as you go. A second piece, 'Sculpt both "
     "sides at once', teaches the mirror, and a third, "
     "'Detail where you brush', teaches DynTopo - detail "
-    "that grows only where you work. They are first "
-    "pieces of the craft, not the whole of it.",
+    "that grows only where you work. A fourth, 'Keep one "
+    "part safe', teaches masks and face sets - protect "
+    "the part that is right and work the rest. They are "
+    "first pieces of the craft, not the whole of it.",
     "Animation and the other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "
