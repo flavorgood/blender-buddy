@@ -37,12 +37,21 @@ Honest scope, in plain words:
   go, and the panel's plain-words tools cover the everyday
   modeling jobs. The other guided projects — hard-surface,
   look-real, print-ready — are modeling work too.
-- **Sculpting, animation, and the other crafts are not covered
-  yet.** Buddy does not teach them, and nothing here should be
-  read as if it does.
-- The Donut does include a little sculpting near the end —
-  smoothing the icing — as a finishing touch. That is a taste of
-  sculpting inside a modeling project, not sculpting coverage.
+- **Sculpting has its first guided piece** (new in v3.3.0):
+  "Sculpt it like clay", a guided way of working under Learn by
+  doing — a ball of clay blocked into its big forms, remeshed
+  for a finer even surface, worked with finer detail, and
+  finished smooth and saved, each step ticking only when the
+  surface itself proves it. It is a first piece of the craft,
+  not the whole of it, and nothing here should be read as more.
+- **Animation and the other crafts are not covered yet.** Buddy
+  does not teach them, and nothing here should be read as if
+  it does.
+- The Donut also includes a little sculpting near the end —
+  smoothing the icing — as a finishing touch inside a modeling
+  project. The sculpting flow above is the actual first
+  sculpting piece; the Donut passage remains a taste inside
+  someone else's project.
 - Each craft is being added one at a time, in its own shape,
   taught the way that craft actually works. Whatever made the
   Donut work does not transfer to sculpting or animation on its
@@ -174,6 +183,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.3.0: sculpting's first piece — "Sculpt it like clay"
+
+Sculpting arrives the way every craft arrives in Buddy: as its own guided way of working, taught the way the craft actually works, proven separately. **Sculpt it like clay** sits under "Learn by doing" beside the other flows, in six steps: start with a ball of clay (or the monkey), pick up the brushes (Sculpt Mode, brush size with F, strength with Shift+F, Draw / Grab / Smooth), block the big forms with a big brush, remesh (Ctrl+R) for a finer even surface only once the forms read, work the finer detail small and light, then shade smooth and save. Each step ticks only when the surface itself proves it: a perfect ball has every point the same distance from its centre, so blocked forms are read from the spread of those distances; the remesh step reads the finer surface; fine detail is read by how much of the surface a smoothed copy of it has to erase. A plain untouched ball ticks only step 1 — that negative case is in the test battery alongside the full walk. The Start screen's coverage box now says sculpting has a first piece (and that it is not the whole craft); animation and the other crafts remain plainly untaught. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all four flows walked end to end, sculpt included), the interface battery (including the coverage box), and on 5.3.0 also the plain-layer, context and search batteries. The full parallel battery's longest suite (test_tour, the Donut walk) timed out on the build machine at this version and at the v3.2.7 baseline alike — a machine limit, recorded in the lane queue, not a pass claimed.
 
 ### v3.2.7: the step-7 trap, named in the lesson
 
@@ -409,17 +422,17 @@ picture, save, send it out.
 Blender Buddy supports Blender 4.2 or newer. Download the package for your
 installation from [GitHub Releases](https://github.com/flavorgood/blender-buddy/releases/latest).
 
-- **Extension** (recommended). For 3.2.7, download
-  [blender_buddy_v3.2.7_extension.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.7/blender_buddy_v3.2.7_extension.zip). Open **Edit → Preferences → Get
+- **Extension** (recommended). For 3.3.0, download
+  [blender_buddy_v3.3.0_extension.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.3.0/blender_buddy_v3.3.0_extension.zip). Open **Edit → Preferences → Get
   Extensions**, use the upper-right menu, and choose **Install from Disk**.
   Select the downloaded ZIP and confirm. To update an existing extension,
   select the same local repository you used before. Check that Blender Buddy
-  shows version 3.2.7 in Preferences.
-- **Classic add-on**. Download [blender_buddy_v3.2.7.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.2.7/blender_buddy_v3.2.7.zip). In **Edit →
+  shows version 3.3.0 in Preferences.
+- **Classic add-on**. Download [blender_buddy_v3.3.0.zip](https://github.com/flavorgood/blender-buddy/releases/download/v3.3.0/blender_buddy_v3.3.0.zip). In **Edit →
   Preferences → Add-ons**, use the install-from-disk control to select the ZIP.
   Enable **Blender Buddy**. Use the same installation format for future updates.
 - **Single-file add-on**. Download the tagged
-  [blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/v3.2.7/blender_buddy.py)
+  [blender_buddy.py](https://raw.githubusercontent.com/flavorgood/blender-buddy/v3.3.0/blender_buddy.py)
   and use the classic add-on installation steps with the Python file.
 
 The GitHub ZIP is a manual update. If you have work open or the Expert is

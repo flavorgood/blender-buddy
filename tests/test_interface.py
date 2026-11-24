@@ -80,9 +80,10 @@ print("INTERFACE_PASS Start screen + step strip draw inside the "
       "main panel")
 
 # --- the Start screen states the honest scope, up high ------------
-# (Owner, 2026-11-19: Buddy covers modeling follow-alongs today;
-# it does not yet cover sculpting, animation, or the other crafts,
-# and the limit is acknowledged where learners see it.) Drive the
+# (Owner, 2026-11-19: Buddy's scope is stated where learners see
+# it - what is covered, what is a first piece, and what is not
+# taught yet. Sculpting's first piece arrived in v3.3.0; animation
+# and the other crafts remain untaught and must say so.) Drive the
 # real draw path with a recording layout and read back what a
 # learner would read: the coverage box must be drawn, carry the
 # truths, and sit BEFORE the package shelf - visible without
@@ -114,8 +115,9 @@ _joined = " ".join(_labels)
 assert bb._COVERAGE_TITLE in _labels, _labels
 for _line in bb._COVERAGE_LINES:
     assert " ".join(_line.split()) in " ".join(_joined.split()), _line
-assert "does not teach sculpting, animation" in _joined, _joined
-assert "not sculpting lessons" in _joined, _joined
+assert "Sculpting has its first guided piece" in _joined, _joined
+assert "not the whole of it" in _joined, _joined
+assert "Animation and the other crafts are not taught yet" in _joined, _joined
 assert "one at a time" in _joined, _joined
 _title_at = _events.index(("label", bb._COVERAGE_TITLE))
 _first_pkg_at = next(i for i, (kind, t) in enumerate(_events)
