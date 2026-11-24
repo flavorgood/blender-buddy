@@ -37,14 +37,17 @@ Honest scope, in plain words:
   go, and the panel's plain-words tools cover the everyday
   modeling jobs. The other guided projects — hard-surface,
   look-real, print-ready — are modeling work too.
-- **Sculpting has its first guided pieces** (v3.3.0, v3.4.0):
+- **Sculpting has its first guided pieces** (v3.3.0, v3.4.0, v3.5.0):
   "Sculpt it like clay", a guided way of working under Learn by
   doing — a ball of clay blocked into its big forms, remeshed
   for a finer even surface, worked with finer detail, and
   finished smooth and saved, each step ticking only when the
   surface itself proves it — and "Sculpt both sides at once",
   which teaches the mirror: block both sides working one, then
-  break the mirror on purpose for the finishing touches. They
+  break the mirror on purpose for the finishing touches — and
+  "Detail where you brush", which teaches DynTopo: detail that
+  grows only where you work, on clay that stays coarse
+  everywhere else. They
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation and the other crafts are not covered yet.** Buddy
@@ -186,6 +189,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.5.0: sculpting's third piece — "Detail where you brush"
+
+Sculpting's third piece teaches DynTopo (Dynamic Topology), in four steps: start with coarse clay on purpose (the detail is not there yet, and that is the point), turn DynTopo on with Constant detail — taught with its price stated plainly: the tidy net and its UVs are gone, so this is exploring and detailing clay, not a finished net — then work one small area while the rest of the clay stays coarse, then turn it off, finish smooth, and save. The checks read the surface's own spacing: DynTopo work leaves the worked area packed with close points while the rest keeps its wide coarse spacing (nearest-neighbour spacing contrast, 90th percentile over median), a contrast an even remesh never produces however fine it is. The battery's negative cases prove a plain coarse ball ticks only step 1, DynTopo on with no work does not tick the worked step, and an even fine subdivided surface does not tick it either. The coverage box now names all three sculpting pieces and still calls them first pieces, not the whole craft; masks/face sets and Multires remain untaught later pieces. Verified on Blender 5.3.0: the flows battery (all six flows, plus the DynTopo and symmetry negatives), the interface battery, and the plain-layer and search batteries. The 4.2.5 pass is still owed (no 4.2.5 binary on the build machine), as is the full parallel battery on an unloaded machine. Proof picture: demo/sculpt_dyntopo_final.png — the reference build's finished clay, one worked creased patch on an otherwise coarse ball.
 
 ### v3.4.0: sculpting's second piece — "Sculpt both sides at once"
 
