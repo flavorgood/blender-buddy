@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0, v3.11.0, v3.12.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -79,7 +79,12 @@ Honest scope, in plain words:
   move with a repeat rule on its curves, joined end
   to start — the last memory is the first place,
   reached by a journey out and back — so it can run
-  for ever without jumping. They are first pieces of
+  for ever without jumping — and "Follow a path",
+  which teaches paths: the journey drawn first as a
+  curve, the traveller tied to it with a Follow Path
+  rule, and the travel remembered on the rule itself
+  as a share of the way, so the thing rides the drawn
+  route corner and all. They are first pieces of
   the craft, not the whole of it.
 - **The other crafts are not covered yet.** Buddy does
   not teach them, and nothing here should be read as if
@@ -220,6 +225,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.13.0: animation's sixth piece — "Follow a path"
+
+Animation's sixth piece teaches paths — the journey drawn first, then ridden — in five steps: pick the traveller (one thing that will ride the route), draw the path it will follow (a curve whose drawn line runs a real distance across the scene — the reference route runs 9 units, out, round a corner, and on), put it on the path (a Follow Path rule on the traveller, aimed at the drawn curve, measuring the journey as a share of the whole route with Fixed Location), remember the journey along it (the rule's Offset remembered at 0 at frame 1 and at the whole way, 1, at frame 48 — the memories live on the rule, not on the thing), then watch it travel and save. The teaching point is the other way animators move things: instead of remembering places and letting Blender fill in a straight-ish journey between them, the route itself is drawn and the filling-in follows it. The checks read the curve itself (its drawn length, summed along its own points), the rule itself (on the traveller, aimed at that curve, measuring by share), its Offset memories (a span of at least 20 frames, at least half the way travelled), and the traveller's real world place read across the span (the reference build's real excursion is 4.21 units — the corner makes the farthest point farther than the ends suggest). A probe on Blender 5.3.0 and 4.2.5 before building showed the rule and its Offset memories read and ride identically on both versions. One defect was found and fixed during the build: a curve created through Blender's data API is not tagged for evaluation until something tags it — in the window, operators do that invisibly — so a headless reference build's Follow Path rule read a path that was never built and the traveller never moved; the build now tags the curve plainly when it draws it, and the evaluated-place read tags the rule's target curve before reading. The battery's negative cases prove a plain scene ticks only step 1, a drawn path alone does not prove the tie, and a traveller tied to the path with no travel remembered does not prove the journey. The coverage box now names all six animation pieces and still calls them first pieces, not the whole craft. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all fourteen flows, plus the anim_path, anim_loop, anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_path_final.png — the reference build's red traveller at frame 24, halfway along its drawn route, on the corner leg of the journey.
 
 ### v3.12.0: animation's fifth piece — "Make it loop"
 

@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 12, 0),
+    "version": (3, 13, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -9442,8 +9442,9 @@ ANIM_LOOP_STEPS = [
          "save, and that the loop is still proven.",
          "3. That is animation's fifth piece: loops - "
          "a move with a repeat rule, joined end to "
-         "start so it can run for ever. It is still "
-         "not the whole craft: walks, talks and "
+         "start so it can run for ever. The next "
+         "piece follows a path. It is still not "
+         "the whole craft: walks, talks and "
          "performances are built from loops like "
          "this, one round at a time."],
      "missing": "Not finished: the file needs a save, "
@@ -9452,6 +9453,340 @@ ANIM_LOOP_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_loop_finish,
      "check": _check_loop_finish},
+]
+
+def _path_curve(context):
+    """The scene's path: the first curve thing whose drawn
+    line runs a real distance (chords between its points
+    summed - exact for a poly line, a fair measure for a
+    bent one). Returns (object, length) or (None, 0.0)."""
+    best, best_len = None, 0.0
+    for obj in context.scene.objects:
+        if obj.type != "CURVE":
+            continue
+        total = 0.0
+        for spline in obj.data.splines:
+            if spline.type == "BEZIER":
+                pts = [tuple(p.co) for p in spline.bezier_points]
+            else:
+                pts = [tuple(p.co[:3]) for p in spline.points]
+            for i in range(len(pts) - 1):
+                total += math.dist(pts[i], pts[i + 1])
+        if total > best_len:
+            best, best_len = obj, total
+    return best, best_len
+
+
+def _check_path_drawn(context):
+    _curve, length = _path_curve(context)
+    return length >= 3.0
+
+
+def _anim_run_path_drawn(context):
+    if _check_path_drawn(context):
+        return
+    data = bpy.data.curves.new("BuddyPath", "CURVE")
+    data.dimensions = "3D"
+    spline = data.splines.new("POLY")
+    spline.points.add(3)
+    for point, co in zip(spline.points,
+                         [(0, 0, 1), (3, 0, 1), (3, 3, 1),
+                          (0, 3, 1)]):
+        point.co = (co[0], co[1], co[2], 1.0)
+    obj = bpy.data.objects.new("BuddyPath", data)
+    context.scene.collection.objects.link(obj)
+    # A curve made through the data API is not tagged for
+    # evaluation until something tags it - in the window,
+    # operators do that; here it is done plainly, or the
+    # Follow Path rule reads a path that was never built.
+    data.update_tag()
+    obj.update_tag()
+
+
+def _path_constraint(main):
+    if main is None:
+        return None
+    for con in main.constraints:
+        if con.type == "FOLLOW_PATH":
+            return con
+    return None
+
+
+def _check_path_on(context):
+    main = _flow_main(context)
+    curve, length = _path_curve(context)
+    con = _path_constraint(main)
+    return (con is not None and curve is not None
+            and length >= 3.0 and con.target is curve
+            and bool(con.use_fixed_location))
+
+
+def _anim_run_path_on(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        _anim_run_pick(context)
+        main = _flow_pick_main(context)
+        if main is None:
+            return
+    if not _check_path_drawn(context):
+        _anim_run_path_drawn(context)
+    curve, _length = _path_curve(context)
+    con = _path_constraint(main)
+    if con is None:
+        con = main.constraints.new(type="FOLLOW_PATH")
+    con.target = curve
+    con.use_fixed_location = True
+    con.use_curve_follow = False
+    main.location = (0, 0, 0)
+
+
+def _path_offset_keys(main):
+    """The travel memories: keys on the path rule's
+    offset, read through the same cross-version helper
+    as every animation piece (the rule's own channel)."""
+    keys = []
+    for fc in _anim_fcurves(main):
+        if "offset_factor" in fc.data_path:
+            keys.extend((kp.co.x, kp.co.y)
+                        for kp in fc.keyframe_points)
+    return sorted(keys)
+
+
+def _path_eval_pos(context, main, frame):
+    """The traveller's real place in the world at one
+    frame, read from the evaluated scene - the path rule
+    moves the thing in the world, not in its own place
+    numbers, so the world place is the honest read."""
+    con = _path_constraint(main)
+    if con is not None and con.target is not None:
+        con.target.data.update_tag()
+        con.target.update_tag()
+    scene = context.scene
+    here = scene.frame_current
+    scene.frame_set(int(frame))
+    deps = context.evaluated_depsgraph_get()
+    pos = tuple(main.evaluated_get(deps).matrix_world.translation)
+    scene.frame_set(here)
+    return pos
+
+
+def _path_travel(context, main):
+    """(span, offset change, biggest real distance from
+    the starting place in between) for the travel
+    memories on the path rule."""
+    keys = _path_offset_keys(main)
+    if len(keys) < 2:
+        return 0.0, 0.0, 0.0
+    frames = [k[0] for k in keys]
+    first, last = int(min(frames)), int(max(frames))
+    if last - first < 1:
+        return 0.0, 0.0, 0.0
+    change = max(k[1] for k in keys) - min(k[1] for k in keys)
+    start = _path_eval_pos(context, main, first)
+    step = max(1, (last - first) // 24)
+    far = 0.0
+    frame = first
+    while frame <= last:
+        here = _path_eval_pos(context, main, frame)
+        far = max(far, math.dist(start, here))
+        frame += step
+    return last - first, change, far
+
+
+def _check_path_travel(context):
+    main = _flow_main(context)
+    if main is None or not _check_path_on(context):
+        return False
+    span, change, far = _path_travel(context, main)
+    return span >= 20 and change >= 0.5 and far >= 1.0
+
+
+def _anim_run_path_travel(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if not _check_path_on(context):
+        _anim_run_path_on(context)
+        main = _flow_pick_main(context)
+        if main is None:
+            return
+    if _check_path_travel(context):
+        return
+    con = _path_constraint(main)
+    scene = context.scene
+    scene.frame_set(1)
+    con.offset_factor = 0.0
+    con.keyframe_insert(data_path="offset_factor", frame=1)
+    scene.frame_set(48)
+    con.offset_factor = 1.0
+    con.keyframe_insert(data_path="offset_factor", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_path_finish(context):
+    return (_check_saved(context)
+            and _check_path_travel(context))
+
+
+def _anim_run_path_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_PATH_STEPS = [
+    {"title": "Pick the thing that will travel",
+     "skill": "One traveller, chosen: a path journey "
+              "starts with a single thing that will ride it",
+     "how": "Every piece so far moved a thing by "
+            "remembering its places. This piece teaches "
+            "the other way animators move things: draw "
+            "the journey first - a path - and let the "
+            "thing ride along it, the way a train rides "
+            "its track. Start by picking the traveller: "
+            "any shape you already have, or a fresh box "
+            "here.",
+     "teach": [
+         "1. Press Add a box above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the traveller.",
+         "2. Leave it where it is for now. The path "
+         "comes next; the traveller gets put on it "
+         "after that.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The journey will still be told in "
+         "frames; the path only decides WHERE the "
+         "frames happen."],
+     "missing": "Nothing to travel yet - add a box, or "
+                "pick a shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Draw the path it will follow",
+     "skill": "The path: a curve drawn through the "
+              "places the journey must pass",
+     "how": "A path is a curve - a line in the scene "
+            "that is not a solid thing, just a route. "
+            "Draw one that really goes somewhere: "
+            "across the scene and round a corner is a "
+            "real journey; a scribble in one spot is "
+            "not. The tick reads the curve itself: its "
+            "drawn line must run a clear distance, "
+            "measured along its own points. Probed "
+            "before building on both supported "
+            "Blenders: a drawn route reads the same "
+            "on each.",
+     "teach": [
+         "1. Press Add a bendy line above (Blender's "
+         "Bezier Curve), or draw your own curve with "
+         "the Draw Curve tool.",
+         "2. Shape it into a route: pull its points "
+         "so it crosses the scene - out, round a "
+         "corner, and on. A route of a few steps "
+         "long is plenty.",
+         "3. The curve is only a route - it will not "
+         "show in the final picture. What shows is "
+         "the traveller riding it."],
+     "missing": "No real path yet - draw a curve whose "
+                "line runs a clear distance across "
+                "the scene.",
+     "tools": ["add_bendy_line"],
+     "run": _anim_run_path_drawn,
+     "check": _check_path_drawn},
+    {"title": "Put it on the path",
+     "skill": "The Follow Path rule: the traveller is "
+              "tied to the route, end to end",
+     "how": "Tie the traveller to the path with "
+            "Blender's Follow Path rule (a constraint - "
+            "a standing rule on a thing, in the chain "
+            "tab of the Properties editor). Set it to "
+            "measure the journey as a share of the "
+            "whole route (Fixed Location), so the "
+            "travel can be remembered as 'none of the "
+            "way' to 'all of the way'. The tick reads "
+            "the rule itself: on the traveller, aimed "
+            "at the drawn path, measuring by share.",
+     "teach": [
+         "1. Pick the traveller. In the Properties "
+         "editor open the chain tab (Constraints), "
+         "Add Object Constraint, Motion Path, Follow "
+         "Path.",
+         "2. In the rule's Target box, pick your "
+         "curve - the path you drew.",
+         "3. Tick Fixed Location on the rule. The "
+         "traveller now sits at the path's start, "
+         "tied to the route."],
+     "missing": "Not on the path yet - the traveller "
+                "needs a Follow Path rule aimed at "
+                "the drawn curve, measuring by share.",
+     "tools": [],
+     "run": _anim_run_path_on,
+     "check": _check_path_on},
+    {"title": "Remember the journey along it",
+     "skill": "Travel remembered on the rule: none of "
+              "the way at frame 1, all of it at frame 48",
+     "how": "The memories in this piece live on the "
+            "rule, not on the thing: remember the "
+            "rule's Offset - how far along the route "
+            "the traveller is - at 0 at frame 1, and "
+            "at the whole way (1) at frame 48, and "
+            "Blender fills in every frame between, "
+            "carrying the traveller along the drawn "
+            "route. The tick reads those memories and "
+            "the real journey: the traveller's world "
+            "place, read at the frames across the span, "
+            "must really travel - a rule remembered "
+            "but a thing that never moves is not a "
+            "journey.",
+     "teach": [
+         "1. Go to frame 1. On the Follow Path rule, "
+         "set Offset to 0 and press Remember where "
+         "it is right now with the rule picked "
+         "(Blender's own way: hover over the Offset "
+         "number and press I).",
+         "2. Jump to frame 48, set Offset to 1 - the "
+         "whole way - and remember again.",
+         "3. Play it: the traveller rides the route "
+         "you drew, corner and all, at the pace the "
+         "two memories set."],
+     "missing": "No journey remembered yet - the "
+                "rule's Offset needs memories at both "
+                "ends of a span of at least 20 frames, "
+                "from none of the way to most of it.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_path_travel,
+     "check": _check_path_travel},
+    {"title": "Watch it travel, then save it",
+     "skill": "Finishing a path journey: played along "
+              "the route, and saved with path and rule "
+              "in the file",
+     "how": "Finish the way every piece here "
+            "finishes: look at the work, then save it. "
+            "Play the whole span from the start and "
+            "watch the traveller follow the drawn "
+            "route - not a straight line between two "
+            "places, the route itself. Then save the "
+            "file. The path, the rule and its memories "
+            "are saved with it, so the journey still "
+            "runs when the file is opened again. The "
+            "tick checks the save, and that the real "
+            "travel is still proven.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the corners - the route is the point.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the journey is still "
+         "proven.",
+         "3. That is animation's sixth piece: paths - "
+         "draw the journey, tie the traveller to it, "
+         "and remember the travel on the rule. It is "
+         "still not the whole craft: performances "
+         "are built from pieces like this, one "
+         "journey at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the path journey still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_path_finish,
+     "check": _check_path_finish},
 ]
 
 PACKAGES = [
@@ -9688,6 +10023,27 @@ PACKAGES = [
               "Each step ticks only when the scene "
               "itself proves it.",
      "steps": ANIM_LOOP_STEPS},
+    {"id": "anim_path",
+     "kind": "flow",
+     "name": "Follow a path",
+     "byline": "Animation's sixth piece: paths - "
+               "draw the journey as a curve, tie the "
+               "traveller to it, and remember the travel "
+               "on the rule.",
+     "intro": "Buddy's sixth animation piece - "
+              "paths. The earlier pieces moved a thing "
+              "between remembered places; a path draws "
+              "the whole journey first - a curve through "
+              "the places it must pass - and the thing "
+              "rides it, corner and all, under a Follow "
+              "Path rule. The travel is remembered on "
+              "the rule itself, as a share of the way. "
+              "Checked from the curve, the rule and its "
+              "memories, and the traveller's real world "
+              "place read across the span. Each step "
+              "ticks only when the scene itself proves "
+              "it.",
+     "steps": ANIM_PATH_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -14631,6 +14987,11 @@ _STEP_SCREENS = {
     ("anim_loop", 1): ("Buddy Model", None, None, None),
     ("anim_loop", 2): ("Buddy Model", None, None, None),
     ("anim_loop", 3): ("Buddy Finish", None, None, None),
+    ("anim_path", 0): ("Buddy Model", None, None, None),
+    ("anim_path", 1): ("Buddy Model", None, None, None),
+    ("anim_path", 2): ("Buddy Model", None, None, None),
+    ("anim_path", 3): ("Buddy Model", None, None, None),
+    ("anim_path", 4): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -15453,7 +15814,11 @@ _COVERAGE_LINES = (
     "parts that move together. A fifth piece, 'Make "
     "it loop', teaches loops - a move with a repeat "
     "rule on its curves, joined end to start so it "
-    "can run for ever. They are first "
+    "can run for ever. A sixth piece, 'Follow a "
+    "path', teaches paths - the journey drawn as a "
+    "curve, the traveller tied to it with a Follow "
+    "Path rule, and the travel remembered on the "
+    "rule. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
