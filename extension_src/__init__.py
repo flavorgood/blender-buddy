@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 8, 0),
+    "version": (3, 9, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -8179,14 +8179,293 @@ ANIM_MOVE_STEPS = [
          "are still on the thing.",
          "3. That is animation's first piece: keyframes - "
          "remember, move, remember again. It is a first "
-         "piece of the craft, not the whole of it: easing, "
-         "characters and cameras are later pieces."],
+         "piece of the craft, not the whole of it: its "
+         "pace - easing and curves - is the next piece, "
+         "and characters and cameras are later pieces."],
      "missing": "Not finished: the file needs a save, "
                 "with the thing's place and facing memories "
                 "still on it.",
      "tools": ["play_it", "save_work"],
      "run": _anim_run_finish,
      "check": _check_anim_finish},
+]
+
+
+def _anim_loc_keyframes(main):
+    """Every keyframe point on the object's location curves,
+    in frame order - the memories whose shape between them
+    is the movement's timing."""
+    pts = []
+    for fc in _anim_fcurves(main):
+        if fc.data_path == "location":
+            pts.extend(fc.keyframe_points)
+    return sorted(pts, key=lambda kp: kp.co.x)
+
+
+def _check_anim_ease_travel(context):
+    return _check_anim_moved(context)
+
+
+def _anim_run_ease_travel(context):
+    _anim_run_moved(context)
+
+
+def _anim_ease_speeds(context, main):
+    """(early, middle, late) average speeds of the travel,
+    read by putting the play line at the span's edges,
+    fifths and middle - the movement's own pace, the way a
+    viewer feels it. None when there is no span to read."""
+    keys = _anim_keys(main, "location")
+    if len(keys) < 2:
+        return None
+    frames = [k[0] for k in keys]
+    first, last = min(frames), max(frames)
+    span = last - first
+    if span < 20:
+        return None
+
+    def speed(f0, f1):
+        a = _anim_eval(context, main, f0, "location")
+        b = _anim_eval(context, main, f1, "location")
+        return math.dist(a, b) / max(1.0, f1 - f0)
+
+    early = speed(first, first + span * 0.15)
+    middle = speed(first + span * 0.35, first + span * 0.65)
+    late = speed(last - span * 0.15, last)
+    return early, middle, late
+
+
+def _check_anim_eased(context):
+    main = _flow_main(context)
+    if main is None or not _check_anim_moved(context):
+        return False
+    pts = _anim_loc_keyframes(main)
+    if len(pts) < 2:
+        return False
+    # The easing must be chosen, not inherited: Blender's
+    # own default curve is already gentle at the ends, so a
+    # pace-only check would tick for free. Every memory
+    # must carry a smooth curve with a real easing picked
+    # for it - and then the pace itself must prove the
+    # shape: slow leaving, full pace in the middle, slow
+    # arriving.
+    for kp in pts:
+        if kp.interpolation != "BEZIER":
+            return False
+        if kp.easing == "AUTO":
+            return False
+    speeds = _anim_ease_speeds(context, main)
+    if speeds is None:
+        return False
+    early, middle, late = speeds
+    if middle <= 0:
+        return False
+    return early <= 0.75 * middle and late <= 0.75 * middle
+
+
+def _anim_run_eased(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if not _check_anim_moved(context):
+        _anim_run_moved(context)
+        main = _flow_pick_main(context)
+        if main is None:
+            return
+    for kp in _anim_loc_keyframes(main):
+        kp.interpolation = "BEZIER"
+        kp.easing = "EASE_IN_OUT"
+
+
+def _check_anim_bent(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    frames = sorted({k[0] for k in keys})
+    if len(frames) < 3:
+        return False
+    first, last = frames[0], frames[-1]
+    a = _anim_eval(context, main, first, "location")
+    b = _anim_eval(context, main, last, "location")
+    for fm in frames[1:-1]:
+        p = _anim_eval(context, main, fm, "location")
+        t = (fm - first) / (last - first)
+        straight = tuple(a[i] + (b[i] - a[i]) * t
+                         for i in range(3))
+        if math.dist(p, straight) >= 0.25:
+            return True
+    return False
+
+
+def _anim_run_bent(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if not _check_anim_eased(context):
+        _anim_run_eased(context)
+        main = _flow_pick_main(context)
+        if main is None:
+            return
+    keys = _anim_keys(main, "location")
+    frames = sorted({k[0] for k in keys})
+    first, last = frames[0], frames[-1]
+    mid = int((first + last) / 2)
+    scene = context.scene
+    here = _anim_eval(context, main, mid, "location")
+    scene.frame_set(mid)
+    main.location = (here[0], here[1] + 1.5, here[2])
+    main.keyframe_insert(data_path="location", frame=mid)
+    # The new memory arrives with Blender's default curve;
+    # give it the same chosen easing as the others, so the
+    # glide survives the bend.
+    for kp in _anim_loc_keyframes(main):
+        kp.interpolation = "BEZIER"
+        kp.easing = "EASE_IN_OUT"
+    scene.frame_end = max(scene.frame_end, int(last))
+
+
+def _check_anim_ease_finish(context):
+    return (_check_saved(context)
+            and _check_anim_eased(context)
+            and _check_anim_bent(context))
+
+
+def _anim_run_ease_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_EASE_STEPS = [
+    {"title": "Start with a move that travels",
+     "skill": "Easing works on a move that already exists: "
+              "two memories, a real journey between them",
+     "how": "The first animation piece taught the trick "
+            "itself: remember a place, move, remember again, "
+            "and Blender fills in between. This piece is "
+            "about HOW it fills in - the pace of the journey. "
+            "A thing that starts at full speed and stops dead "
+            "looks like a machine slamming; a thing that "
+            "eases out, travels, and eases in looks alive. "
+            "Start with a move: use the mover from 'Make it "
+            "move' if you still have it, or let this step "
+            "build the same journey - a place remembered at "
+            "frame 1, a clear move remembered at frame 48.",
+     "teach": [
+         "1. If your mover from the first piece is in the "
+         "scene, pick it - its journey is the raw material.",
+         "2. If not, press Remember where it is right now "
+         "above at frame 1 after adding a box, jump to "
+         "frame 48, move the thing a clear distance, and "
+         "remember again - exactly the first piece's move.",
+         "3. Play it and watch the pace, not the path: it "
+         "sets off and arrives at whatever pace Blender's "
+         "default filling-in gives it. The next steps shape "
+         "that pace on purpose."],
+     "missing": "No travelling move yet - a thing with two "
+                "remembered places, a clear distance apart, "
+                "is the starting point.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_ease_travel,
+     "check": _check_anim_ease_travel},
+    {"title": "Slow the ends, keep the middle",
+     "skill": "Easing: the journey leaves gently, travels "
+              "at full pace, and settles in - never slamming",
+     "how": "Between two memories, Blender draws a curve - "
+            "the movement's pace over time. Left alone, the "
+            "curve's shape is a default; animators choose it. "
+            "The natural choice for most movement is ease in "
+            "and out: slow at the start while the thing gets "
+            "going, full pace through the middle, slow at "
+            "the end as it settles. In Blender that choice "
+            "lives on the memories themselves - a smooth "
+            "(Bezier) curve with the easing picked, instead "
+            "of the automatic one. The tick reads the "
+            "memories for that choice, and then reads the "
+            "real pace at the start, middle and end of the "
+            "journey to prove the shape is really there.",
+     "teach": [
+         "1. Pick the mover, and open the Graph Editor if "
+         "you want to SEE it: the location curves are the "
+         "journey drawn as lines - steep is fast, flat is "
+         "slow.",
+         "2. Select the location memories (in the Graph "
+         "Editor or the Timeline) and set their curve to "
+         "the smooth kind with an ease at both ends - "
+         "Blender's words: Key > Interpolation Mode > "
+         "Bezier, and Easing Mode > Ease In and Out.",
+         "3. Play it again: the same journey, the same "
+         "memories - but it now leaves gently and settles "
+         "in instead of slamming at both ends. That "
+         "difference is easing, and it is most of what "
+         "makes animation feel real."],
+     "missing": "The ends are not slowed yet - the "
+                "memories need the smooth curve with a "
+                "chosen easing, and the pace must show it.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_eased,
+     "check": _check_anim_eased},
+    {"title": "Bend the journey with a middle memory",
+     "skill": "A third memory, off the straight line: the "
+              "path and the timing both bend around it",
+     "how": "Two memories can only travel the straight "
+            "line between them, at the curve's pace. A "
+            "third memory in the middle changes both: the "
+            "journey now passes through that middle place "
+            "at that middle moment, so the path bends - and "
+            "because the thing must BE there at that frame, "
+            "the timing bends with it. This is how animators "
+            "steer: not by pushing the thing around between "
+            "memories, but by adding a memory where the "
+            "journey should pass through. The tick reads "
+            "the middle memory and proves the journey "
+            "really leaves the straight line to reach it.",
+     "teach": [
+         "1. Put the play line halfway through the journey "
+         "(around frame 24 for a 1-to-48 move). The mover "
+         "sits at its halfway place.",
+         "2. Move it off the straight path - a pace or two "
+         "to the side - and press Remember where it is "
+         "right now. A third diamond, in the middle.",
+         "3. Give the new memory the same smooth easing "
+         "as the others, then play it: the journey now "
+         "curves out to the middle place and back, "
+         "arriving there exactly at the middle frame."],
+     "missing": "No middle memory yet - halfway through, "
+                "move the thing off the straight line and "
+                "remember it there.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_bent,
+     "check": _check_anim_bent},
+    {"title": "Watch it glide, then save it",
+     "skill": "Finishing an eased move: played back, and "
+              "saved with its curve and memories in the file",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the whole "
+            "journey once - gentle out, full pace, the bend "
+            "through the middle memory, gentle in - and "
+            "save the file. The curve and the memories are "
+            "saved with the thing, so the glide is in the "
+            "file, not just in this session. The tick checks "
+            "the save, the chosen easing, and the middle "
+            "memory.",
+     "teach": [
+         "1. Go back to the start and press Play / stop "
+         "what moves above (or the space bar). Watch the "
+         "pace and the bend, not just the arrival.",
+         "2. Save the file (Ctrl+S). The tick checks the "
+         "save, and that the easing and the middle memory "
+         "are still on the thing.",
+         "3. That is animation's second piece: easing and "
+         "curves - the pace of a journey is a choice, and "
+         "a middle memory steers it. It is still not the "
+         "whole craft: cameras and characters are later "
+         "pieces."],
+     "missing": "Not finished: the file needs a save, "
+                "with the eased curve and the middle memory "
+                "still on the thing.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_ease_finish,
+     "check": _check_anim_ease_finish},
 ]
 
 
@@ -8345,6 +8624,24 @@ PACKAGES = [
               "them. Each step ticks only when the scene "
               "itself proves it.",
      "steps": ANIM_MOVE_STEPS},
+    {"id": "anim_ease",
+     "kind": "flow",
+     "name": "Make it glide",
+     "byline": "Animation's second piece: easing and "
+               "curves - slow the ends, keep the middle, "
+               "and steer the journey with a middle memory.",
+     "intro": "Buddy's second animation piece - the pace "
+              "of a journey. 'Make it move' taught the "
+              "memories; this piece teaches the filling-in "
+              "between them: easing, so a journey leaves "
+              "gently and settles instead of slamming, and "
+              "a middle memory, so the path and the timing "
+              "bend where the animator says. Checked from "
+              "the memories themselves and the real pace "
+              "read at the journey's start, middle and end. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_EASE_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -13270,6 +13567,10 @@ _STEP_SCREENS = {
     ("anim_move", 2): ("Buddy Model", None, None, None),
     ("anim_move", 3): ("Buddy Model", None, None, None),
     ("anim_move", 4): ("Buddy Finish", None, None, None),
+    ("anim_ease", 0): ("Buddy Model", None, None, None),
+    ("anim_ease", 1): ("Buddy Model", None, None, None),
+    ("anim_ease", 2): ("Buddy Model", None, None, None),
+    ("anim_ease", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -14079,8 +14380,12 @@ _COVERAGE_LINES = (
     "Animation has its first guided piece: 'Make it "
     "move', under Learn by doing - one thing, two "
     "remembered places, a turn remembered the same way, "
-    "and Blender fills in the movement between. It is a "
-    "first piece of the craft, not the whole of it.",
+    "and Blender fills in the movement between. A "
+    "second piece, 'Make it glide', teaches easing "
+    "and curves - slow the ends, keep the middle, "
+    "and steer the journey with a middle memory. "
+    "They are first pieces of the craft, not the "
+    "whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "

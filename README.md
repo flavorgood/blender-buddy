@@ -56,15 +56,19 @@ Honest scope, in plain words:
   away. They
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
-- **Animation has its first guided piece** (v3.8.0):
-  "Make it move", under Learn by doing — the one idea all
-  animation is built from: remember where a thing is at
-  one moment (a keyframe), move it, remember again at a
-  later moment, and Blender fills in the movement
-  between. One thing, moved and turned across two
-  seconds, each step ticking only when the memories
-  themselves and the real travel between them prove it.
-  It is a first piece of the craft, not the whole of it.
+- **Animation has its first guided pieces** (v3.8.0,
+  v3.9.0): "Make it move", under Learn by doing — the one
+  idea all animation is built from: remember where a
+  thing is at one moment (a keyframe), move it, remember
+  again at a later moment, and Blender fills in the
+  movement between. One thing, moved and turned across
+  two seconds, each step ticking only when the memories
+  themselves and the real travel between them prove it —
+  and "Make it glide", which teaches easing and curves:
+  the pace of the journey is a choice (slow the ends,
+  keep the middle), and a middle memory steers both the
+  path and the timing. They are first pieces of the
+  craft, not the whole of it.
 - **The other crafts are not covered yet.** Buddy does
   not teach them, and nothing here should be read as if
   it does.
@@ -204,6 +208,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.9.0: animation's second piece — "Make it glide"
+
+Animation's second piece teaches easing and curves — the pace of a journey, and how a middle memory steers it — in four steps: start with a move that already travels (the first piece's two memories and a real journey between them), slow the ends and keep the middle (the smooth Bezier curve with an easing chosen on the memories, not inherited), bend the journey with a middle memory placed off the straight line (the path and the timing both bend around it), then watch it glide and save. The eased step is checked two ways, because Blender's own default curve is already gentle at the ends and a pace-only check would tick for free: every location memory must carry the smooth curve with a real easing picked for it, and the real pace — read by putting the play line at the span's edges, fifths and middle — must show the ends at no more than three quarters of the middle's pace (reference build: leaving at 0.56 of middle pace, arriving at 0.67, after the bend). The bend step reads the middle memory's place against the straight line between the journey's ends and demands a clear departure (at least a quarter pace). The battery's negative cases prove a plain scene ticks no steps, a travelling move on the default curve does not prove the eased step, and an eased straight journey does not prove the bend. The coverage box now names both animation pieces and still calls them first pieces, not the whole craft; cameras and characters remain later pieces. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all ten flows, plus the anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_ease_final.png — the reference build's red mover at frame 24, sitting on its middle memory, off the straight line between its start and end.
 
 ### v3.8.0: animation's first piece — "Make it move"
 
