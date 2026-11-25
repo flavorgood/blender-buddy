@@ -37,7 +37,7 @@ Honest scope, in plain words:
   go, and the panel's plain-words tools cover the everyday
   modeling jobs. The other guided projects — hard-surface,
   look-real, print-ready — are modeling work too.
-- **Sculpting has its first guided pieces** (v3.3.0, v3.4.0, v3.5.0, v3.6.0):
+- **Sculpting has its first guided pieces** (v3.3.0, v3.4.0, v3.5.0, v3.6.0, v3.7.0):
   "Sculpt it like clay", a guided way of working under Learn by
   doing — a ball of clay blocked into its big forms, remeshed
   for a finer even surface, worked with finer detail, and
@@ -49,8 +49,11 @@ Honest scope, in plain words:
   grows only where you work, on clay that stays coarse
   everywhere else — and "Keep one part safe", which teaches
   masks and face sets: protect the part that is already
-  right, divide the clay into regions, and work the rest.
-  They
+  right, divide the clay into regions, and work the rest —
+  and "Work it at every level", which teaches Multires: one
+  sculpt at several levels of detail, big forms worked low
+  and fine detail high, on a tidy net that is never thrown
+  away. They
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation and the other crafts are not covered yet.** Buddy
@@ -192,6 +195,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.7.0: sculpting's fifth piece — "Work it at every level"
+
+Sculpting's fifth piece teaches Multires — working one sculpt at several levels of detail at once — in five steps: start with tidy, finer clay (the net you start with is the net you keep), give it levels (a Multires modifier subdivided three times; the eye, camera and sculpt level numbers are met where they live), block the big forms at a low sculpt level where the coarse net is forgiving, work the fine detail at the top level where only a fine net can hold it, then finish smooth and save with the levels kept on the clay — never applied away. The checks read the modifier itself (a real Multires stack, at least two levels) and the surface: the big forms displaced, and the fine grain read the clay flow's honest way — smoothing the surface's distance field until only big forms survive and measuring what had to be erased — with the bar probed and set where big smooth forms alone cannot reach it (reference clay: big forms read 0.0037, big forms plus worked detail 0.0069, bar at 0.0055). The battery's negative cases prove a plain ball ticks only step 1, levels with no work tick neither worked step, big forms alone do not tick the detail step, and detail worked without Multires does not tick it either. The coverage box now names all five sculpting pieces and still calls them first pieces, not the whole craft; with Multires taught, every way a sculpt's surface is organised now has a guided piece. Verified on Blender 5.3.0: the flows battery (all eight flows, plus the Multires, masks, DynTopo and symmetry negatives), the interface battery, and the plain-layer and search batteries. The 4.2.5 pass is still owed (no 4.2.5 binary on the build machine), as is the full parallel battery on an unloaded machine. Proof picture: demo/sculpt_multires_final.png — the reference build's finished clay at its top level: the big forms blocked low, reading through the Multires smoothing, with the modifier's three levels still on the file.
 
 ### v3.6.0: sculpting's fourth piece — "Keep one part safe"
 

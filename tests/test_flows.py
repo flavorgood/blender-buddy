@@ -25,13 +25,14 @@ flows = [p for p in bb.PACKAGES if p.get("kind") == "flow"]
 assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "print_ready", "sculpt_clay",
                                     "sculpt_symmetry", "sculpt_dyntopo",
-                                    "sculpt_masks"}, [p["id"] for p in bb.PACKAGES]
+                                    "sculpt_masks",
+                                    "sculpt_multires"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS seven flows registered; every step's "
+print("FLOWS_PASS eight flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -63,6 +64,7 @@ walk("sculpt_clay")
 walk("sculpt_symmetry")
 walk("sculpt_dyntopo")
 walk("sculpt_masks")
+walk("sculpt_multires")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -161,6 +163,41 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[3], checks
 print("FLOWS_PASS sculpt_masks negative: work that drags "
       "the masked patch does not prove protection")
+
+# --- sculpt_multires negatives: the levels must be proven --
+# A plain ball ticks only step 1; Multires levels with no
+# work do not tick the worked steps; big forms alone do not
+# tick the detail step (the detail bar sits where smooth
+# forms cannot reach); and detail worked WITHOUT Multires
+# does not tick it either - the levels are part of the proof.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="sculpt_multires")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS sculpt_multires negative: a plain ball "
+      "ticks only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2] and not checks[3], checks
+print("FLOWS_PASS sculpt_multires negative: levels with no "
+      "work do not prove the worked steps")
+bpy.ops.buddy.tour_do(step=2)
+checks, _current = bb.tour_state(ctx)
+assert checks[2] and not checks[3], checks
+print("FLOWS_PASS sculpt_multires negative: big forms alone "
+      "do not prove fine detail")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="sculpt_multires")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=2)
+bpy.ops.buddy.tour_do(step=3)
+checks, _current = bb.tour_state(ctx)
+assert not checks[3], checks
+print("FLOWS_PASS sculpt_multires negative: detail without "
+      "Multires does not prove the detail step")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")
