@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0, v3.11.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0, v3.12.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -75,8 +75,12 @@ Honest scope, in plain words:
   teaches characters: a skeleton of bones inside the
   character, poses remembered at two moments, and
   parts that move together instead of sliding as one
-  thing. They are first pieces of the
-  craft, not the whole of it.
+  thing — and "Make it loop", which teaches loops: a
+  move with a repeat rule on its curves, joined end
+  to start — the last memory is the first place,
+  reached by a journey out and back — so it can run
+  for ever without jumping. They are first pieces of
+  the craft, not the whole of it.
 - **The other crafts are not covered yet.** Buddy does
   not teach them, and nothing here should be read as if
   it does.
@@ -216,6 +220,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.12.0: animation's fifth piece — "Make it loop"
+
+Animation's fifth piece teaches loops — a move built to repeat — in four steps: start with a move that travels (one thing, remembered at frame 1, moved a clear distance and remembered at frame 48), make it repeat for ever (the Cycles rule on every one of the mover's place curves, so the curve plays again when it runs out), join the ends so it flows (the last memory is the starting place again, reached by a journey out to a middle memory and back, so the repeat flows instead of jumping), then watch it loop and save. The teaching point is that a loop is two halves and both are checked: repetition — the Cycles rule must be on ALL of the mover's place curves, or one axis drifts while the others repeat — and the join — the ends the same place with a real journey in between, read by putting the play line across the span (reference build: 3.16 units out and home, ends exactly together; at frame 72, a full round past the last memory, the mover is back out at its far place, mid-journey in its second round). A probe on Blender 5.3.0 and 4.2.5 before building showed the Cycles rule repeats the curve exactly as drawn on both versions. One defect was found and fixed during the build: the first travelling-move check read the distance between the first and last memories, which a finished loop reads as zero — the step unticked itself when the loop was joined; the check now reads the real excursion in between. The battery's negative cases prove a plain scene ticks no steps, a travelling move alone does not prove the repeat, a repeating straight move does not prove the joined ends, and joined ends without the rule do not prove the repeat. The coverage box now names all five animation pieces and still calls them first pieces, not the whole craft. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all thirteen flows, plus the anim_loop, anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_loop_final.png — the reference build's red mover at frame 24, out at its far place on the ground, halfway through its round.
 
 ### v3.11.0: animation's fourth piece — "Make a character move"
 

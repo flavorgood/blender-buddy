@@ -28,13 +28,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "sculpt_masks",
                                     "sculpt_multires", "anim_move",
                                     "anim_ease", "anim_camera",
-                                    "anim_character"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_character",
+                                    "anim_loop"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS twelve flows registered; every step's "
+print("FLOWS_PASS thirteen flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -71,6 +72,7 @@ walk("anim_move")
 walk("anim_ease")
 walk("anim_camera")
 walk("anim_character")
+walk("anim_loop")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -310,6 +312,40 @@ checks, _current = bb.tour_state(ctx)
 assert checks[2] and not checks[3], checks
 print("FLOWS_PASS anim_character negative: one part moving "
       "does not prove the second part")
+
+# --- anim_loop negatives: the loop must be proven ---------
+# A plain scene ticks no steps (nothing is remembered);
+# a travelling move alone does not tick the repeat step;
+# a repeating straight move does not tick the joined step
+# (its ends are different places, so it would jump); and a
+# joined move with no repeat rule does not tick the repeat
+# step either - both halves of a loop are required.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_loop")
+checks, _current = bb.tour_state(ctx)
+assert not any(checks), checks
+print("FLOWS_PASS anim_loop negative: a plain scene ticks "
+      "no steps")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_loop negative: a travelling move "
+      "alone does not prove the repeat")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_loop negative: a repeating straight "
+      "move does not prove the joined ends")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_loop")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=2)
+checks, _current = bb.tour_state(ctx)
+assert checks[2] and not checks[1], checks
+print("FLOWS_PASS anim_loop negative: joined ends without "
+      "the repeat rule do not prove the repeat")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 11, 0),
+    "version": (3, 12, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -9191,9 +9191,9 @@ ANIM_CHARACTER_STEPS = [
          "proven.",
          "3. That is animation's fourth piece: "
          "characters - a skeleton, poses remembered, "
-         "and parts that move together. With it, "
-         "animation's four named pieces are all "
-         "taught. It is still not the whole craft: "
+         "and parts that move together. The next "
+         "piece makes a move loop. It is still not "
+         "the whole craft: "
          "walking, talking and acting are built on "
          "this, one pose at a time."],
      "missing": "Not finished: the file needs a save, "
@@ -9201,6 +9201,257 @@ ANIM_CHARACTER_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_char_finish,
      "check": _check_char_finish},
+]
+
+def _loop_excursion(context, main):
+    """(span, biggest distance from the starting place at
+    any moment in between, ends' distance apart) for the
+    mover's location memories, all read by putting the
+    play line on the frames themselves."""
+    keys = _anim_keys(main, "location")
+    if len(keys) < 2:
+        return 0.0, 0.0, 0.0
+    frames = [k[0] for k in keys]
+    first, last = int(min(frames)), int(max(frames))
+    if last - first < 1:
+        return 0.0, 0.0, 0.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    far = 0.0
+    frame = first
+    while frame <= last:
+        here = _anim_eval(context, main, frame, "location")
+        far = max(far, math.dist(start, here))
+        frame += step
+    return last - first, far, math.dist(start, end)
+
+
+def _check_loop_move(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    span, far, _ends = _loop_excursion(context, main)
+    return span >= 20 and far >= 1.0
+
+
+def _anim_run_loop_move(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        _anim_run_pick(context)
+        main = _flow_pick_main(context)
+        if main is None:
+            return
+    if _check_loop_move(context):
+        return
+    scene = context.scene
+    start = _anim_eval(context, main, 1, "location")
+    scene.frame_set(1)
+    main.location = start
+    main.keyframe_insert(data_path="location", frame=1)
+    scene.frame_set(48)
+    main.location = (start[0] + 3.0, start[1], start[2] + 1.0)
+    main.keyframe_insert(data_path="location", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _loop_location_curves(main):
+    return [fc for fc in _anim_fcurves(main)
+            if fc.data_path == "location"]
+
+
+def _check_loop_repeat(context):
+    main = _flow_main(context)
+    if main is None or not _check_loop_move(context):
+        return False
+    curves = _loop_location_curves(main)
+    if not curves:
+        return False
+    return all(any(mod.type == "CYCLES" for mod in fc.modifiers)
+               for fc in curves)
+
+
+def _anim_run_loop_repeat(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if not _check_loop_move(context):
+        _anim_run_loop_move(context)
+        main = _flow_pick_main(context)
+        if main is None:
+            return
+    for fc in _loop_location_curves(main):
+        if not any(mod.type == "CYCLES" for mod in fc.modifiers):
+            fc.modifiers.new(type="CYCLES")
+
+
+def _check_loop_joined(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    span, far, ends = _loop_excursion(context, main)
+    return span >= 20 and far >= 1.0 and ends <= 0.05
+
+
+def _anim_run_loop_joined(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if not _check_loop_move(context):
+        _anim_run_loop_move(context)
+        main = _flow_pick_main(context)
+        if main is None:
+            return
+    scene = context.scene
+    keys = _anim_keys(main, "location")
+    frames = [k[0] for k in keys]
+    first, last = int(min(frames)), int(max(frames))
+    start = _anim_eval(context, main, first, "location")
+    mid = (first + last) // 2
+    scene.frame_set(mid)
+    main.location = (start[0] + 3.0, start[1], start[2] + 1.0)
+    main.keyframe_insert(data_path="location", frame=mid)
+    scene.frame_set(last)
+    main.location = start
+    main.keyframe_insert(data_path="location", frame=last)
+    scene.frame_end = max(scene.frame_end, last)
+
+
+def _check_loop_finish(context):
+    return (_check_saved(context)
+            and _check_loop_repeat(context)
+            and _check_loop_joined(context))
+
+
+def _anim_run_loop_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_LOOP_STEPS = [
+    {"title": "Start with a move that travels",
+     "skill": "A loop starts as an ordinary move: one "
+              "thing, remembered at two places",
+     "how": "A loop is a move that repeats - a bobbing "
+            "sign, a circling bird, a blinking light. "
+            "Start the way the first piece started: one "
+            "thing, its place remembered at frame 1, "
+            "moved a clear distance and remembered again "
+            "at frame 48. Nothing repeats yet; this is "
+            "just the journey the loop will repeat. The "
+            "tick reads the memories themselves and the "
+            "real travel between them, the first piece's "
+            "own proof.",
+     "teach": [
+         "1. Pick the thing that will loop, go to frame "
+         "1, and press Remember where it is right now "
+         "above.",
+         "2. Jump to frame 48, move it a clear distance "
+         "- a few steps across the scene - and remember "
+         "again.",
+         "3. Play it once: one journey, start to end, "
+         "then it stops being interesting. Repeating "
+         "it is the next step."],
+     "missing": "No travelling move yet - remember one "
+                "thing's place at two moments at least "
+                "20 frames apart, a clear distance apart.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_loop_move,
+     "check": _check_loop_move},
+    {"title": "Make it repeat for ever",
+     "skill": "The Cycles rule on a memory's curve: "
+              "after the last memory, start again",
+     "how": "Blender can put a rule on a memory's curve "
+            "in the Graph Editor: Cycles - when the curve "
+            "runs out, play it again from the start, for "
+            "ever. Put that rule on EVERY one of the "
+            "mover's place curves (sideways, forwards and "
+            "up-down alike), or only part of the move "
+            "repeats and the rest drifts. The tick reads "
+            "the curves themselves: the rule must be on "
+            "all of them. Probed before building on both "
+            "supported Blenders: the rule repeats the "
+            "curve exactly as drawn.",
+     "teach": [
+         "1. Open the Graph Editor (the curve window) "
+         "and pick the mover - its place curves show as "
+         "three lines.",
+         "2. Select all three place curves, then press "
+         "Shift+E and choose Make Cyclic (F-Modifier), "
+         "the Cycles rule - or add it in the Modifiers "
+         "panel at the curve window's side.",
+         "3. Play past frame 48: the journey starts "
+         "again instead of ending. It repeats - but "
+         "watch the join: it jumps. Joining it smoothly "
+         "is the next step."],
+     "missing": "No repeat rule yet - the mover's place "
+                "curves all need the Cycles rule on them.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_loop_repeat,
+     "check": _check_loop_repeat},
+    {"title": "Join the ends so it flows",
+     "skill": "A smooth loop ends where it began: the "
+              "last memory is the first place, by a "
+              "journey out and back",
+     "how": "Repeating a journey whose end is somewhere "
+            "else makes the thing JUMP back each time. "
+            "A smooth loop ends where it began: remember "
+            "the starting place again at the last frame, "
+            "and give the journey a middle memory out at "
+            "the far place, so the thing travels out and "
+            "comes home instead of teleporting. The tick "
+            "reads the real journey: the ends must be "
+            "the same place, and somewhere in between the "
+            "thing must really have travelled - a thing "
+            "that never leaves home is not a loop, it is "
+            "standing still.",
+     "teach": [
+         "1. Jump to the middle frame (24) and move the "
+         "thing out to its far place; press Remember "
+         "where it is right now.",
+         "2. Jump to the last frame (48), put the thing "
+         "back exactly where it started, and remember "
+         "again there.",
+         "3. Play it through the join at frame 48 into "
+         "the next round: out, home, out again - no "
+         "jump. That unbroken round is a loop."],
+     "missing": "The ends do not join yet - the last "
+                "memory must be the starting place, with "
+                "a real journey out in between.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_loop_joined,
+     "check": _check_loop_joined},
+    {"title": "Watch it loop, then save it",
+     "skill": "Finishing a loop: played through the "
+              "join, and saved with its rule and "
+              "memories in the file",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play from "
+            "the start and let it run PAST the end of "
+            "the memories - two full rounds - and watch "
+            "the join: no jump, no pause, the same "
+            "journey again. Then save the file. The rule "
+            "and the memories are saved with it, so the "
+            "loop still loops when the file is opened "
+            "again. The tick checks the save, the repeat "
+            "rule, and the joined ends.",
+     "teach": [
+         "1. Go back to the start and press Play / stop "
+         "what moves above (or the space bar). Let it "
+         "run through the join twice.",
+         "2. Save the file (Ctrl+S). The tick checks the "
+         "save, and that the loop is still proven.",
+         "3. That is animation's fifth piece: loops - "
+         "a move with a repeat rule, joined end to "
+         "start so it can run for ever. It is still "
+         "not the whole craft: walks, talks and "
+         "performances are built from loops like "
+         "this, one round at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the repeat rule and the joined "
+                "ends still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_loop_finish,
+     "check": _check_loop_finish},
 ]
 
 PACKAGES = [
@@ -9416,6 +9667,27 @@ PACKAGES = [
               "at both ends of the span. Each step ticks "
               "only when the scene itself proves it.",
      "steps": ANIM_CHARACTER_STEPS},
+    {"id": "anim_loop",
+     "kind": "flow",
+     "name": "Make it loop",
+     "byline": "Animation's fifth piece: loops - "
+               "a move with a repeat rule, joined "
+               "end to start so it can run for ever.",
+     "intro": "Buddy's fifth animation piece - "
+              "loops. The earlier pieces made moves "
+              "that happen once; a loop is a move "
+              "built to repeat: the Cycles rule on "
+              "its curves plays the journey again "
+              "when it runs out, and the ends are "
+              "joined - the last memory is the first "
+              "place, reached by a journey out and "
+              "back - so the repeat flows instead of "
+              "jumping. Checked from the curves "
+              "themselves and the real journey read "
+              "at the frames between the memories. "
+              "Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_LOOP_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -14355,6 +14627,10 @@ _STEP_SCREENS = {
     ("anim_character", 2): ("Buddy Model", None, None, None),
     ("anim_character", 3): ("Buddy Model", None, None, None),
     ("anim_character", 4): ("Buddy Finish", None, None, None),
+    ("anim_loop", 0): ("Buddy Model", None, None, None),
+    ("anim_loop", 1): ("Buddy Model", None, None, None),
+    ("anim_loop", 2): ("Buddy Model", None, None, None),
+    ("anim_loop", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -15174,7 +15450,10 @@ _COVERAGE_LINES = (
     "both ends of the move. A fourth piece, 'Make "
     "a character move', teaches characters - a "
     "skeleton of bones, poses remembered, and "
-    "parts that move together. They are first "
+    "parts that move together. A fifth piece, 'Make "
+    "it loop', teaches loops - a move with a repeat "
+    "rule on its curves, joined end to start so it "
+    "can run for ever. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
