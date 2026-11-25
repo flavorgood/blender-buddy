@@ -26,13 +26,13 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "print_ready", "sculpt_clay",
                                     "sculpt_symmetry", "sculpt_dyntopo",
                                     "sculpt_masks",
-                                    "sculpt_multires"}, [p["id"] for p in bb.PACKAGES]
+                                    "sculpt_multires", "anim_move"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS eight flows registered; every step's "
+print("FLOWS_PASS nine flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -65,6 +65,7 @@ walk("sculpt_symmetry")
 walk("sculpt_dyntopo")
 walk("sculpt_masks")
 walk("sculpt_multires")
+walk("anim_move")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -198,6 +199,34 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[3], checks
 print("FLOWS_PASS sculpt_multires negative: detail without "
       "Multires does not prove the detail step")
+
+
+# --- anim_move negatives: the memories must be proven -------
+# A plain thing ticks only step 1 (it exists, nothing is
+# remembered); one starting memory alone does not tick the
+# moved step; and a second memory at nearly the same place
+# does not prove travel either.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_move")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_move negative: a plain thing ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2] and not checks[3], checks
+print("FLOWS_PASS anim_move negative: one memory alone "
+      "does not prove movement")
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(48)
+main.location = (0.2, 0.0, 0.0)
+main.keyframe_insert(data_path="location", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_move negative: a second memory at "
+      "nearly the same place does not prove travel")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

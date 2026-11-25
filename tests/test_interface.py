@@ -117,7 +117,8 @@ for _line in bb._COVERAGE_LINES:
     assert " ".join(_line.split()) in " ".join(_joined.split()), _line
 assert "Sculpting has its first guided piece" in _joined, _joined
 assert "not the whole of it" in _joined, _joined
-assert "Animation and the other crafts are not taught yet" in _joined, _joined
+assert "Animation has its first guided piece" in _joined, _joined
+assert "The other crafts are not taught yet" in _joined, _joined
 assert "one at a time" in _joined, _joined
 _title_at = _events.index(("label", bb._COVERAGE_TITLE))
 _first_pkg_at = next(i for i, (kind, t) in enumerate(_events)
