@@ -56,8 +56,17 @@ Honest scope, in plain words:
   away. They
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
-- **Animation and the other crafts are not covered yet.** Buddy
-  does not teach them, and nothing here should be read as if
+- **Animation has its first guided piece** (v3.8.0):
+  "Make it move", under Learn by doing — the one idea all
+  animation is built from: remember where a thing is at
+  one moment (a keyframe), move it, remember again at a
+  later moment, and Blender fills in the movement
+  between. One thing, moved and turned across two
+  seconds, each step ticking only when the memories
+  themselves and the real travel between them prove it.
+  It is a first piece of the craft, not the whole of it.
+- **The other crafts are not covered yet.** Buddy does
+  not teach them, and nothing here should be read as if
   it does.
 - The Donut also includes a little sculpting near the end —
   smoothing the icing — as a finishing touch inside a modeling
@@ -195,6 +204,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.8.0: animation's first piece — "Make it move"
+
+Animation arrives the way every craft arrives in Buddy: as its own guided way of working, taught the way the craft actually works. **Make it move** teaches keyframes in five steps: pick one thing, remember where it starts at frame 1, jump later, move it a clear distance and remember again — Blender fills in every frame between the two memories — then give it a turn remembered the same way, watch it play, and save. The checks read the keys themselves (on Blender 4.2 they sit on the action; on 5.x they sit in the keyframe strip's channel bag, reached through the action's slot — one helper reads both, probed on 5.3.0 and 4.2.5 before building) and the real travel and turn, read by putting the play line on the key frames. The battery's negative cases prove a plain thing ticks only step 1, one memory alone proves neither movement nor turn, and a second memory at nearly the same place does not prove travel. The coverage box now names animation's first piece and still calls it a first piece, not the whole craft; the other crafts remain plainly untaught. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all nine flows, plus the anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The 4.2.5 passes owed for v3.4.0–v3.7.0 were also run this cycle at the v3.8.0 source, which contains those flows unchanged. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_move_final.png — the reference build's mover at frame 24, mid-travel and mid-turn between its two memories.
 
 ### v3.7.0: sculpting's fifth piece — "Work it at every level"
 

@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 7, 0),
+    "version": (3, 8, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -7876,6 +7876,320 @@ SCULPT_MULTIRES_STEPS = [
 ]
 
 
+def _anim_fcurves(obj):
+    """Every fcurve on the object's action, read the way the
+    running Blender stores them: 4.2 keeps them on the action
+    itself; 5.x keeps them in the keyframe strip's channel
+    bag, which is a call that wants the action's slot. Probed
+    on Blender 5.3.0 and 4.2.5 before building - both read
+    back the same keys through this one helper."""
+    if obj is None:
+        return []
+    ad = obj.animation_data
+    if ad is None or ad.action is None:
+        return []
+    act = ad.action
+    fcs = getattr(act, "fcurves", None)
+    if fcs is not None:
+        return list(fcs)
+    slot = getattr(ad, "action_slot", None)
+    out = []
+    for layer in getattr(act, "layers", ()):
+        for strip in layer.strips:
+            cb = getattr(strip, "channelbag", None)
+            if cb is None:
+                continue
+            try:
+                bag = cb(slot=slot) if callable(cb) else cb
+            except Exception:
+                continue
+            if bag is not None:
+                out.extend(list(bag.fcurves))
+    return out
+
+
+def _anim_keys(obj, path):
+    """Every key on one data path, all axes, as (frame,
+    value) pairs in frame order."""
+    keys = []
+    for fc in _anim_fcurves(obj):
+        if fc.data_path == path:
+            keys.extend((kp.co.x, kp.co.y)
+                        for kp in fc.keyframe_points)
+    return sorted(keys)
+
+
+def _anim_eval(context, obj, frame, attr):
+    """The object's animated value of one property at one
+    frame, read by putting the play line there - the same
+    values the window would show. The play line is put back
+    where it was afterwards."""
+    scene = context.scene
+    here = scene.frame_current
+    scene.frame_set(int(frame))
+    value = tuple(getattr(obj, attr))
+    scene.frame_set(here)
+    return value
+
+
+def _check_anim_pick(context):
+    return _flow_main(context) is not None
+
+
+def _anim_run_pick(context):
+    if _flow_main(context) is None:
+        bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
+        main = context.object
+        if main is not None:
+            main.name = "Mover"
+    _flow_pick_main(context)
+
+
+def _check_anim_start(context):
+    main = _flow_main(context)
+    keys = _anim_keys(main, "location")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    context.scene.frame_set(1)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_move_span(context, main, path, attr, bar):
+    """(span in frames, biggest change between the first and
+    last key, read at those frames) for one animated path."""
+    keys = _anim_keys(main, path)
+    if len(keys) < 2:
+        return 0.0, 0.0
+    frames = [k[0] for k in keys]
+    first, last = min(frames), max(frames)
+    if last - first < 1:
+        return 0.0, 0.0
+    a = _anim_eval(context, main, first, attr)
+    b = _anim_eval(context, main, last, attr)
+    change = max(abs(b[i] - a[i]) for i in range(3))
+    if path == "location":
+        change = math.dist(a, b)
+    return last - first, change
+
+
+def _check_anim_moved(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    span, change = _anim_move_span(context, main, "location",
+                                   "location", 1.0)
+    return span >= 20 and change >= 1.0
+
+
+def _anim_run_moved(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    scene = context.scene
+    start = _anim_eval(context, main, 1, "location")
+    if not _check_anim_start(context):
+        scene.frame_set(1)
+        main.keyframe_insert(data_path="location", frame=1)
+        start = tuple(main.location)
+    scene.frame_set(48)
+    main.location = (start[0] + 3.0, start[1], start[2] + 1.0)
+    main.keyframe_insert(data_path="location", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_anim_turned(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    span, change = _anim_move_span(context, main,
+                                   "rotation_euler",
+                                   "rotation_euler", 0.3)
+    return span >= 20 and change >= 0.3
+
+
+def _anim_run_turned(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    scene = context.scene
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        base = _anim_eval(context, main, 1, "rotation_euler")
+        scene.frame_set(1)
+        main.rotation_euler = base
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=1)
+    top = _anim_eval(context, main, 48, "rotation_euler")
+    scene.frame_set(48)
+    main.rotation_euler = (top[0], top[1], top[2] + 1.2)
+    main.keyframe_insert(data_path="rotation_euler", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_anim_finish(context):
+    return (_check_saved(context)
+            and _check_anim_moved(context)
+            and _check_anim_turned(context))
+
+
+def _anim_run_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_MOVE_STEPS = [
+    {"title": "Pick the thing that will move",
+     "skill": "One thing, chosen: animation starts with a "
+              "single mover, not a scene full of them",
+     "how": "Every animation in Blender is one simple idea, "
+            "repeated: you remember where a thing is at one "
+            "moment, move it, and remember again at a later "
+            "moment - and Blender fills in the movement "
+            "between the two memories. This piece teaches "
+            "that idea on one thing, moved and turned. Start "
+            "by picking the thing: any shape you already "
+            "have, or a fresh box here.",
+     "teach": [
+         "1. Press Add a box above, or click a shape of "
+         "your own so it is outlined orange - that is the "
+         "thing that will move.",
+         "2. Leave it where it is for now. Its starting "
+         "place is the first thing you will remember, next "
+         "step.",
+         "3. Look at the strip along the bottom of the "
+         "window - the Timeline. Its numbers are frames, "
+         "the still pictures animation is made of; the "
+         "blue line is where you are in time."],
+     "missing": "Nothing to move yet - add a box, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts",
+     "skill": "The first keyframe: a thing's place, "
+              "remembered at frame 1",
+     "how": "A keyframe is a memory: this thing, in this "
+            "place, at this frame. Put the play line at "
+            "frame 1 and remember the thing's place there, "
+            "and Blender writes the first memory down - it "
+            "shows as a yellow diamond on the Timeline. One "
+            "memory alone is not movement yet; it is the "
+            "anchor the movement will be measured from. The "
+            "tick reads the memory itself: a real key on the "
+            "thing's place, at the start.",
+     "teach": [
+         "1. Put the play line at the very start: press Go "
+         "back to the start above, or click frame 1 on the "
+         "Timeline.",
+         "2. With the thing picked, press Remember where "
+         "it is right now above (Blender's own way: hover "
+         "over the 3D window and press I). A yellow diamond "
+         "appears at frame 1.",
+         "3. That diamond is the whole trick, half done: "
+         "one place, remembered. Movement needs a second "
+         "memory, later - next step."],
+     "missing": "No starting memory yet - go to frame 1 and "
+                "remember the thing's place there.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_start,
+     "check": _check_anim_start},
+    {"title": "Move it, and remember again",
+     "skill": "The second keyframe: a later place, and "
+              "Blender fills in everything between",
+     "how": "Now the second half of the trick. Jump "
+            "forward in time, move the thing somewhere "
+            "clearly different, and remember again. Two "
+            "memories, two places, and Blender works out "
+            "every frame in between on its own - that "
+            "filling-in is the animation. The tick reads "
+            "both memories and the real distance between "
+            "the places they hold: keys too close together "
+            "in time, or a move too small to see, do not "
+            "prove it.",
+     "teach": [
+         "1. Click a later frame on the Timeline - frame "
+         "48 is a good span (about two seconds). Or type "
+         "the number into the Current Frame box.",
+         "2. Move the thing a clear distance: drag it with "
+         "the Move tool, or press G and pull it a few "
+         "paces to the side and a little up.",
+         "3. Press Remember where it is right now again. "
+         "Second diamond. Now press Go back to the start "
+         "and Play (space bar) - the thing travels on its "
+         "own. That travelling is yours: two memories, "
+         "nothing more."],
+     "missing": "No second memory yet - jump to a later "
+                "frame, move the thing a clear distance, "
+                "and remember again.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_moved,
+     "check": _check_anim_moved},
+    {"title": "Give it a turn as well",
+     "skill": "Turning is remembered the same way: two "
+              "memories of a facing, filled in between",
+     "how": "Places are not the only thing a keyframe can "
+            "remember - a thing's facing is remembered the "
+            "same way, and so are its size and almost every "
+            "setting in Blender. Give the mover a turn "
+            "across the same span: facing remembered at the "
+            "start, turned and remembered at the end, and "
+            "the spin between fills itself in exactly the "
+            "way the travel did. The tick reads the facing "
+            "memories and the real turn between them.",
+     "teach": [
+         "1. Go back to frame 1 and press Remember where "
+         "it is right now - that remembers its facing at "
+         "the start too.",
+         "2. Jump to your later frame (48), turn the "
+         "thing - press R and swing it, a good clear "
+         "turn - and press Remember again.",
+         "3. Play it: the thing now travels AND turns, "
+         "both from memories. Two ideas - place and "
+         "facing - are most of all animation you will "
+         "ever make."],
+     "missing": "No turn yet - remember its facing at "
+                "frame 1, turn it at the later frame, and "
+                "remember again.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_turned,
+     "check": _check_anim_turned},
+    {"title": "Watch it, then save it",
+     "skill": "Finishing a first animation: played back, "
+              "and saved with its memories in the file",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "animation through once from the start - the "
+            "travel and the turn, filled in between your "
+            "memories - and save the file. The keys are "
+            "saved with the thing, so tomorrow this file "
+            "opens with the movement still in it, ready to "
+            "watch or to extend. The tick checks the save "
+            "and that both sets of memories are still on "
+            "the thing.",
+     "teach": [
+         "1. Go back to the start and press Play / stop "
+         "what moves above (or the space bar). Watch the "
+         "whole span once.",
+         "2. Save the file (Ctrl+S). The tick checks the "
+         "save, and that the place and facing memories "
+         "are still on the thing.",
+         "3. That is animation's first piece: keyframes - "
+         "remember, move, remember again. It is a first "
+         "piece of the craft, not the whole of it: easing, "
+         "characters and cameras are later pieces."],
+     "missing": "Not finished: the file needs a save, "
+                "with the thing's place and facing memories "
+                "still on it.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_finish,
+     "check": _check_anim_finish},
+]
+
+
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -8014,6 +8328,23 @@ PACKAGES = [
               "the modifier's levels and the surface's own "
               "forms and fine grain.",
      "steps": SCULPT_MULTIRES_STEPS},
+    {"id": "anim_move",
+     "kind": "flow",
+     "name": "Make it move",
+     "byline": "Animation's first piece: keyframes - "
+               "remember a place, move, remember again, "
+               "and Blender fills in the movement.",
+     "intro": "Buddy's first animation piece - the one "
+              "idea all animation is built from. A keyframe "
+              "is a memory of where a thing is at one "
+              "moment; two memories at two moments, and "
+              "Blender fills in every frame between them. "
+              "One thing, moved and turned across two "
+              "seconds, checked from the memories "
+              "themselves and the real travel between "
+              "them. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_MOVE_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -12934,6 +13265,11 @@ _STEP_SCREENS = {
     ("sculpt_multires", 2): ("Buddy Model", None, None, None),
     ("sculpt_multires", 3): ("Buddy Model", None, None, None),
     ("sculpt_multires", 4): ("Buddy Finish", None, None, None),
+    ("anim_move", 0): ("Buddy Model", None, None, None),
+    ("anim_move", 1): ("Buddy Model", None, None, None),
+    ("anim_move", 2): ("Buddy Model", None, None, None),
+    ("anim_move", 3): ("Buddy Model", None, None, None),
+    ("anim_move", 4): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -13740,7 +14076,12 @@ _COVERAGE_LINES = (
     "sculpt at several levels of detail, big forms low "
     "and fine detail high. They are first pieces of the "
     "craft, not the whole of it.",
-    "Animation and the other crafts are not taught yet.",
+    "Animation has its first guided piece: 'Make it "
+    "move', under Learn by doing - one thing, two "
+    "remembered places, a turn remembered the same way, "
+    "and Blender fills in the movement between. It is a "
+    "first piece of the craft, not the whole of it.",
+    "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "
     "made the way a model is.",
