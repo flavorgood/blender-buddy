@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 9, 0),
+    "version": (3, 10, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -8458,14 +8458,346 @@ ANIM_EASE_STEPS = [
          "3. That is animation's second piece: easing and "
          "curves - the pace of a journey is a choice, and "
          "a middle memory steers it. It is still not the "
-         "whole craft: cameras and characters are later "
-         "pieces."],
+         "whole craft: characters are a later piece, "
+         "and cameras are the next piece."],
      "missing": "Not finished: the file needs a save, "
                 "with the eased curve and the middle memory "
                 "still on the thing.",
      "tools": ["play_it", "save_work"],
      "run": _anim_run_ease_finish,
      "check": _check_anim_ease_finish},
+]
+
+
+def _anim_camera(context):
+    return context.scene.camera
+
+
+def _anim_subject(context):
+    return _flow_main(context)
+
+
+def _anim_cam_pick(context):
+    cam = _anim_camera(context)
+    if cam is None:
+        return None
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    cam.select_set(True)
+    context.view_layer.objects.active = cam
+    return cam
+
+
+def _anim_aim_euler(cam_loc, target_loc):
+    """The camera rotation that looks from cam_loc at
+    target_loc - Blender cameras look down their own -Z."""
+    from mathutils import Vector
+    direction = Vector(target_loc) - Vector(cam_loc)
+    if direction.length <= 0:
+        return (0.0, 0.0, 0.0)
+    return tuple(direction.to_track_quat("-Z", "Y").to_euler())
+
+
+def _anim_cam_angle(context, cam, frame):
+    """How far off the subject the camera is looking at one
+    frame, in radians - read by putting the play line there
+    and comparing the camera's real facing with the line to
+    the subject. None when there is nothing to read."""
+    subj = _anim_subject(context)
+    if cam is None or subj is None:
+        return None
+    from mathutils import Euler, Vector
+    loc = _anim_eval(context, cam, frame, "location")
+    rot = _anim_eval(context, cam, frame, "rotation_euler")
+    target = _anim_eval(context, subj, frame, "location")
+    to_subj = Vector(target) - Vector(loc)
+    if to_subj.length <= 0:
+        return None
+    facing = Euler(rot, "XYZ").to_quaternion() @ Vector((0, 0, -1))
+    return facing.angle(to_subj)
+
+
+def _check_anim_cam_setup(context):
+    return (_anim_camera(context) is not None
+            and _anim_subject(context) is not None)
+
+
+def _anim_run_cam_setup(context):
+    if _anim_subject(context) is None:
+        bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
+        subj = context.object
+        if subj is not None:
+            subj.name = "Subject"
+    cam = _anim_camera(context)
+    if cam is None:
+        bpy.ops.object.camera_add(location=(9.0, -9.0, 5.0))
+        cam = context.object
+        context.scene.camera = cam
+    cam = _anim_cam_pick(context)
+    subj = _anim_subject(context)
+    if cam is not None and subj is not None:
+        cam.location = (9.0, -9.0, 5.0)
+        cam.rotation_euler = _anim_aim_euler(cam.location,
+                                             subj.location)
+
+
+def _check_anim_cam_start(context):
+    cam = _anim_camera(context)
+    if cam is None:
+        return False
+    keys = _anim_keys(cam, "location")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_cam_start(context):
+    cam = _anim_cam_pick(context)
+    if cam is None:
+        _anim_run_cam_setup(context)
+        cam = _anim_cam_pick(context)
+        if cam is None:
+            return
+    context.scene.frame_set(1)
+    cam.keyframe_insert(data_path="location", frame=1)
+    cam.keyframe_insert(data_path="rotation_euler", frame=1)
+
+
+def _check_anim_cam_moved(context):
+    cam = _anim_camera(context)
+    if cam is None:
+        return False
+    span, change = _anim_move_span(context, cam, "location",
+                                   "location", 1.0)
+    return span >= 20 and change >= 1.0
+
+
+def _anim_run_cam_moved(context):
+    cam = _anim_cam_pick(context)
+    if cam is None:
+        return
+    scene = context.scene
+    if not _check_anim_cam_start(context):
+        _anim_run_cam_start(context)
+        cam = _anim_cam_pick(context)
+        if cam is None:
+            return
+    scene.frame_set(48)
+    cam.location = (-7.0, -9.0, 4.0)
+    cam.keyframe_insert(data_path="location", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_anim_cam_aimed(context):
+    cam = _anim_camera(context)
+    if cam is None or not _check_anim_cam_moved(context):
+        return False
+    keys = _anim_keys(cam, "rotation_euler")
+    if len(keys) < 2:
+        return False
+    frames = [k[0] for k in keys]
+    if max(frames) - min(frames) < 20:
+        return False
+    loc_keys = _anim_keys(cam, "location")
+    loc_frames = [k[0] for k in loc_keys]
+    for frame in (min(loc_frames), max(loc_frames)):
+        angle = _anim_cam_angle(context, cam, frame)
+        if angle is None or angle > 0.30:
+            return False
+    return True
+
+
+def _anim_run_cam_aimed(context):
+    cam = _anim_cam_pick(context)
+    if cam is None:
+        return
+    if not _check_anim_cam_moved(context):
+        _anim_run_cam_moved(context)
+        cam = _anim_cam_pick(context)
+        if cam is None:
+            return
+    subj = _anim_subject(context)
+    if subj is None:
+        return
+    loc_keys = _anim_keys(cam, "location")
+    frames = sorted({int(k[0]) for k in loc_keys})
+    scene = context.scene
+    for frame in (frames[0], frames[-1]):
+        loc = _anim_eval(context, cam, frame, "location")
+        target = _anim_eval(context, subj, frame, "location")
+        scene.frame_set(frame)
+        cam.rotation_euler = _anim_aim_euler(loc, target)
+        cam.keyframe_insert(data_path="rotation_euler",
+                            frame=frame)
+
+
+def _check_anim_cam_finish(context):
+    return (_check_saved(context)
+            and _check_anim_cam_moved(context)
+            and _check_anim_cam_aimed(context))
+
+
+def _anim_run_cam_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_CAMERA_STEPS = [
+    {"title": "Set up the shot",
+     "skill": "A shot is two things: a subject, and a "
+              "camera placed and aimed at it",
+     "how": "The first two animation pieces moved a thing. "
+            "This piece moves the camera itself - and a "
+            "camera is moved and remembered exactly the way "
+            "a thing is, because in Blender a camera IS a "
+            "thing: it has a place, a facing, and it can "
+            "carry memories. Start with the shot set up: a "
+            "subject worth filming, and the scene's camera "
+            "placed a few paces away and aimed at it, so "
+            "looking through the camera frames the subject. "
+            "The tick reads the scene itself: a camera set "
+            "as the scene's camera, and a shape to film.",
+     "teach": [
+         "1. Have a subject in the scene - any shape you "
+         "already have, or a fresh box here.",
+         "2. If the scene has no camera, press Add a "
+         "camera above. The scene's starting camera is "
+         "fine too - it is already the scene's camera.",
+         "3. Place the camera a few paces from the "
+         "subject and aim it: pick the camera, drag it "
+         "into place, and use Move the camera to what I'm "
+         "looking at, or turn it until Look through the "
+         "camera frames the subject."],
+     "missing": "The shot is not set up yet - the scene "
+                "needs its camera, and a shape to film.",
+     "tools": ["add_camera", "camera_here", "look_camera"],
+     "run": _anim_run_cam_setup,
+     "check": _check_anim_cam_setup},
+    {"title": "Remember the camera's first place",
+     "skill": "The camera's first keyframe: where the shot "
+              "starts, place and facing both remembered",
+     "how": "A camera move is two memories of the camera, "
+            "exactly the way a thing's move is two memories "
+            "of the thing. Put the play line at frame 1 and "
+            "remember the camera's place AND its facing "
+            "there - the facing matters, because a camera "
+            "that travels without its facing remembered "
+            "keeps staring wherever it stared at the start. "
+            "The tick reads the camera's own memories: a "
+            "real key on its place, at the start.",
+     "teach": [
+         "1. Put the play line at frame 1: press Go back "
+         "to the start above, or click frame 1 on the "
+         "Timeline.",
+         "2. Pick the camera - click its outline in the "
+         "scene, or its name in the list of things.",
+         "3. Press Remember where it is right now above. "
+         "A yellow diamond appears at frame 1: the shot's "
+         "starting place and facing, remembered."],
+     "missing": "No starting memory on the camera yet - "
+                "go to frame 1, pick the camera, and "
+                "remember where it is.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_cam_start,
+     "check": _check_anim_cam_start},
+    {"title": "Move the camera, and remember again",
+     "skill": "The camera's second keyframe: a new place "
+              "later, and Blender fills in the travelling "
+              "shot between",
+     "how": "Jump forward in time, move the camera to a "
+            "clearly different place - around the subject, "
+            "closer, lower - and remember again. Two places "
+            "remembered, and Blender fills in the journey "
+            "between them: that filling-in, seen through "
+            "the camera, is a travelling shot, the move "
+            "every film is built from. Do not worry about "
+            "the aim yet - the next step fixes the facing. "
+            "The tick reads both memories and the real "
+            "distance the camera travels between them.",
+     "teach": [
+         "1. Click a later frame on the Timeline - frame "
+         "48 is a good span (about two seconds).",
+         "2. Move the camera a clear distance: drag it "
+         "with the Move tool, or press G and pull it "
+         "several paces to a new side of the subject.",
+         "3. Press Remember where it is right now again. "
+         "Second diamond. Play it and look THROUGH the "
+         "camera (Look through the camera): the view "
+         "travels, even if it drifts off the subject - "
+         "that drift is the next step's job."],
+     "missing": "No second memory yet - jump to a later "
+                "frame, move the camera a clear distance, "
+                "and remember again.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_cam_moved,
+     "check": _check_anim_cam_moved},
+    {"title": "Aim it at the subject again",
+     "skill": "The facing is remembered too: at both ends "
+              "of the move, the camera must be looking at "
+              "the subject",
+     "how": "A moved camera keeps its old facing unless "
+            "the facing is remembered at the new place - "
+            "and a travelling shot whose subject drifts "
+            "out of frame is a missed shot. So aim the "
+            "camera at the subject at BOTH ends of the "
+            "move and remember the facing at each: Blender "
+            "then turns the camera smoothly through the "
+            "journey, keeping the subject framed the whole "
+            "way - the camera operator's pan, done with "
+            "memories. The tick proves the aim itself: it "
+            "puts the play line on the first and last "
+            "memories and reads where the camera is really "
+            "looking at each, against the subject's place.",
+     "teach": [
+         "1. Go back to frame 1, pick the camera, and "
+         "turn it until the subject sits in its frame - "
+         "Move the camera to what I'm looking at is the "
+         "quick way, lining your view on the subject "
+         "first. Press Remember where it is right now.",
+         "2. Jump to the later frame (48) and do the same "
+         "there: aim at the subject from the new place, "
+         "and remember again.",
+         "3. Play it through the camera: the view travels "
+         "AND turns, and the subject stays in frame the "
+         "whole way. That staying-in-frame is the aim "
+         "doing its work."],
+     "missing": "The aim is not proven yet - the camera's "
+                "facing must be remembered at both ends, "
+                "and at both ends it must really be looking "
+                "at the subject.",
+     "tools": ["look_camera", "remember_pose"],
+     "run": _anim_run_cam_aimed,
+     "check": _check_anim_cam_aimed},
+    {"title": "Watch the move, then save it",
+     "skill": "Finishing a camera move: watched through "
+              "the camera itself, and saved with its "
+              "memories in the file",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Watch this "
+            "one through the camera - it is the only view "
+            "that is the actual shot - played from the "
+            "start: the travel, the turn, the subject held "
+            "in frame. Then save the file. The camera's "
+            "memories are saved with it, so the shot is in "
+            "the file, ready to render or extend. The tick "
+            "checks the save, the travel, and the aim at "
+            "both ends.",
+     "teach": [
+         "1. Press Look through the camera, go back to "
+         "the start, and press Play / stop what moves "
+         "above (or the space bar). Watch the whole shot.",
+         "2. Save the file (Ctrl+S). The tick checks the "
+         "save, and that the camera's travel and aim are "
+         "still proven.",
+         "3. That is animation's third piece: cameras - "
+         "the camera is a thing that moves and turns on "
+         "memories, and its facing is remembered like "
+         "anything else. It is still not the whole "
+         "craft: characters are a later piece."],
+     "missing": "Not finished: the file needs a save, "
+                "with the camera's travel and aim still "
+                "proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_cam_finish,
+     "check": _check_anim_cam_finish},
 ]
 
 
@@ -8642,6 +8974,27 @@ PACKAGES = [
               "Each step ticks only when the scene itself "
               "proves it.",
      "steps": ANIM_EASE_STEPS},
+    {"id": "anim_camera",
+     "kind": "flow",
+     "name": "Move the camera",
+     "byline": "Animation's third piece: cameras - the "
+               "camera is a thing that travels and turns "
+               "on memories, and its facing is remembered "
+               "like anything else.",
+     "intro": "Buddy's third animation piece - the "
+              "travelling shot. 'Make it move' taught "
+              "memories on a thing; this piece puts the "
+              "memories on the camera itself: a shot set "
+              "up and aimed, the camera's place and facing "
+              "remembered at the start, the camera moved "
+              "and remembered again, then aimed at the "
+              "subject at both ends so the subject stays "
+              "in frame the whole way. Checked from the "
+              "camera's own memories, its real travel, and "
+              "where it is really looking at each end of "
+              "the move. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_CAMERA_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -13571,6 +13924,11 @@ _STEP_SCREENS = {
     ("anim_ease", 1): ("Buddy Model", None, None, None),
     ("anim_ease", 2): ("Buddy Model", None, None, None),
     ("anim_ease", 3): ("Buddy Finish", None, None, None),
+    ("anim_camera", 0): ("Buddy Model", None, None, None),
+    ("anim_camera", 1): ("Buddy Model", None, None, None),
+    ("anim_camera", 2): ("Buddy Model", None, None, None),
+    ("anim_camera", 3): ("Buddy Model", None, None, None),
+    ("anim_camera", 4): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -14384,8 +14742,11 @@ _COVERAGE_LINES = (
     "second piece, 'Make it glide', teaches easing "
     "and curves - slow the ends, keep the middle, "
     "and steer the journey with a middle memory. "
-    "They are first pieces of the craft, not the "
-    "whole of it.",
+    "A third piece, 'Move the camera', teaches "
+    "cameras - the camera travels and turns on "
+    "memories of its own, aimed at the subject at "
+    "both ends of the move. They are first pieces "
+    "of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "
