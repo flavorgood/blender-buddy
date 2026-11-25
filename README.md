@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -84,7 +84,13 @@ Honest scope, in plain words:
   curve, the traveller tied to it with a Follow Path
   rule, and the travel remembered on the rule itself
   as a share of the way, so the thing rides the drawn
-  route corner and all. They are first pieces of
+  route corner and all — and "Bring a second thing
+  along", which teaches following: one leader carries
+  the memories, a second thing is tied to it with
+  Blender's parent tie, keeping its place, and the
+  pair travels together with the gap between them
+  held, the follower needing no memories of its own.
+  They are first pieces of
   the craft, not the whole of it.
 - **The other crafts are not covered yet.** Buddy does
   not teach them, and nothing here should be read as if
@@ -225,6 +231,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.14.0: animation's seventh piece — "Bring a second thing along"
+
+Animation's seventh piece teaches following — two things moving together, one set of memories — in five steps: pick the leader (one thing that will carry the move), give the leader a move that travels (its place remembered at frame 1, moved a clear distance and remembered again at frame 48, the first piece's own way), bring in a second thing (a plain shape sitting a clear step away from the leader — the reference build sets it a step and a half above, riding on top — with no memories of its own), tie it to the leader (Blender's parent tie, made keeping its place, so the follower stays exactly where it sits and is carried from there), then watch them travel together and save. The teaching point is how groups, riders, loads and props actually move in animation: not by remembering every thing's journey separately, but by tying the followers to one leader whose journey is remembered once. The checks read the leader's memories themselves (a span of at least 20 frames, a clear distance travelled), the tie itself (the follower's parent must BE the leader), and the pair's real world places read across the span — the follower must really travel (the reference build's follower travels 3.16 units) and the gap between the pair must hold (the reference gap change is 0.0). A probe on Blender 5.3.0 and 4.2.5 before building showed a tied follower rides its leader's remembered move identically on both versions, its gap unchanged at every frame. One render was rejected on sight during the build: with the follower set a step behind the leader, the proof camera saw only a sliver of it behind the leader's bulk — the reference follower now rides on top, and the pair reads clearly in the proof picture. The battery's negative cases prove a plain scene ticks only step 1, a travelling leader alone does not prove the second thing, a second thing sitting untied does not prove the tie, and a pair tied to a leader that never travels does not prove the finish. The coverage box now names all seven animation pieces and still calls them first pieces, not the whole craft. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all fifteen flows, plus the anim_follow, anim_path, anim_loop, anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_follow_final.png — the reference build's pair at frame 24, halfway through the leader's move: the red leader mid-travel with the orange follower riding on top, the gap held.
 
 ### v3.13.0: animation's sixth piece — "Follow a path"
 
