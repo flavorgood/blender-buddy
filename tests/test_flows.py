@@ -29,13 +29,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "sculpt_multires", "anim_move",
                                     "anim_ease", "anim_camera",
                                     "anim_character",
-                                    "anim_loop", "anim_path"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_loop", "anim_path",
+                                    "anim_follow"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS fourteen flows registered; every step's "
+print("FLOWS_PASS fifteen flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -74,6 +75,7 @@ walk("anim_camera")
 walk("anim_character")
 walk("anim_loop")
 walk("anim_path")
+walk("anim_follow")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -372,6 +374,42 @@ checks, _current = bb.tour_state(ctx)
 assert checks[2] and not checks[3], checks
 print("FLOWS_PASS anim_path negative: tied to the path "
       "with no travel does not prove the journey")
+
+# --- anim_follow negatives: the pair must be proven ------
+# A plain scene ticks only step 1 (the cube is a leader,
+# nothing else); a leader's move alone does not tick the
+# second-thing step; a second thing sitting untied does
+# not tick the tie step; and a tied pair whose leader
+# never travels does not prove the finish - the follower
+# must really be carried.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_follow")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_follow negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2] and not checks[3], checks
+print("FLOWS_PASS anim_follow negative: a travelling leader "
+      "alone does not prove the second thing")
+bpy.ops.buddy.tour_do(step=2)
+checks, _current = bb.tour_state(ctx)
+assert checks[2] and not checks[3] and not checks[4], checks
+print("FLOWS_PASS anim_follow negative: a second thing "
+      "untied does not prove the tie")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_follow")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=2)
+bpy.ops.buddy.tour_do(step=3)
+checks, _current = bb.tour_state(ctx)
+assert checks[3] and not checks[4], checks
+print("FLOWS_PASS anim_follow negative: tied to a leader "
+      "that never travels does not prove the finish")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

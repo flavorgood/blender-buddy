@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 13, 0),
+    "version": (3, 14, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -9778,15 +9778,368 @@ ANIM_PATH_STEPS = [
          "proven.",
          "3. That is animation's sixth piece: paths - "
          "draw the journey, tie the traveller to it, "
-         "and remember the travel on the rule. It is "
-         "still not the whole craft: performances "
-         "are built from pieces like this, one "
-         "journey at a time."],
+         "and remember the travel on the rule. The "
+         "next piece brings a second thing along. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one journey at a time."],
      "missing": "Not finished: the file needs a save, "
                 "with the path journey still proven.",
      "tools": ["play_it", "save_work"],
      "run": _anim_run_path_finish,
      "check": _check_path_finish},
+]
+
+def _follow_leader(context):
+    """The leader: the mesh that carries a travelling
+    move (location memories), or - before any move
+    exists - the scene's main mesh, the first piece's
+    own pick. A follower tied to it is never the leader,
+    however big it is."""
+    meshes = _flow_meshes(context)
+    if not meshes:
+        return None
+    for obj in meshes:
+        if obj.parent is not None:
+            continue
+        if _anim_keys(obj, "location"):
+            return obj
+    return _flow_main(context)
+
+
+def _follow_follower(context, leader):
+    """The second thing: a mesh that is not the leader.
+    A thing already tied to the leader is preferred, so
+    the checks read the real pair once the tie exists."""
+    if leader is None:
+        return None
+    others = [o for o in _flow_meshes(context)
+              if o is not leader]
+    if not others:
+        return None
+    for obj in others:
+        if obj.parent is leader:
+            return obj
+    return others[0]
+
+
+def _follow_pick_leader(context):
+    leader = _follow_leader(context)
+    if leader is None:
+        return None
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    leader.select_set(True)
+    context.view_layer.objects.active = leader
+    return leader
+
+
+def _check_follow_leader(context):
+    return _follow_leader(context) is not None
+
+
+def _check_follow_move(context):
+    leader = _follow_leader(context)
+    if leader is None:
+        return False
+    span, change = _anim_move_span(context, leader,
+                                   "location", "location",
+                                   1.0)
+    return span >= 20 and change >= 1.0
+
+
+def _anim_run_follow_move(context):
+    leader = _follow_pick_leader(context)
+    if leader is None:
+        _anim_run_pick(context)
+        leader = _follow_pick_leader(context)
+        if leader is None:
+            return
+    if _check_follow_move(context):
+        return
+    scene = context.scene
+    start = _anim_eval(context, leader, 1, "location")
+    keys = _anim_keys(leader, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        scene.frame_set(1)
+        leader.location = start
+        leader.keyframe_insert(data_path="location", frame=1)
+    scene.frame_set(48)
+    leader.location = (start[0] + 3.0, start[1],
+                       start[2] + 1.0)
+    leader.keyframe_insert(data_path="location", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_follow_second(context):
+    leader = _follow_leader(context)
+    return _follow_follower(context, leader) is not None
+
+
+def _anim_run_follow_second(context):
+    leader = _follow_pick_leader(context)
+    if leader is None:
+        return
+    if _check_follow_second(context):
+        return
+    scene = context.scene
+    keys = _anim_keys(leader, "location")
+    first = int(min(k[0] for k in keys)) if keys else 1
+    scene.frame_set(first)
+    base = tuple(leader.matrix_world.translation)
+    bpy.ops.mesh.primitive_cube_add(
+        location=(base[0], base[1], base[2] + 1.5))
+    follower = context.object
+    follower.name = "Follower"
+    follower.scale = (0.5, 0.5, 0.5)
+    _follow_pick_leader(context)
+
+
+def _check_follow_tied(context):
+    leader = _follow_leader(context)
+    follower = _follow_follower(context, leader)
+    return (follower is not None
+            and follower.parent is leader
+            and follower.parent_type == "OBJECT")
+
+
+def _anim_run_follow_tied(context):
+    leader = _follow_pick_leader(context)
+    if leader is None:
+        return
+    if not _check_follow_second(context):
+        _anim_run_follow_second(context)
+        leader = _follow_leader(context)
+        if leader is None:
+            return
+    if _check_follow_tied(context):
+        _follow_pick_leader(context)
+        return
+    follower = _follow_follower(context, leader)
+    scene = context.scene
+    keys = _anim_keys(leader, "location")
+    first = int(min(k[0] for k in keys)) if keys else 1
+    scene.frame_set(first)
+    # Tie it the keeping-its-place way: the follower
+    # stays exactly where it sits at this frame, and
+    # the leader carries it from there - the same tie
+    # Blender's own Make Parent (Ctrl+P, Keep
+    # Transform) makes in the window.
+    follower.parent = leader
+    follower.parent_type = "OBJECT"
+    follower.matrix_parent_inverse = \
+        leader.matrix_world.inverted()
+    _follow_pick_leader(context)
+
+
+def _follow_world(context, obj, frame):
+    """One thing's real place in the world at one
+    frame, read from the evaluated scene - a follower
+    is moved by its leader in the world, not in its
+    own place numbers, so the world place is the
+    honest read (the path piece's own way)."""
+    scene = context.scene
+    here = scene.frame_current
+    scene.frame_set(int(frame))
+    deps = context.evaluated_depsgraph_get()
+    pos = tuple(obj.evaluated_get(deps)
+                .matrix_world.translation)
+    scene.frame_set(here)
+    return pos
+
+
+def _follow_travel(context):
+    """(follower's real travel, change in the gap
+    between leader and follower) across the leader's
+    remembered span. A real follow travels AND keeps
+    its distance: travel at least 1.0, the gap steady
+    within 0.05 at both ends."""
+    leader = _follow_leader(context)
+    follower = _follow_follower(context, leader)
+    if leader is None or follower is None:
+        return 0.0, 0.0
+    keys = _anim_keys(leader, "location")
+    if len(keys) < 2:
+        return 0.0, 0.0
+    frames = [k[0] for k in keys]
+    first, last = int(min(frames)), int(max(frames))
+    if last - first < 20:
+        return 0.0, 0.0
+    f_a = _follow_world(context, follower, first)
+    f_b = _follow_world(context, follower, last)
+    l_a = _follow_world(context, leader, first)
+    l_b = _follow_world(context, leader, last)
+    travel = math.dist(f_a, f_b)
+    gap_change = abs(math.dist(f_b, l_b)
+                     - math.dist(f_a, l_a))
+    return travel, gap_change
+
+
+def _check_follow_travel(context):
+    if not _check_follow_tied(context):
+        return False
+    travel, gap_change = _follow_travel(context)
+    return travel >= 1.0 and gap_change <= 0.05
+
+
+def _check_follow_finish(context):
+    return (_check_saved(context)
+            and _check_follow_travel(context))
+
+
+def _anim_run_follow_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_FOLLOW_STEPS = [
+    {"title": "Pick the leader",
+     "skill": "One leader, chosen: a follow starts "
+              "with a single thing the other will "
+              "be carried by",
+     "how": "Every piece so far moved one thing at a "
+            "time. This piece teaches the way animators "
+            "move things TOGETHER: one thing leads - it "
+            "carries the memories - and a second thing "
+            "is tied to it and comes along, keeping its "
+            "distance, with no memories of its own. "
+            "Start by picking the leader: any shape you "
+            "already have, or a fresh box here.",
+     "teach": [
+         "1. Press Add a box above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the leader.",
+         "2. Leave the second thing for later. The "
+         "leader moves first; the follower only needs "
+         "the tie.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The leader's journey will still be "
+         "told in frames; the follower rides those "
+         "same frames."],
+     "missing": "No leader yet - add a box, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_follow_leader},
+    {"title": "Give the leader a move that travels",
+     "skill": "The leader's own move: remembered at "
+              "two places, a real journey between them",
+     "how": "The leader moves the first piece's way: "
+            "its place remembered at frame 1, moved a "
+            "clear distance and remembered again at "
+            "frame 48. The follower will not get "
+            "memories like these - that is the point of "
+            "the tie: one set of memories, two things "
+            "moving. The tick reads the leader's "
+            "memories themselves and the real travel "
+            "between them, the first piece's own proof.",
+     "teach": [
+         "1. Pick the leader, go to frame 1, and press "
+         "Remember where it is right now above.",
+         "2. Jump to frame 48, move it a clear distance "
+         "- a few steps across the scene - and remember "
+         "again.",
+         "3. Play it once: the leader travels. Nothing "
+         "follows yet - the second thing is the next "
+         "step."],
+     "missing": "No travelling move yet - remember the "
+                "leader's place at two moments at least "
+                "20 frames apart, a clear distance apart.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_follow_move,
+     "check": _check_follow_move},
+    {"title": "Bring in a second thing",
+     "skill": "The follower: a second thing, sitting "
+              "at its own place beside the leader",
+     "how": "Add the thing that will be carried: a "
+            "lamp on a cart, a rider on a horse, a hat "
+            "on a head - in this first follow, a plain "
+            "second shape sitting a clear step away "
+            "from the leader, so its coming-along can "
+            "be seen. It needs no memories and no move "
+            "of its own. The tick reads the scene: a "
+            "real second mesh thing, distinct from "
+            "the leader.",
+     "teach": [
+         "1. Press Add a box above - that new box is "
+         "the follower. Place it a clear step away "
+         "from the leader (the reference build sets "
+         "it a step and a half above, riding on top).",
+         "2. Do NOT remember its place - a follower "
+         "with its own memories would fight the tie.",
+         "3. Leave it sitting there. Tying it to the "
+         "leader is the next step."],
+     "missing": "No second thing yet - add one shape "
+                "beside the leader to be carried.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_follow_second,
+     "check": _check_follow_second},
+    {"title": "Tie it to the leader",
+     "skill": "The tie (Blender's parent): the "
+              "follower is fastened to the leader, "
+              "keeping the place it sits in",
+     "how": "Fasten the follower to the leader with "
+            "Blender's parent tie: pick the follower, "
+            "then the leader, and Make Parent keeping "
+            "the transform - the follower stays exactly "
+            "where it sits, and from then on the "
+            "leader's move carries it, the gap between "
+            "them held. The tick reads the tie itself: "
+            "the follower's parent must BE the leader. "
+            "Probed before building on both supported "
+            "Blenders: a tied follower rides its "
+            "leader's remembered move identically on "
+            "each, its gap unchanged at every frame.",
+     "teach": [
+         "1. Click the follower, then Shift-click the "
+         "leader, so the leader is the bright one.",
+         "2. Press Ctrl+P and choose Object (Keep "
+         "Transform) - the follower keeps its place "
+         "and gains the leader as its parent.",
+         "3. Scrub the Timeline: the follower now "
+         "travels with the leader, the same distance "
+         "away at every frame."],
+     "missing": "Not tied yet - the follower's parent "
+                "must be the leader, tied keeping its "
+                "place.",
+     "tools": [],
+     "run": _anim_run_follow_tied,
+     "check": _check_follow_tied},
+    {"title": "Watch them travel together, then save it",
+     "skill": "Finishing a follow: both things really "
+              "travel, the gap held, and the file saved "
+              "with the tie in it",
+     "how": "Finish the way every piece here "
+            "finishes: look at the work, then save it. "
+            "Play the whole span from the start and "
+            "watch the pair travel together - the "
+            "follower carried the whole way, neither "
+            "lagging nor drifting off. Then save the "
+            "file. The tie is saved with it, so the "
+            "pair still travels together when the file "
+            "is opened again. The tick checks the save, "
+            "the follower's real travel read from its "
+            "world place across the span, and the gap "
+            "between the pair - the same at the last "
+            "frame as at the first.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the gap - held distance is the point.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the pair is still proven.",
+         "3. That is animation's seventh piece: "
+         "following - one leader with the memories, "
+         "one follower tied to it, and the pair "
+         "travelling together. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one pair at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the tied pair's travel still "
+                "proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_follow_finish,
+     "check": _check_follow_finish},
 ]
 
 PACKAGES = [
@@ -10044,6 +10397,27 @@ PACKAGES = [
               "ticks only when the scene itself proves "
               "it.",
      "steps": ANIM_PATH_STEPS},
+    {"id": "anim_follow",
+     "kind": "flow",
+     "name": "Bring a second thing along",
+     "byline": "Animation's seventh piece: following - "
+               "one leader with the memories, a second "
+               "thing tied to it, and the pair travelling "
+               "together.",
+     "intro": "Buddy's seventh animation piece - "
+              "following. The earlier pieces moved one "
+              "thing at a time; this piece moves two "
+              "together: the leader carries the "
+              "memories, and a second thing is tied to "
+              "it with Blender's parent tie, keeping "
+              "its place, and is carried the whole way "
+              "with no memories of its own. Checked from "
+              "the tie itself and the pair's real world "
+              "places read across the span - the follower "
+              "must really travel, and the gap between "
+              "the pair must hold. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_FOLLOW_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -14992,6 +15366,11 @@ _STEP_SCREENS = {
     ("anim_path", 2): ("Buddy Model", None, None, None),
     ("anim_path", 3): ("Buddy Model", None, None, None),
     ("anim_path", 4): ("Buddy Finish", None, None, None),
+    ("anim_follow", 0): ("Buddy Model", None, None, None),
+    ("anim_follow", 1): ("Buddy Model", None, None, None),
+    ("anim_follow", 2): ("Buddy Model", None, None, None),
+    ("anim_follow", 3): ("Buddy Model", None, None, None),
+    ("anim_follow", 4): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -15818,7 +16197,11 @@ _COVERAGE_LINES = (
     "path', teaches paths - the journey drawn as a "
     "curve, the traveller tied to it with a Follow "
     "Path rule, and the travel remembered on the "
-    "rule. They are first "
+    "rule. A seventh piece, 'Bring a second thing "
+    "along', teaches following - one leader with "
+    "the memories, a second thing tied to it with "
+    "the parent tie, and the pair travelling "
+    "together with the gap held. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
