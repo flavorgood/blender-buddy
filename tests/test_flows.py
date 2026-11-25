@@ -26,13 +26,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "print_ready", "sculpt_clay",
                                     "sculpt_symmetry", "sculpt_dyntopo",
                                     "sculpt_masks",
-                                    "sculpt_multires", "anim_move"}, [p["id"] for p in bb.PACKAGES]
+                                    "sculpt_multires", "anim_move",
+                                    "anim_ease"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS nine flows registered; every step's "
+print("FLOWS_PASS ten flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -66,6 +67,7 @@ walk("sculpt_dyntopo")
 walk("sculpt_masks")
 walk("sculpt_multires")
 walk("anim_move")
+walk("anim_ease")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -227,6 +229,30 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[2], checks
 print("FLOWS_PASS anim_move negative: a second memory at "
       "nearly the same place does not prove travel")
+
+# --- anim_ease negatives: the pace must be chosen ------------
+# A plain thing ticks nothing (there is no journey to ease);
+# a travelling move on Blender's default curve does not tick
+# the eased step (the default is already gentle - the easing
+# must be CHOSEN on the memories, not inherited); and an
+# eased two-memory journey does not tick the bend step.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_ease")
+checks, _current = bb.tour_state(ctx)
+assert not any(checks), checks
+print("FLOWS_PASS anim_ease negative: a plain scene ticks "
+      "no steps")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_ease negative: a default-curve move "
+      "does not prove the eased step")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_ease negative: an eased straight "
+      "journey does not prove the bend step")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")
