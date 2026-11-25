@@ -27,13 +27,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "sculpt_symmetry", "sculpt_dyntopo",
                                     "sculpt_masks",
                                     "sculpt_multires", "anim_move",
-                                    "anim_ease", "anim_camera"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_ease", "anim_camera",
+                                    "anim_character"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS eleven flows registered; every step's "
+print("FLOWS_PASS twelve flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -69,6 +70,7 @@ walk("sculpt_multires")
 walk("anim_move")
 walk("anim_ease")
 walk("anim_camera")
+walk("anim_character")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -282,6 +284,32 @@ checks, _current = bb.tour_state(ctx)
 assert checks[2] and not checks[3], checks
 print("FLOWS_PASS anim_camera negative: a moved camera with "
       "its old facing does not prove the aim")
+
+# --- anim_character negatives: the parts must be proven ----
+# A plain factory scene ticks NO steps (it has no skeleton
+# at all - probed before building); a character with only
+# its first pose remembered does not tick the moved step;
+# and one part moving alone does not tick the second-part
+# step.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_character")
+checks, _current = bb.tour_state(ctx)
+assert not any(checks), checks
+print("FLOWS_PASS anim_character negative: a plain scene "
+      "ticks no steps")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and checks[1] and not checks[2] \
+    and not checks[3], checks
+print("FLOWS_PASS anim_character negative: one pose alone "
+      "does not prove a moved part")
+bpy.ops.buddy.tour_do(step=2)
+checks, _current = bb.tour_state(ctx)
+assert checks[2] and not checks[3], checks
+print("FLOWS_PASS anim_character negative: one part moving "
+      "does not prove the second part")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

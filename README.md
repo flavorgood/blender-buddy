@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -71,7 +71,11 @@ Honest scope, in plain words:
   teaches cameras: the camera itself travels and turns
   on memories of its own, aimed at the subject at both
   ends of the move so the subject stays in frame the
-  whole way. They are first pieces of the
+  whole way — and "Make a character move", which
+  teaches characters: a skeleton of bones inside the
+  character, poses remembered at two moments, and
+  parts that move together instead of sliding as one
+  thing. They are first pieces of the
   craft, not the whole of it.
 - **The other crafts are not covered yet.** Buddy does
   not teach them, and nothing here should be read as if
@@ -212,6 +216,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.11.0: animation's fourth piece — "Make a character move"
+
+Animation's fourth piece teaches characters — moving in parts, on a skeleton — in five steps: build a simple character (an armature of three bones — a body, an arm, a head — with a plain part tied to each), remember its first pose at frame 1 (the bones' facings, remembered the way a place is), change the pose and remember again at frame 48 (one bone turned, and Blender fills in the swing), make a second part move too (a different bone, posed and remembered the same way), then watch it move and save. The teaching point is the first piece's idea split into parts: a character does not move as one thing — each bone carries its own two memories, and the performance is the parts together. The checks read the skeleton itself: a real armature with at least three bones, a starting pose remembered, and each moved part's real turn read from the pose at its first and last remembered moments (at least 0.3 radians across at least 20 frames; reference build: the arm turns 0.9, the head 0.55). A probe on Blender 5.3.0 and 4.2.5 before building showed the factory scene has no armature at all, so nothing ticks for free, and that pose bones arrive set to quaternion turns — the reference build sets each bone to plain turns before remembering it. The battery's negative cases prove a plain scene ticks no steps, one pose alone does not prove a moved part, and one part moving alone does not prove the second part. The coverage box now names all four animation pieces and still calls them first pieces, not the whole craft; with characters taught, animation's four named pieces are complete. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all twelve flows, plus the anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_character_final.png — the reference build's character at frame 24, halfway through its move, the arm mid-swing and the head mid-tilt.
 
 ### v3.10.0: animation's third piece — "Move the camera"
 

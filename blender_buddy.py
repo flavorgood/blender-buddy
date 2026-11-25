@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 10, 0),
+    "version": (3, 11, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -8791,7 +8791,7 @@ ANIM_CAMERA_STEPS = [
          "the camera is a thing that moves and turns on "
          "memories, and its facing is remembered like "
          "anything else. It is still not the whole "
-         "craft: characters are a later piece."],
+         "craft: characters are the next piece."],
      "missing": "Not finished: the file needs a save, "
                 "with the camera's travel and aim still "
                 "proven.",
@@ -8800,6 +8800,408 @@ ANIM_CAMERA_STEPS = [
      "check": _check_anim_cam_finish},
 ]
 
+
+import re
+
+
+def _char_armature(context):
+    """The character's skeleton: an armature object with at
+    least three bones (a body and parts that can move). The
+    factory scene has none - probed on 5.3.0 and 4.2.5
+    before building - so nothing here ticks for free."""
+    arms = [o for o in context.scene.objects
+            if o.type == "ARMATURE"]
+    if not arms:
+        return None
+    return max(arms, key=lambda o: len(o.data.bones))
+
+
+_CHAR_BONE_PATH = re.compile(
+    r'pose\.bones\["([^"]+)"\]\.rotation_(euler|quaternion)')
+
+
+def _char_bone_frames(arm):
+    """{bone name: sorted remembered frames} from the
+    armature's own rotation memories, read through the
+    same cross-version helper as every animation piece."""
+    out = {}
+    if arm is None:
+        return out
+    for fc in _anim_fcurves(arm):
+        m = _CHAR_BONE_PATH.match(fc.data_path or "")
+        if not m:
+            continue
+        frames = out.setdefault(m.group(1), set())
+        for kp in fc.keyframe_points:
+            frames.add(kp.co.x)
+    return {name: sorted(fs) for name, fs in out.items()}
+
+
+def _char_pose_at(context, arm, bone_name, frame):
+    """One bone's real facing at one frame, read by putting
+    the play line there - the pose the window would show."""
+    scene = context.scene
+    here = scene.frame_current
+    scene.frame_set(int(frame))
+    pb = arm.pose.bones.get(bone_name)
+    value = (tuple(pb.matrix_basis.to_euler("XYZ"))
+             if pb is not None else None)
+    scene.frame_set(here)
+    return value
+
+
+def _char_moved_bones(context, arm):
+    """The bones that really move: a rotation remembered
+    at two moments at least 20 frames apart, with a real
+    turn of at least 0.3 radians between those moments,
+    read from the pose itself at those frames."""
+    moved = []
+    for name, frames in _char_bone_frames(arm).items():
+        if len(frames) < 2 or frames[-1] - frames[0] < 20:
+            continue
+        a = _char_pose_at(context, arm, name, frames[0])
+        b = _char_pose_at(context, arm, name, frames[-1])
+        if a is None or b is None:
+            continue
+        if math.dist(a, b) >= 0.3:
+            moved.append(name)
+    return moved
+
+
+def _char_pick(context):
+    arm = _char_armature(context)
+    if arm is None:
+        return None
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    arm.select_set(True)
+    context.view_layer.objects.active = arm
+    return arm
+
+
+def _check_char_built(context):
+    arm = _char_armature(context)
+    return arm is not None and len(arm.data.bones) >= 3
+
+
+def _char_add_part(context, arm, bone_name, location, scale):
+    """A simple visible part (a plain box) tied to one
+    bone, so the character can be seen moving. The part
+    keeps its place at the resting pose: its tie to the
+    bone is the bone's own resting place, undone."""
+    bpy.ops.mesh.primitive_cube_add(location=location)
+    part = context.object
+    part.name = bone_name + " part"
+    part.scale = scale
+    bpy.ops.object.transform_apply(location=False,
+                                   rotation=False, scale=True)
+    bone = arm.data.bones[bone_name]
+    part.parent = arm
+    part.parent_type = "BONE"
+    part.parent_bone = bone_name
+    part.matrix_parent_inverse = bone.matrix_local.inverted()
+    return part
+
+
+def _anim_run_char_built(context):
+    if _check_char_built(context):
+        _char_pick(context)
+        return
+    bpy.ops.object.armature_add(location=(0, 0, 0))
+    arm = context.object
+    arm.name = "Character"
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = arm.data.edit_bones
+    body = eb[0]
+    body.name = "Body"
+    body.head = (0, 0, 0)
+    body.tail = (0, 0, 1.0)
+    arm_bone = eb.new("Arm")
+    arm_bone.head = (0, 0, 1.0)
+    arm_bone.tail = (0.9, 0, 1.6)
+    arm_bone.parent = body
+    head_bone = eb.new("Head")
+    head_bone.head = (0, 0, 1.0)
+    head_bone.tail = (0, 0, 1.7)
+    head_bone.parent = body
+    bpy.ops.object.mode_set(mode="OBJECT")
+    _char_add_part(context, arm, "Body", (0, 0, 0.5),
+                   (0.35, 0.22, 0.5))
+    _char_add_part(context, arm, "Arm", (0.45, 0, 1.3),
+                   (0.45, 0.11, 0.11))
+    _char_add_part(context, arm, "Head", (0, 0, 1.35),
+                   (0.26, 0.26, 0.26))
+    _char_pick(context)
+
+
+def _check_char_pose_start(context):
+    arm = _char_armature(context)
+    if arm is None:
+        return False
+    return any(fs and fs[0] <= 2
+               for fs in _char_bone_frames(arm).values())
+
+
+def _char_key_pose(context, arm, frame, bones=None):
+    """Remember the current pose of the given bones (or
+    every bone) at one frame, the posing way: Pose Mode,
+    each bone's facing set to be remembered as a turn."""
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    _char_pick(context)
+    bpy.ops.object.mode_set(mode="POSE")
+    context.scene.frame_set(frame)
+    for pb in arm.pose.bones:
+        if bones is not None and pb.name not in bones:
+            continue
+        pb.rotation_mode = "XYZ"
+        pb.keyframe_insert(data_path="rotation_euler",
+                           frame=frame)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    _char_pick(context)
+
+
+def _anim_run_char_pose_start(context):
+    arm = _char_pick(context)
+    if arm is None:
+        _anim_run_char_built(context)
+        arm = _char_pick(context)
+        if arm is None:
+            return
+    _char_key_pose(context, arm, 1)
+
+
+def _check_char_moved(context):
+    arm = _char_armature(context)
+    if arm is None:
+        return False
+    return len(_char_moved_bones(context, arm)) >= 1
+
+
+def _char_move_bone(context, arm, bone_name, turn):
+    """Pose one bone at frame 48 with a clear turn from
+    its frame-1 pose, and remember it there - making sure
+    the starting pose is remembered first."""
+    frames = _char_bone_frames(arm)
+    if bone_name not in frames or frames[bone_name][0] > 2:
+        _char_key_pose(context, arm, 1, bones={bone_name})
+    base = _char_pose_at(context, arm, bone_name, 48)
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    _char_pick(context)
+    bpy.ops.object.mode_set(mode="POSE")
+    context.scene.frame_set(48)
+    pb = arm.pose.bones[bone_name]
+    pb.rotation_mode = "XYZ"
+    pb.rotation_euler = (base[0] + turn[0], base[1] + turn[1],
+                         base[2] + turn[2])
+    pb.keyframe_insert(data_path="rotation_euler", frame=48)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    _char_pick(context)
+    context.scene.frame_end = max(context.scene.frame_end, 48)
+
+
+def _anim_run_char_moved(context):
+    arm = _char_pick(context)
+    if arm is None:
+        return
+    if not _check_char_pose_start(context):
+        _anim_run_char_pose_start(context)
+        arm = _char_pick(context)
+        if arm is None:
+            return
+    _char_move_bone(context, arm, "Arm", (0, 0, 0.9))
+
+
+def _check_char_second(context):
+    arm = _char_armature(context)
+    if arm is None:
+        return False
+    return len(_char_moved_bones(context, arm)) >= 2
+
+
+def _anim_run_char_second(context):
+    arm = _char_pick(context)
+    if arm is None:
+        return
+    if not _check_char_moved(context):
+        _anim_run_char_moved(context)
+        arm = _char_pick(context)
+        if arm is None:
+            return
+    moved = _char_moved_bones(context, arm)
+    target = "Head" if "Head" not in moved else "Body"
+    _char_move_bone(context, arm, target, (-0.55, 0, 0))
+
+
+def _check_char_finish(context):
+    return (_check_saved(context)
+            and _check_char_second(context))
+
+
+def _anim_run_char_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_CHARACTER_STEPS = [
+    {"title": "Build a simple character",
+     "skill": "A character is a skeleton with parts tied "
+              "to it: bones inside, shapes outside",
+     "how": "The first pieces moved whole things. A "
+            "character moves in PARTS - an arm swings "
+            "while the body stays - and Blender does that "
+            "with a skeleton: an armature, a set of bones "
+            "inside the character, with the visible parts "
+            "tied to the bones. Move a bone and its part "
+            "follows. Start by building the simplest "
+            "character that can move: a skeleton of three "
+            "bones - a body, an arm, a head - with a plain "
+            "part tied to each. The tick reads the "
+            "skeleton itself: a real armature with at "
+            "least three bones. A plain scene has none, "
+            "so nothing here is given for free.",
+     "teach": [
+         "1. Press the step's build above, or make your "
+         "own: Add > Armature, then in Edit Mode shape "
+         "its bones into a body, an arm and a head.",
+         "2. Tie a simple shape to each bone if you are "
+         "building by hand - pick the shape, then the "
+         "armature, Ctrl+P > Bone - or use the parts "
+         "the build gives you.",
+         "3. Click the bones in Pose Mode (Ctrl+Tab): "
+         "each bone is a part you will soon pose. The "
+         "character does not move yet - posing is the "
+         "next steps."],
+     "missing": "No character yet - the scene needs a "
+                "skeleton (an armature) with at least "
+                "three bones.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_char_built,
+     "check": _check_char_built},
+    {"title": "Remember its first pose",
+     "skill": "A pose is remembered the way a place is: "
+              "bones' facings, keyframed at frame 1",
+     "how": "Animators do not remember a character's "
+            "place - they remember its POSE: where every "
+            "bone is pointing at one moment. A pose is "
+            "remembered exactly the way the first piece "
+            "remembered a place: put the play line at "
+            "frame 1, and remember the bones' facings "
+            "there. One pose alone is not movement; it is "
+            "the starting shape the movement will be "
+            "measured from. The tick reads the skeleton's "
+            "own memories: a bone's facing remembered at "
+            "the start.",
+     "teach": [
+         "1. Put the play line at frame 1: press Go back "
+         "to the start above, or click frame 1 on the "
+         "Timeline.",
+         "2. Pick the character's skeleton and switch to "
+         "Pose Mode (Ctrl+Tab) - the bones turn blue, "
+         "ready to pose.",
+         "3. Press Remember where it is right now above "
+         "(Blender's own way: hover and press I, and "
+         "remember the bones' turns). Yellow diamonds "
+         "at frame 1: the first pose, remembered."],
+     "missing": "No first pose yet - go to frame 1 and "
+                "remember the bones' facings there.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_char_pose_start,
+     "check": _check_char_pose_start},
+    {"title": "Change the pose, and remember again",
+     "skill": "The second pose: one part turned at frame "
+              "48, and Blender fills in the swing between",
+     "how": "Now the first piece's trick, on one part. "
+            "Jump to frame 48, turn ONE bone - swing the "
+            "arm - and remember the pose again. Two poses "
+            "of that bone, two facings, and Blender fills "
+            "in the swing between them: the arm moves, "
+            "the rest of the character holds still. That "
+            "is character animation in one sentence: poses "
+            "remembered, parts filled in between. The "
+            "tick reads the bone's own memories and its "
+            "real turn, read from the pose at both "
+            "remembered moments - a second memory at "
+            "nearly the same facing does not prove it.",
+     "teach": [
+         "1. Click frame 48 on the Timeline (about two "
+         "seconds in).",
+         "2. In Pose Mode, pick the arm bone and turn "
+         "it - press R and swing it a good clear turn, "
+         "like a wave starting.",
+         "3. Press Remember where it is right now again. "
+         "Play it: the arm swings between the two poses "
+         "while the body and head stay put."],
+     "missing": "No moved part yet - at a later frame, "
+                "turn one bone a clear amount and "
+                "remember the pose again.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_char_moved,
+     "check": _check_char_moved},
+    {"title": "Make a second part move too",
+     "skill": "Characters come alive in parts together: "
+              "a second bone, posed and remembered the "
+              "same way",
+     "how": "One swinging arm is a machine part. A "
+            "character moves in parts TOGETHER - the "
+            "head tilts as the arm waves - and each part "
+            "is just the same trick again: a second bone, "
+            "its facing remembered at the start, turned "
+            "and remembered at the later frame. The tick "
+            "reads the skeleton for TWO different bones "
+            "that each really turn across the span - the "
+            "same arm remembered twice does not prove "
+            "it, and neither does a second bone that "
+            "barely moves.",
+     "teach": [
+         "1. Go back to frame 1, pick a different bone "
+         "- the head - and press Remember where it is "
+         "right now, so its starting facing is kept.",
+         "2. Jump to frame 48, turn the head a clear "
+         "amount - a tilt, like it is looking at the "
+         "waving arm - and remember again.",
+         "3. Play it: two parts now move together, each "
+         "from its own two memories. Every character "
+         "performance is this, part by part."],
+     "missing": "Only one part moves so far - pose a "
+                "second, different bone at both ends of "
+                "the span, with a real turn in it.",
+     "tools": ["remember_pose", "go_to_start"],
+     "run": _anim_run_char_second,
+     "check": _check_char_second},
+    {"title": "Watch it move, then save it",
+     "skill": "Finishing a first character move: played "
+              "back, and saved with the poses in the file",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start - the arm swings, "
+            "the head tilts, both filled in between the "
+            "poses you remembered - and save the file. "
+            "The poses are saved with the skeleton, so "
+            "the character still performs when the file "
+            "is opened again. The tick checks the save, "
+            "and that two parts still really move.",
+     "teach": [
+         "1. Go back to the start and press Play / stop "
+         "what moves above (or the space bar). Watch "
+         "both parts, not just one.",
+         "2. Save the file (Ctrl+S). The tick checks the "
+         "save, and that the two moved parts are still "
+         "proven.",
+         "3. That is animation's fourth piece: "
+         "characters - a skeleton, poses remembered, "
+         "and parts that move together. With it, "
+         "animation's four named pieces are all "
+         "taught. It is still not the whole craft: "
+         "walking, talking and acting are built on "
+         "this, one pose at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with two parts' poses still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_char_finish,
+     "check": _check_char_finish},
+]
 
 PACKAGES = [
     {"id": "donut",
@@ -8995,6 +9397,25 @@ PACKAGES = [
               "the move. Each step ticks only when the "
               "scene itself proves it.",
      "steps": ANIM_CAMERA_STEPS},
+    {"id": "anim_character",
+     "kind": "flow",
+     "name": "Make a character move",
+     "byline": "Animation's fourth piece: characters - "
+               "a skeleton of bones, poses remembered, "
+               "and parts that move together.",
+     "intro": "Buddy's fourth animation piece - "
+              "characters. The first pieces moved whole "
+              "things and the camera; a character moves "
+              "in parts, on a skeleton of bones inside "
+              "it. Poses are remembered the way places "
+              "were - a bone's facing at frame 1, turned "
+              "and remembered at frame 48 - and a second "
+              "part moves too, so the character performs "
+              "instead of sliding. Checked from the "
+              "skeleton's own memories and the real pose "
+              "at both ends of the span. Each step ticks "
+              "only when the scene itself proves it.",
+     "steps": ANIM_CHARACTER_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -13929,6 +14350,11 @@ _STEP_SCREENS = {
     ("anim_camera", 2): ("Buddy Model", None, None, None),
     ("anim_camera", 3): ("Buddy Model", None, None, None),
     ("anim_camera", 4): ("Buddy Finish", None, None, None),
+    ("anim_character", 0): ("Buddy Model", None, None, None),
+    ("anim_character", 1): ("Buddy Model", None, None, None),
+    ("anim_character", 2): ("Buddy Model", None, None, None),
+    ("anim_character", 3): ("Buddy Model", None, None, None),
+    ("anim_character", 4): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -14745,8 +15171,11 @@ _COVERAGE_LINES = (
     "A third piece, 'Move the camera', teaches "
     "cameras - the camera travels and turns on "
     "memories of its own, aimed at the subject at "
-    "both ends of the move. They are first pieces "
-    "of the craft, not the whole of it.",
+    "both ends of the move. A fourth piece, 'Make "
+    "a character move', teaches characters - a "
+    "skeleton of bones, poses remembered, and "
+    "parts that move together. They are first "
+    "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "
