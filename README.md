@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -67,7 +67,11 @@ Honest scope, in plain words:
   and "Make it glide", which teaches easing and curves:
   the pace of the journey is a choice (slow the ends,
   keep the middle), and a middle memory steers both the
-  path and the timing. They are first pieces of the
+  path and the timing — and "Move the camera", which
+  teaches cameras: the camera itself travels and turns
+  on memories of its own, aimed at the subject at both
+  ends of the move so the subject stays in frame the
+  whole way. They are first pieces of the
   craft, not the whole of it.
 - **The other crafts are not covered yet.** Buddy does
   not teach them, and nothing here should be read as if
@@ -208,6 +212,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.10.0: animation's third piece — "Move the camera"
+
+Animation's third piece teaches cameras — the travelling shot — in five steps: set up the shot (a subject, and the scene's camera placed and aimed at it), remember the camera's place and facing at frame 1, move the camera a clear distance and remember again at frame 48, aim it at the subject again at both ends of the move, then watch the move through the camera and save. The teaching point is the first piece's idea moved to the camera: a camera is a thing — it has a place, a facing, and it carries keyframes exactly the way a mover does. The travel checks read the camera's own memories the way "Make it move" reads a thing's; the aim step is checked from the camera's real facing, read by putting the play line on the first and last memories — the angle between where the camera is looking and the subject must be within 0.30 radians at both ends (reference build: 0.0 at both ends, 0.116 at the halfway frame; a camera moved carrying its old facing misses by 1.36 radians, probed on 4.2.5 before building). The battery's negative cases prove a plain scene ticks only step 1, one memory alone does not prove the move, and a moved camera whose facing was never remembered at the new place does not prove the aim. The coverage box now names all three animation pieces and still calls them first pieces, not the whole craft; characters remain a later piece. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all eleven flows, plus the anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_camera_final.png — the view through the reference build's camera at frame 24, halfway through its move, the red subject held in frame while the camera travels.
 
 ### v3.9.0: animation's second piece — "Make it glide"
 

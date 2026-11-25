@@ -27,13 +27,13 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "sculpt_symmetry", "sculpt_dyntopo",
                                     "sculpt_masks",
                                     "sculpt_multires", "anim_move",
-                                    "anim_ease"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_ease", "anim_camera"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS ten flows registered; every step's "
+print("FLOWS_PASS eleven flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -68,6 +68,7 @@ walk("sculpt_masks")
 walk("sculpt_multires")
 walk("anim_move")
 walk("anim_ease")
+walk("anim_camera")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -253,6 +254,34 @@ checks, _current = bb.tour_state(ctx)
 assert checks[1] and not checks[2], checks
 print("FLOWS_PASS anim_ease negative: an eased straight "
       "journey does not prove the bend step")
+
+# --- anim_camera negatives: the aim must be proven ---------
+# A plain factory scene ticks only step 1 (it already has a
+# camera and a cube - the shot's raw material, nothing
+# remembered); one starting memory alone does not tick the
+# moved step; and a camera moved WITHOUT its facing
+# remembered at the new place does not tick the aimed step -
+# from the moved place, the old facing misses the subject
+# by a wide angle (probed before building: 1.36 rad against
+# the 0.30 bar).
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_camera")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_camera negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2] and not checks[3], checks
+print("FLOWS_PASS anim_camera negative: one memory alone "
+      "does not prove the camera move")
+bpy.ops.buddy.tour_do(step=2)
+checks, _current = bb.tour_state(ctx)
+assert checks[2] and not checks[3], checks
+print("FLOWS_PASS anim_camera negative: a moved camera with "
+      "its old facing does not prove the aim")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")
