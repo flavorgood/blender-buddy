@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 6, 0),
+    "version": (3, 7, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -7561,14 +7561,318 @@ SCULPT_MASKS_STEPS = [
          "threw the divisions away is not this finish.",
          "3. One piece of sculpting depth remains after "
          "this: Multires, working one sculpt at several "
-         "levels of detail at once. It is a later piece; "
-         "selective work is yours now."],
+         "levels of detail at once - 'Work it at every "
+         "level', beside this one. Selective work is "
+         "yours now."],
      "missing": "Not finished: the sculpt needs smooth "
                 "shading and a save, with its face sets and "
                 "mask still on it.",
      "tools": ["look_smooth", "save_work"],
      "run": _sculpt_run_finish,
      "check": _check_sculpt_select_finish},
+]
+
+
+def _sculpt_multires_mod(obj):
+    if obj is None:
+        return None
+    for mod in obj.modifiers:
+        if mod.type == "MULTIRES":
+            return mod
+    return None
+
+
+def _sculpt_multires_levels(obj):
+    mod = _sculpt_multires_mod(obj)
+    return mod.total_levels if mod is not None else 0
+
+
+def _sculpt_set_sculpt_level(obj, level):
+    """The sculpt level's name changed between Blender
+    generations (sculpt_level, then sculpt_levels) - set
+    whichever this Blender carries, and never guess."""
+    mod = _sculpt_multires_mod(obj)
+    if mod is None:
+        return
+    level = max(0, min(int(level), mod.total_levels))
+    for attr in ("sculpt_levels", "sculpt_level"):
+        if hasattr(mod, attr):
+            try:
+                setattr(mod, attr, level)
+                return
+            except Exception:
+                continue
+
+
+def _sculpt_multires_detail(obj):
+    """Fine detail on a Multires sculpt, read from the
+    surface the same honest way the clay flow reads it -
+    smooth the distance field until only big forms survive
+    and measure what the smoothing had to erase - with the
+    bar set where big forms alone cannot reach it. Probed
+    on the reference clay: big forms read 0.0037, big forms
+    plus worked detail read 0.0069, so the bar sits at
+    0.0055. Needs the finer clay this flow starts from."""
+    if obj is None or len(obj.data.vertices) < 2500:
+        return False
+    radii = _sculpt_radii(obj)
+    n = len(radii)
+    adj = {}
+    for e in obj.data.edges:
+        a, b = e.vertices
+        adj.setdefault(a, []).append(b)
+        adj.setdefault(b, []).append(a)
+    if not adj:
+        return False
+    smooth = list(radii)
+    for _ in range(10):
+        smooth = [(smooth[i] + sum(smooth[j] for j in adj.get(i, ())))
+                  / (1 + len(adj.get(i, ()))) if i in adj else smooth[i]
+                  for i in range(n)]
+    resid = [abs(radii[i] - smooth[i]) for i in adj]
+    return bool(resid) and (sum(resid) / len(resid)) > 0.0055
+
+
+def _check_sculpt_levels_clay(context):
+    return _check_sculpt_clay(context)
+
+
+def _sculpt_run_levels_clay(context):
+    if _check_sculpt_clay(context):
+        return
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=96,
+                                         ring_count=48,
+                                         radius=1.0)
+    main = context.object
+    bpy.ops.object.shade_smooth()
+    if main is not None:
+        main.name = "Clay"
+
+
+def _check_sculpt_levels(context):
+    return _sculpt_multires_levels(_flow_main(context)) >= 2
+
+
+def _sculpt_run_levels(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    mod = _sculpt_multires_mod(main)
+    if mod is None:
+        mod = main.modifiers.new(name="Multires", type="MULTIRES")
+    while mod.total_levels < 3:
+        bpy.ops.object.multires_subdivide(modifier=mod.name)
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_low_work(context):
+    main = _flow_main(context)
+    if main is None or _sculpt_multires_levels(main) < 2:
+        return False
+    return _sculpt_displaced(main)
+
+
+def _sculpt_run_low_work(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    _sculpt_set_sculpt_level(main, 1)
+    _sculpt_push(main, [((1, 0.2, 0.3), 0.38, 0.55),
+                        ((-0.4, 0.1, 1), -0.30, 0.50),
+                        ((0.1, -1, 0.2), 0.22, 0.45),
+                        ((-1, -0.3, -0.2), 0.18, 0.50)])
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_high_detail(context):
+    main = _flow_main(context)
+    if main is None or _sculpt_multires_levels(main) < 2:
+        return False
+    return _sculpt_multires_detail(main)
+
+
+def _sculpt_run_high_detail(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    _sculpt_set_sculpt_level(main, _sculpt_multires_levels(main))
+    rng = random.Random(20261124)
+    blobs = []
+    for _ in range(64):
+        dirv = (rng.uniform(-1, 1), rng.uniform(-1, 1),
+                rng.uniform(-1, 1))
+        if sum(c * c for c in dirv) < 0.05:
+            continue
+        blobs.append((dirv, rng.choice([-1, 1])
+                      * rng.uniform(0.03, 0.06), 0.11))
+    _sculpt_push(main, blobs)
+    if context.mode != "SCULPT":
+        bpy.ops.object.mode_set(mode="SCULPT")
+
+
+def _check_sculpt_levels_finish(context):
+    main = _flow_main(context)
+    if main is None or not _check_sculpt_finish(context):
+        return False
+    return _sculpt_multires_levels(main) >= 2
+
+
+SCULPT_MULTIRES_STEPS = [
+    {"title": "Start with tidy clay",
+     "skill": "A tidy, even net: the one sculpting method "
+              "that keeps the net you start with",
+     "how": "Every sculpting piece so far changed the "
+            "surface itself - remeshing rebuilt it, DynTopo "
+            "grew it under the brush. Multires is the "
+            "opposite bargain: the net you start with is "
+            "the net you keep, tidy and light, and the "
+            "detail lives on levels above it. So this piece "
+            "starts with finer, even clay - the net matters "
+            "here, because it never goes away.",
+     "teach": [
+         "1. Press Add a ball above. That is your clay - "
+         "leave it the size it is.",
+         "2. Look at what makes this clay different: an "
+         "even net, the same spacing everywhere. Multires "
+         "divides THIS net, so lumps in it would divide "
+         "too - even in, even out.",
+         "3. If your work wants a surface that grows where "
+         "you brush instead, 'Detail where you brush' "
+         "(DynTopo) is that flow; this one is for keeping "
+         "the net."],
+     "missing": "No clay yet - add a ball with enough surface "
+                "(500+ points) to sculpt.",
+     "tools": ["add_ball", "add_monkey"],
+     "run": _sculpt_run_levels_clay,
+     "check": _check_sculpt_levels_clay},
+    {"title": "Give it levels",
+     "skill": "The Multires modifier: one sculpt held at "
+              "several levels of detail at once",
+     "how": "Add a Multires modifier and press Subdivide, "
+            "and Blender builds a finer copy of your net on "
+            "a level above the one you see in Edit Mode - "
+            "press it again, another level. The base net "
+            "never changes; each level is the same sculpt, "
+            "finer. That stack of levels is the whole "
+            "method: big work belongs on the low levels, "
+            "fine work on the high ones, and you can step "
+            "down a level at any moment and the form is "
+            "still there, coarser and lighter. The tick "
+            "reads the modifier itself: real levels built, "
+            "at least two of them.",
+     "teach": [
+         "1. Go back to moving whole things (Object Mode). "
+         "In the Properties editor find the wrench tab "
+         "(Modifiers), Add Modifier, Generate, Multires.",
+         "2. Press Subdivide on the modifier three times. "
+         "Each press adds one level - the modifier now "
+         "reads three levels, and the sculpt level follows "
+         "the top one.",
+         "3. Meet the three level numbers while you are "
+         "there: the eye (what the window shows), the "
+         "camera (what the render uses) and the sculpt "
+         "level (which level your brushes touch). This "
+         "flow works the sculpt level; the others follow "
+         "it here."],
+     "missing": "No levels yet - add a Multires modifier and "
+                "Subdivide it at least twice.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_levels, "check": _check_sculpt_levels},
+    {"title": "Block the big forms low",
+     "skill": "Low-level work: the big forms, shaped where "
+              "the net is coarse and forgiving",
+     "how": "Step the sculpt level DOWN to a low level and "
+            "block the big forms there. Low levels are where "
+            "big forms belong: the net is coarse, so a brush "
+            "moves the whole form at once and cannot get "
+            "lost in detail that is not settled yet - and "
+            "because the levels are one sculpt, the forms "
+            "you block low are already there when you step "
+            "up. The tick reads the clay itself, worked, "
+            "with its levels still on it.",
+     "teach": [
+         "1. Get sculpting (Start sculpting above). On the "
+         "Multires modifier, set the sculpt level to 1 - "
+         "low, near the base net.",
+         "2. Block with the big brushes, exactly as in "
+         "'Sculpt it like clay': pull the masses out, push "
+         "the hollows in, turn the clay as you go. Big "
+         "only - no detail yet; detail has its own level, "
+         "next step.",
+         "3. Step the sculpt level up and down once and "
+         "watch: same form, finer and coarser. That "
+         "stepping is the method working."],
+     "missing": "The big forms are not blocked yet - step "
+                "the sculpt level down and block them with "
+                "the big brushes.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_low_work,
+     "check": _check_sculpt_low_work},
+    {"title": "Work the fine detail high",
+     "skill": "Top-level work: detail that only a fine net "
+              "can hold, added last",
+     "how": "Step the sculpt level UP to the top and work "
+            "the fine detail there - the creases, bumps and "
+            "texture of the surface. Detail belongs high "
+            "because only the fine net can hold it, and it "
+            "belongs last because the big forms underneath "
+            "it are already settled at the low levels: "
+            "change a big form later and you step down, "
+            "change it, and step back up to detail that is "
+            "still where you left it. The tick reads the "
+            "surface's own fine grain, past the bar big "
+            "smooth forms alone cannot reach.",
+     "teach": [
+         "1. Set the sculpt level to the top (the highest "
+         "number on the modifier).",
+         "2. Shrink the brush (F) and lighten it (Shift+F), "
+         "and work small: creases where forms meet, bumps "
+         "and grain across the surface, small and light "
+         "all over - this is the detail pass, not another "
+         "blocking pass.",
+         "3. Step down a level and back up: the form "
+         "simplifies, then the detail returns. Nothing "
+         "was lost by stepping - that is what you bought "
+         "with the levels."],
+     "missing": "No fine detail yet - step the sculpt level "
+                "to the top and work small and light.",
+     "tools": ["start_sculpting"],
+     "run": _sculpt_run_high_detail,
+     "check": _check_sculpt_high_detail},
+    {"title": "Finish, and keep the levels",
+     "skill": "Finishing a Multires sculpt: saved with its "
+              "levels on, never applied away",
+     "how": "Finish the way every sculpt here finishes - "
+            "smooth shading and the file saved - and leave "
+            "the Multires modifier ON the clay, unapplied. "
+            "Applying it would bake the top level into the "
+            "net and throw the levels away: the tidy light "
+            "base, the step-down-and-fix workflow, all of "
+            "it. The saved file holds the whole stack, so "
+            "tomorrow this sculpt opens ready to work at "
+            "any level again.",
+     "teach": [
+         "1. Go back to moving whole things (Object Mode) "
+         "and press Shade it smooth below. Do NOT press "
+         "Apply on the Multires modifier.",
+         "2. Save the file (Ctrl+S). The tick checks the "
+         "save, the smooth finish, and that the levels "
+         "are still on the clay.",
+         "3. That completes Buddy's sculpting pieces: "
+         "clay, the mirror, DynTopo, masks and face sets, "
+         "and now Multires. They are first pieces of the "
+         "craft, not the whole of it - but every way a "
+         "sculpt's surface is organised is now yours."],
+     "missing": "Not finished: the sculpt needs smooth "
+                "shading and a save, with its Multires levels "
+                "still on it.",
+     "tools": ["look_smooth", "save_work"],
+     "run": _sculpt_run_finish,
+     "check": _check_sculpt_levels_finish},
 ]
 
 
@@ -7693,6 +7997,23 @@ PACKAGES = [
               "still sitting on the original clay inside "
               "a worked form.",
      "steps": SCULPT_MASKS_STEPS},
+    {"id": "sculpt_multires",
+     "kind": "flow",
+     "name": "Work it at every level",
+     "byline": "Multires: one sculpt at several levels of "
+               "detail - big forms low, fine detail high, "
+               "the tidy net kept underneath.",
+     "intro": "Buddy's fifth sculpting piece - Multires. "
+              "The Multires modifier holds one sculpt at "
+              "several levels of detail at once: step down "
+              "for the big forms on a coarse, forgiving net, "
+              "step up for fine detail only a fine net can "
+              "hold, and the base net stays tidy underneath "
+              "the whole time. Each step ticks only when "
+              "the scene itself proves it - the checks read "
+              "the modifier's levels and the surface's own "
+              "forms and fine grain.",
+     "steps": SCULPT_MULTIRES_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -12608,6 +12929,11 @@ _STEP_SCREENS = {
     ("sculpt_masks", 2): ("Buddy Model", None, None, None),
     ("sculpt_masks", 3): ("Buddy Model", None, None, None),
     ("sculpt_masks", 4): ("Buddy Finish", None, None, None),
+    ("sculpt_multires", 0): ("Buddy Model", None, None, None),
+    ("sculpt_multires", 1): ("Buddy Model", None, None, None),
+    ("sculpt_multires", 2): ("Buddy Model", None, None, None),
+    ("sculpt_multires", 3): ("Buddy Model", None, None, None),
+    ("sculpt_multires", 4): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -13409,8 +13735,11 @@ _COVERAGE_LINES = (
     "'Detail where you brush', teaches DynTopo - detail "
     "that grows only where you work. A fourth, 'Keep one "
     "part safe', teaches masks and face sets - protect "
-    "the part that is right and work the rest. They are "
-    "first pieces of the craft, not the whole of it.",
+    "the part that is right and work the rest. A fifth, "
+    "'Work it at every level', teaches Multires - one "
+    "sculpt at several levels of detail, big forms low "
+    "and fine detail high. They are first pieces of the "
+    "craft, not the whole of it.",
     "Animation and the other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
     "way that craft actually works - a sculpt is not "
