@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 20, 0),
+    "version": (3, 21, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -11557,7 +11557,9 @@ ANIM_PULSE_STEPS = [
          "pulsing - one thing, its size remembered at "
          "home, remembered swollen, and remembered "
          "home again, and Blender filling in the swell "
-         "and the settle between. It is still not the "
+         "and the settle between. The next piece flips "
+         "a thing - all the way over and back upright. "
+         "It is still not the "
          "whole craft: performances are built from "
          "pieces like this, one change at a time."],
      "missing": "Not finished: the file needs a save, "
@@ -11565,6 +11567,264 @@ ANIM_PULSE_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_pulse_finish,
      "check": _check_pulse_finish},
+]
+
+def _flip_turn(context):
+    """(span, total turn, furthest turn, ends gap) for the
+    main thing's facing memories, read on the axis that
+    turns most. A real flip goes ALL the way over and
+    lands upright again: the turn is totalled by sampling
+    the evaluated facing across the span and adding up
+    every step it takes, the furthest point must pass
+    upside down (at least 2.8 rad from the start), the
+    total must be at least 5.0 rad (a full turn is
+    6.283), and the ends must land at the same facing,
+    allowing whole turns (the end gap is read modulo a
+    full turn) - a half flip ends upside down, and a
+    rock back and forth never travels far enough.
+    Probed on Blender 5.3.0 and 4.2.5 before building:
+    facing memories at 0, pi and 2*pi across frames
+    1/24/48 read back and interpolate identically on
+    both versions (0.9175 a quarter of the way across
+    at frame 12, 5.3145 three quarters across at
+    frame 36)."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 3:
+        return 0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0
+    step = max(1, (last - first) // 24)
+    samples = []
+    frame = first
+    while frame <= last:
+        samples.append(_anim_eval(context, main, frame,
+                                  "rotation_euler"))
+        frame += step
+    if samples[-1] is not None and (last - first) % step:
+        samples.append(_anim_eval(context, main, last,
+                                  "rotation_euler"))
+    axis = 0
+    best = -1.0
+    for i in range(3):
+        travel = sum(abs(samples[j + 1][i] - samples[j][i])
+                     for j in range(len(samples) - 1))
+        if travel > best:
+            best = travel
+            axis = i
+    start = samples[0][axis]
+    travel = sum(abs(samples[j + 1][axis] - samples[j][axis])
+                 for j in range(len(samples) - 1))
+    reach = max(abs(s[axis] - start) for s in samples)
+    raw_gap = abs(samples[-1][axis] - start)
+    ends = abs((raw_gap + math.pi) % (2 * math.pi) - math.pi)
+    return last - first, travel, reach, ends
+
+
+def _check_flip_start(context):
+    """The starting facing, remembered upright: a facing
+    (rotation) memory at the start whose evaluated facing
+    sits within 0.3 rad of level on every axis. A flip
+    starts upright - a facing remembered already leaning
+    holds no clean start to land back on."""
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first, "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_flip_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_flip_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler", frame=1)
+
+
+def _check_flip(context):
+    span, travel, reach, ends = _flip_turn(context)
+    return (span >= 20 and travel >= 5.0 and reach >= 2.8
+            and ends <= 0.4)
+
+
+def _anim_run_flip(context):
+    import math
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_flip(context):
+        return
+    scene = context.scene
+    if not _check_flip_start(context):
+        _anim_run_flip_start(context)
+    start = _anim_eval(context, main, 1, "rotation_euler")
+    scene.frame_set(24)
+    main.rotation_euler = (start[0] + math.pi, start[1],
+                           start[2])
+    main.keyframe_insert(data_path="rotation_euler", frame=24)
+    scene.frame_set(48)
+    main.rotation_euler = (start[0] + 2 * math.pi, start[1],
+                           start[2])
+    main.keyframe_insert(data_path="rotation_euler", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_flip_finish(context):
+    return (_check_saved(context)
+            and _check_flip(context))
+
+
+def _anim_run_flip_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_FLIP_STEPS = [
+    {"title": "Pick the thing that will flip",
+     "skill": "One thing, chosen: a flip starts with a "
+              "single thing that will go all the way over",
+     "how": "The swing piece leaned a thing back and "
+            "forth. This piece turns it ALL the way over: "
+            "upright, upside down, and upright again - a "
+            "somersault, a pancake turned, a stunt jump. "
+            "The way is the facing-memories way: the "
+            "upright facing remembered, the upside-down "
+            "facing remembered in the middle, and the "
+            "upright facing remembered again at the end "
+            "as one full turn, and Blender fills in the "
+            "roll between them. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will flip.",
+         "2. Leave its facing alone for now. The upright "
+         "start is remembered first; the turn comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The flip will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its upright facing",
+     "skill": "The upright start, remembered: a facing "
+              "memory at frame 1, level, that the flip "
+              "will land back on",
+     "how": "A flip needs a clean start: the thing "
+            "standing upright, facing remembered at "
+            "frame 1 - Blender stores a facing memory (a "
+            "keyframe on the thing's Rotation). Nothing "
+            "visibly changes: the memory is the mark the "
+            "whole turn is measured from, and the facing "
+            "the end of the flip has to land back on. The "
+            "tick reads the facing memories themselves: "
+            "one must sit at the start, and the facing "
+            "there must really be level (within 0.3 rad "
+            "on every axis).",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. With the thing picked and standing upright, "
+         "press Remember where it is right now above - "
+         "Buddy remembers its facing along with its "
+         "place, and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns yet. "
+         "One memory alone cannot make a flip - it "
+         "takes three."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing, level, at "
+                "frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_flip_start,
+     "check": _check_flip_start},
+    {"title": "Flip it all the way over, and land it",
+     "skill": "The flip itself: upside down in the "
+              "middle, one full turn by the end, upright "
+              "again",
+     "how": "Jump to frame 24 and turn the thing half a "
+            "turn on one axis - upside down - and "
+            "remember its facing there. Then jump to "
+            "frame 48, turn it the SAME way to one full "
+            "turn (the facing reads a full 6.283 rad from "
+            "where it started, which stands it upright "
+            "again), and remember again. Blender fills "
+            "in the roll between the three memories. The "
+            "tick samples the real evaluated facing "
+            "across the whole span: it must run at least "
+            "20 frames, the total turn must reach at "
+            "least 5.0 rad, the turn must really pass "
+            "upside down (at least 2.8 rad from the "
+            "start), and the ends must land on the same "
+            "facing, allowing whole turns - a half flip "
+            "that ends upside down does not tick it, and "
+            "neither does a rock back and forth. Probed "
+            "before building on both supported Blenders: "
+            "facing memories at upright, upside down and "
+            "one full turn read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 24, turn the thing half a "
+         "turn (3.142 rad) on one axis so it stands "
+         "upside down, and remember its facing.",
+         "2. Jump to frame 48, keep turning the same "
+         "way to one full turn (6.283 rad), and "
+         "remember again - it stands upright again.",
+         "3. Scrub the Timeline: the thing rolls all "
+         "the way over and lands back on its feet."],
+     "missing": "No real flip yet - upside down in the "
+                "middle and one full turn, upright again, "
+                "at least 20 frames later.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_flip,
+     "check": _check_flip},
+    {"title": "Watch it flip, then save it",
+     "skill": "Finishing a flip: the whole turn really "
+              "plays, and the file is saved with all "
+              "three facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing go over - upright, upside down, "
+            "upright again. Then save the file. The "
+            "facing memories are saved with it, so the "
+            "flip still plays when the file is opened "
+            "again. The tick checks the save and that the "
+            "flip is still proven from the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the facing, not the place - going all "
+         "the way over is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the flip is still proven.",
+         "3. That is animation's fourteenth piece: "
+         "flipping - one thing, its facing remembered "
+         "upright, remembered upside down, and "
+         "remembered upright again as one full turn, "
+         "and Blender filling in the roll between. It "
+         "is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the flip still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_flip_finish,
+     "check": _check_flip_finish},
 ]
 
 PACKAGES = [
@@ -11974,6 +12234,30 @@ PACKAGES = [
               "at the starting size. Each step ticks "
               "only when the scene itself proves it.",
      "steps": ANIM_PULSE_STEPS},
+    {"id": "anim_flip",
+     "kind": "flow",
+     "name": "Make it flip",
+     "byline": "Animation's fourteenth piece: flipping - "
+               "one thing, its facing remembered upright, "
+               "remembered upside down, and remembered "
+               "upright again as one full turn, and the "
+               "roll filled in between.",
+     "intro": "Buddy's fourteenth animation piece - "
+              "flipping. The swing piece leaned a thing "
+              "back and forth; this piece turns it all "
+              "the way over: upright facing remembered "
+              "at frame 1, upside-down facing remembered "
+              "at frame 24, upright facing remembered "
+              "again at frame 48 as one full turn, and "
+              "Blender fills in the roll between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - it must run at "
+              "least 20 frames, turn at least 5.0 rad in "
+              "total, pass upside down, and land on the "
+              "starting facing. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_FLIP_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -16951,6 +17235,10 @@ _STEP_SCREENS = {
     ("anim_pulse", 1): ("Buddy Model", None, None, None),
     ("anim_pulse", 2): ("Buddy Model", None, None, None),
     ("anim_pulse", 3): ("Buddy Finish", None, None, None),
+    ("anim_flip", 0): ("Buddy Model", None, None, None),
+    ("anim_flip", 1): ("Buddy Model", None, None, None),
+    ("anim_flip", 2): ("Buddy Model", None, None, None),
+    ("anim_flip", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -17802,7 +18090,11 @@ _COVERAGE_LINES = (
     "teaches pulsing - one thing, its size remembered "
     "at home, remembered swollen, and remembered home "
     "again, and the swell and settle filled in "
-    "between. They are first "
+    "between. A fourteenth piece, 'Make it flip', "
+    "teaches flipping - one thing, its facing "
+    "remembered upright, remembered upside down, and "
+    "remembered upright again as one full turn, and "
+    "the roll filled in between. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
