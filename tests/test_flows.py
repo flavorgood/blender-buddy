@@ -30,13 +30,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "anim_ease", "anim_camera",
                                     "anim_character",
                                     "anim_loop", "anim_path",
-                                    "anim_follow"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_follow",
+                                    "anim_scale"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS fifteen flows registered; every step's "
+print("FLOWS_PASS sixteen flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -76,6 +77,7 @@ walk("anim_character")
 walk("anim_loop")
 walk("anim_path")
 walk("anim_follow")
+walk("anim_scale")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -410,6 +412,32 @@ checks, _current = bb.tour_state(ctx)
 assert checks[3] and not checks[4], checks
 print("FLOWS_PASS anim_follow negative: tied to a leader "
       "that never travels does not prove the finish")
+
+# --- anim_scale negatives: the grow must be proven --------
+# A plain scene ticks only step 1; a starting size alone
+# does not tick the grow step; and a small nudge of size
+# (1.2 times) does not prove a real grow either.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_scale")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_scale negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_scale negative: a starting size "
+      "alone does not prove the grow")
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(48)
+main.scale = (1.2, 1.2, 1.2)
+main.keyframe_insert(data_path="scale", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_scale negative: a small nudge of "
+      "size does not prove the grow")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

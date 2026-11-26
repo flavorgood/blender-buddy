@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 14, 0),
+    "version": (3, 15, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -10131,9 +10131,10 @@ ANIM_FOLLOW_STEPS = [
          "3. That is animation's seventh piece: "
          "following - one leader with the memories, "
          "one follower tied to it, and the pair "
-         "travelling together. It is still not the "
-         "whole craft: performances are built from "
-         "pieces like this, one pair at a time."],
+         "travelling together. The next piece makes "
+         "a thing grow. It is still not the whole "
+         "craft: performances are built from pieces "
+         "like this, one pair at a time."],
      "missing": "Not finished: the file needs a save, "
                 "with the tied pair's travel still "
                 "proven.",
@@ -10142,6 +10143,201 @@ ANIM_FOLLOW_STEPS = [
      "check": _check_follow_finish},
 ]
 
+def _scale_grow_ratio(context):
+    """(span, biggest size ratio between the first and
+    last scale memories) for the main thing. A real
+    grow multiplies the size: the ratio reads the
+    evaluated scale at the first and last remembered
+    frames, axis by axis, and keeps the biggest."""
+    main = _flow_main(context)
+    if main is None:
+        return 0.0, 1.0
+    keys = _anim_keys(main, "scale")
+    if len(keys) < 2:
+        return 0.0, 1.0
+    frames = [k[0] for k in keys]
+    first, last = int(min(frames)), int(max(frames))
+    if last - first < 1:
+        return 0.0, 1.0
+    a = _anim_eval(context, main, first, "scale")
+    b = _anim_eval(context, main, last, "scale")
+    ratio = 1.0
+    for i in range(3):
+        if a[i] > 0.05:
+            ratio = max(ratio, b[i] / a[i])
+    return last - first, ratio
+
+
+def _check_scale_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_scale_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_scale_start(context):
+        return
+    context.scene.frame_set(1)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _check_scale_grow(context):
+    span, ratio = _scale_grow_ratio(context)
+    return span >= 20 and ratio >= 1.8
+
+
+def _anim_run_scale_grow(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_scale_grow(context):
+        return
+    scene = context.scene
+    start = _anim_eval(context, main, 1, "scale")
+    if not _check_scale_start(context):
+        scene.frame_set(1)
+        main.keyframe_insert(data_path="scale", frame=1)
+        start = tuple(main.scale)
+    scene.frame_set(48)
+    main.scale = (start[0] * 2.5, start[1] * 2.5,
+                  start[2] * 2.5)
+    main.keyframe_insert(data_path="scale", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_scale_finish(context):
+    return (_check_saved(context)
+            and _check_scale_grow(context))
+
+
+def _anim_run_scale_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SCALE_STEPS = [
+    {"title": "Pick the thing that will grow",
+     "skill": "One thing, chosen: a grow starts with a "
+              "single thing whose size will change",
+     "how": "Every piece so far moved a thing's place, "
+            "its facing, or its pose. This piece changes "
+            "its SIZE over time: a seed sprouting, a "
+            "balloon filling, a creature rearing up to "
+            "full height. The way is the first piece's "
+            "way - memories - but the memories hold the "
+            "thing's size (Blender's scale), not its "
+            "place. Start by picking the thing: any "
+            "shape you already have, or a fresh box here.",
+     "teach": [
+         "1. Press Add a box above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will grow.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the grow comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The grow will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a box, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The starting size, remembered: a scale "
+              "memory at frame 1",
+     "how": "A grow needs a before. Go to frame 1 and "
+            "remember the thing's size there - Blender "
+            "stores a scale memory (a keyframe on the "
+            "thing's Scale). Nothing visibly changes: "
+            "the memory is the change, holding today's "
+            "size so a later size has something to grow "
+            "FROM. The tick reads the size memories "
+            "themselves: one must sit at the start.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. With the thing picked, press Remember "
+         "where it is right now above - Buddy remembers "
+         "its size along with its place, and this piece "
+         "reads the size memory.",
+         "3. Scrub forward and back: nothing grows yet. "
+         "One memory alone cannot make a change - it "
+         "takes two."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_scale_start,
+     "check": _check_scale_start},
+    {"title": "Grow it a clear amount and remember again",
+     "skill": "The grow itself: the size multiplied, "
+              "remembered at a later frame",
+     "how": "Jump to frame 48, make the thing clearly "
+            "bigger - the reference build multiplies "
+            "its size by two and a half - and remember "
+            "its size again. Blender now holds two size "
+            "memories and fills in every size between "
+            "them, so the thing grows smoothly across "
+            "the span. The tick reads the real evaluated "
+            "size at the first and last memories: the "
+            "span must run at least 20 frames and the "
+            "size must really multiply - at least 1.8 "
+            "times - not just nudge. Probed before "
+            "building on both supported Blenders: size "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 48.",
+         "2. Scale the thing up a clear amount - press "
+         "S and drag, or set its Scale to about 2.5 in "
+         "the Item panel - evenly, so it grows rather "
+         "than stretches.",
+         "3. Remember its size again, then scrub the "
+         "Timeline: the thing grows from its starting "
+         "size to its full size across the span."],
+     "missing": "No real grow yet - remember a clearly "
+                "bigger size at least 20 frames after "
+                "the starting memory.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_scale_grow,
+     "check": _check_scale_grow},
+    {"title": "Watch it grow, then save it",
+     "skill": "Finishing a grow: the change really "
+              "plays, and the file is saved with both "
+              "size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing grow - small at the first memory, "
+            "full-grown at the last, every size between "
+            "filled in. Then save the file. The size "
+            "memories are saved with it, so the grow "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the grow "
+            "is still proven from the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the size, not the place - growing is "
+         "the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the grow is still proven.",
+         "3. That is animation's eighth piece: "
+         "growing - one thing, its size remembered "
+         "small and remembered big, and Blender "
+         "filling in the growth between. It is still "
+         "not the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the grow still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_scale_finish,
+     "check": _check_scale_finish},
+]
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -10418,6 +10614,27 @@ PACKAGES = [
               "the pair must hold. Each step ticks only "
               "when the scene itself proves it.",
      "steps": ANIM_FOLLOW_STEPS},
+    {"id": "anim_scale",
+     "kind": "flow",
+     "name": "Make it grow",
+     "byline": "Animation's eighth piece: growing - "
+               "one thing, its size remembered small "
+               "and remembered big, and the growth "
+               "filled in between.",
+     "intro": "Buddy's eighth animation piece - "
+              "growing. The earlier pieces changed a "
+              "thing's place, facing or pose; this "
+              "piece changes its size over time: the "
+              "size remembered at frame 1, multiplied "
+              "and remembered again at frame 48, and "
+              "Blender fills in every size between. "
+              "Checked from the size memories "
+              "themselves and the real evaluated size "
+              "at their frames - the span must run at "
+              "least 20 frames and the size must "
+              "really multiply. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_SCALE_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -15371,6 +15588,10 @@ _STEP_SCREENS = {
     ("anim_follow", 2): ("Buddy Model", None, None, None),
     ("anim_follow", 3): ("Buddy Model", None, None, None),
     ("anim_follow", 4): ("Buddy Finish", None, None, None),
+    ("anim_scale", 0): ("Buddy Model", None, None, None),
+    ("anim_scale", 1): ("Buddy Model", None, None, None),
+    ("anim_scale", 2): ("Buddy Model", None, None, None),
+    ("anim_scale", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -16201,7 +16422,10 @@ _COVERAGE_LINES = (
     "along', teaches following - one leader with "
     "the memories, a second thing tied to it with "
     "the parent tie, and the pair travelling "
-    "together with the gap held. They are first "
+    "together with the gap held. An eighth piece, "
+    "'Make it grow', teaches growing - one thing, "
+    "its size remembered small and remembered big, "
+    "and the growth filled in between. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
