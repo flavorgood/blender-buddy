@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0, v3.15.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0, v3.15.0, v3.16.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -231,6 +231,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.16.0: animation's ninth piece — "Make it bounce"
+
+Animation's ninth piece teaches bouncing — a thing leaving the ground and coming back to it — in four steps: pick the thing that will bounce, remember where it starts, down low (a place memory at frame 1), send it up and bring it back down (a high place memory at frame 24 — the reference build raises it two and a half units — and the low place remembered again at frame 48), then watch it bounce and save. The teaching point is that a bounce is three memories, not two: low, high, and low again, and Blender fills in the rise and the fall between. The checks read the place memories themselves and the real evaluated height across the whole span — the span must run at least 20 frames, the peak must really clear the ground (at least one and a half units above the lower end; the reference peak is 2.5), and the two ends must sit at about the same height, so a rise that never comes back down cannot pass for a bounce. A probe on Blender 5.3.0 and 4.2.5 before building showed a low-high-low set of memories reads back and interpolates identically on both versions (0 at frame 1, 2.5 at frame 24, 0 again at frame 48). The battery's negative cases prove a plain scene ticks only step 1, a starting place alone does not prove the bounce, a straight rise that never comes back does not prove it, and a small hop (half a unit) does not prove it either. The coverage box now names all nine animation pieces and still calls them first pieces, not the whole craft. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all seventeen flows, plus the anim_bounce, anim_scale, anim_follow, anim_path, anim_loop, anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_bounce_final.png — the reference build's red thing at frame 24, at the top of its bounce, in the air above the ground with its shadow below.
 
 ### v3.15.0: animation's eighth piece — "Make it grow"
 
