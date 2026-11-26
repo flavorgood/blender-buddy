@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0, v3.15.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -231,6 +231,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.15.0: animation's eighth piece — "Make it grow"
+
+Animation's eighth piece teaches growing — a thing's size changing over time — in four steps: pick the thing that will grow, remember its starting size (a scale memory at frame 1), grow it a clear amount and remember again (the reference build multiplies its size by two and a half at frame 48), then watch it grow and save. The teaching point is that the memories can hold a thing's SIZE, not only its place: two size memories, and Blender fills in every size between, so the thing grows smoothly across the span. The checks read the size memories themselves and the real evaluated size at their frames — the span must run at least 20 frames and the size must really multiply (at least 1.8 times; the reference ratio is 2.5, reading 1.73 halfway at frame 24). A probe on Blender 5.3.0 and 4.2.5 before building showed size memories read back and interpolate identically on both versions. The battery's negative cases prove a plain scene ticks only step 1, a starting size alone does not prove the grow, and a small nudge of size (1.2 times) does not prove it either. The coverage box now names all eight animation pieces and still calls them first pieces, not the whole craft. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all sixteen flows, plus the anim_scale, anim_follow, anim_path, anim_loop, anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_scale_final.png — the reference build's red thing at frame 48, full-grown at two and a half times its starting size.
 
 ### v3.14.0: animation's seventh piece — "Bring a second thing along"
 
