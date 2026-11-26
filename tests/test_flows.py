@@ -34,13 +34,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "anim_scale", "anim_bounce",
                                     "anim_swing", "anim_color",
                                     "anim_fade",
-                                    "anim_pulse"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_pulse",
+                                    "anim_flip"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS twenty-one flows registered; every step's "
+print("FLOWS_PASS twenty-two flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -86,6 +87,7 @@ walk("anim_swing")
 walk("anim_color")
 walk("anim_fade")
 walk("anim_pulse")
+walk("anim_flip")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -648,6 +650,53 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[2], checks
 print("FLOWS_PASS anim_pulse negative: a small swell does "
       "not prove the pulse")
+
+# --- anim_flip negatives: the flip must be proven -------
+# A plain scene ticks only step 1; an upright start alone
+# does not tick the flip step; a half flip that ends
+# upside down does not prove a flip; and a rock back and
+# forth does not prove one either.
+import math as _math
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_flip")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_flip negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_flip negative: an upright start "
+      "alone does not prove the flip")
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(24)
+main.rotation_euler = (_math.pi, 0, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=24)
+ctx.scene.frame_set(48)
+main.rotation_euler = (_math.pi, 0, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_flip negative: a half flip that "
+      "ends upside down does not prove the flip")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_flip")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=1)
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(24)
+main.rotation_euler = (0.5, 0, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=24)
+ctx.scene.frame_set(48)
+main.rotation_euler = (0, 0, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_flip negative: a rock back and "
+      "forth does not prove the flip")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")
