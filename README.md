@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0, v3.15.0, v3.16.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0, v3.15.0, v3.16.0, v3.17.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -231,6 +231,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.17.0: animation's tenth piece — "Make it swing"
+
+Animation's tenth piece teaches swinging — a thing's facing leaning one way, then the other, and back — in four steps: pick the thing that will swing, remember its facing leaned one way (a facing memory at frame 1, the reference build leaning it 0.7 radians to one side), lean it the other way and back (the other lean remembered at frame 24 and the first lean remembered again at frame 48), then watch it swing and save. The teaching point is that the memories can hold a thing's FACING as a journey of its own: leaned, leaned the other way, and back, and Blender fills in the sweep between. The checks read the facing memories themselves and the real evaluated facing across the whole span — the span must run at least 20 frames, the lean must sweep at least one radian end to end, it must reach clearly to both sides of upright on the same axis (at least 0.35 radians each way; the reference build reaches 0.7 each way), and the two ends must sit at about the same lean, so a one-way turn cannot pass for a swing. A probe on Blender 5.3.0 and 4.2.5 before building showed a lean-lean-back set of facing memories reads back and interpolates identically on both versions (−0.7 at frame 1, +0.7 at frame 24, −0.7 again at frame 48). One defect was caught by the proof picture during the build: the first design leaned on the Z axis, which is Blender's up axis, so the reference thing spun like a turntable and the render read upright — the shipped piece leans on the Y axis, and the lean reads plainly in the picture. The battery's negative cases prove a plain scene ticks only step 1, a starting lean alone does not prove the swing, a one-way turn does not prove it, a tip that never crosses the middle does not prove it, and a small sway does not prove it either. The coverage box now names all ten animation pieces and still calls them first pieces, not the whole craft. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all eighteen flows, plus the anim_swing, anim_bounce, anim_scale, anim_follow, anim_path, anim_loop, anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_swing_final.png — the reference build's red thing at frame 24, leaned fully the other way, tipped on the ground with its shadow below.
 
 ### v3.16.0: animation's ninth piece — "Make it bounce"
 
