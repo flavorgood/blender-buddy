@@ -57,7 +57,7 @@ Honest scope, in plain words:
   are first pieces of the craft, not the whole of it, and
   nothing here should be read as more.
 - **Animation has its first guided pieces** (v3.8.0,
-  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0, v3.15.0, v3.16.0, v3.17.0): "Make it move", under Learn by doing — the one
+  v3.9.0, v3.10.0, v3.11.0, v3.12.0, v3.13.0, v3.14.0, v3.15.0, v3.16.0, v3.17.0, v3.18.0): "Make it move", under Learn by doing — the one
   idea all animation is built from: remember where a
   thing is at one moment (a keyframe), move it, remember
   again at a later moment, and Blender fills in the
@@ -231,6 +231,10 @@ reloads, and checks the tour resumes at step 3. Part 7's
 modifier exists only in Blender 5.0+, so on older Blender
 that one step honestly waits (its check answers "not yet",
 never an error) while the other seven work as always.
+
+### v3.18.0: animation's eleventh piece — "Make it change colour"
+
+Animation's eleventh piece teaches changing colour — a thing's paint travelling from one colour to a clearly different one — in four steps: pick the thing that will change colour, remember its starting colour (a colour memory at frame 1 on the paint's Base Color slot, the reference build wearing red), change the colour and remember again (blue remembered at frame 48), then watch it change and save. The teaching point is that the memories can hold a thing's PAINT as a journey of its own: one colour, a different colour, and Blender blending between them — red to blue passes through purple. The checks read the colour memories themselves (they live on the material's node tree, read through the same cross-version helper as every other memory) and the real evaluated colour at the first and last memories — the span must run at least 20 frames and the colour must really travel, a distance of at least 0.6 through colour space where red to blue measures about 1.1, so a nudge of the same colour cannot pass for a change. A probe on Blender 5.3.0 and 4.2.5 before building showed a red memory at frame 1 and a blue one at frame 48 read back and blend identically on both versions (frame 24 reading purple, 0.451 / 0.183 / 0.477). The battery's negative cases prove a plain scene ticks only step 1, a starting colour alone does not prove the change, and a nudge of the same colour does not prove it either. The coverage box now names all eleven animation pieces and still calls them first pieces, not the whole craft. Verified on Blender 5.3.0 and 4.2.5: the flows battery (all nineteen flows, plus the anim_color, anim_swing, anim_bounce, anim_scale, anim_follow, anim_path, anim_loop, anim_character, anim_camera, anim_ease, anim_move and sculpting negatives), the interface battery, and the plain-layer and search batteries. The full parallel battery on an unloaded machine is still owed. Proof picture: demo/anim_color_final.png — the reference build's thing at frame 48, fully blue at the end of its change from red, on the ground with its shadow below.
 
 ### v3.17.0: animation's tenth piece — "Make it swing"
 

@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 17, 0),
+    "version": (3, 18, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -10772,7 +10772,8 @@ ANIM_SWING_STEPS = [
          "swinging - one thing, its facing remembered "
          "leaned one way, leaned the other way, and "
          "back, and Blender filling in the sweep "
-         "between. It is still not the whole craft: "
+         "between. The next piece changes a thing's "
+         "colour. It is still not the whole craft: "
          "performances are built from pieces like "
          "this, one change at a time."],
      "missing": "Not finished: the file needs a save, "
@@ -10780,6 +10781,273 @@ ANIM_SWING_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_swing_finish,
      "check": _check_swing_finish},
+]
+
+def _color_socket(main):
+    """The main thing's paint: the Base Color slot of the
+    first material on it that paints through the standard
+    surface (Principled BSDF). Returns the slot, or None
+    when the thing carries no such paint yet."""
+    if main is None or getattr(main, "data", None) is None:
+        return None
+    for mat in getattr(main.data, "materials", ()):
+        if mat is None or not getattr(mat, "use_nodes", False):
+            continue
+        tree = getattr(mat, "node_tree", None)
+        if tree is None:
+            continue
+        node = tree.nodes.get("Principled BSDF")
+        if node is not None and len(node.inputs) > 0:
+            return node.inputs[0]
+    return None
+
+
+def _color_frames(main):
+    """Every frame holding a colour memory: the frames on
+    the Base Color curves of the main thing's paint, read
+    through the same cross-version helper as every other
+    memory - the paint's node tree carries its own action
+    the same way a thing does. Probed on Blender 5.3.0
+    and 4.2.5 before building: a red memory at frame 1
+    and a blue one at frame 48 read back identically on
+    both, and the colour between them blends through
+    purple at frame 24."""
+    sock = _color_socket(main)
+    if sock is None:
+        return []
+    tree = sock.id_data
+    frames = set()
+    for fc in _anim_fcurves(tree):
+        if "inputs[0].default_value" in fc.data_path:
+            frames.update(int(kp.co.x) for kp in fc.keyframe_points)
+    return sorted(frames)
+
+
+def _color_eval(context, main, frame):
+    """The thing's real colour at one frame, read by
+    putting the play line there - the colour the window
+    would show. The play line is put back afterwards."""
+    sock = _color_socket(main)
+    if sock is None:
+        return None
+    scene = context.scene
+    here = scene.frame_current
+    scene.frame_set(int(frame))
+    value = tuple(sock.default_value)[:3]
+    scene.frame_set(here)
+    return value
+
+
+def _color_change(context):
+    """(span, colour distance) between the evaluated
+    colour at the first colour memory and at the last:
+    how far the journey runs, and how far the colour
+    itself travels. A real change of colour travels a
+    long way through colour space - the reference build
+    goes from red to blue, a distance of about 1.1 -
+    while a nudge of the same colour barely moves."""
+    main = _flow_main(context)
+    frames = _color_frames(main)
+    if len(frames) < 2:
+        return 0, 0.0
+    first = _color_eval(context, main, frames[0])
+    last = _color_eval(context, main, frames[-1])
+    if first is None or last is None:
+        return 0, 0.0
+    dist = sum((a - b) ** 2 for a, b in zip(first, last)) ** 0.5
+    return frames[-1] - frames[0], dist
+
+
+def _check_color_start(context):
+    """The starting colour, remembered: a colour memory
+    at the start (frame 2 or earlier) on the main thing's
+    paint. A colour with no memory is just the colour it
+    happens to be wearing - nothing has been told to
+    change."""
+    main = _flow_main(context)
+    frames = _color_frames(main)
+    return bool(frames) and frames[0] <= 2
+
+
+def _anim_run_color_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_color_start(context):
+        return
+    sock = _color_socket(main)
+    if sock is None:
+        mat = bpy.data.materials.new(name="Buddy Colour")
+        mat.use_nodes = True
+        main.data.materials.append(mat)
+        sock = _color_socket(main)
+    if sock is None:
+        return
+    context.scene.frame_set(1)
+    sock.default_value = (0.8, 0.12, 0.08, 1.0)
+    sock.keyframe_insert(data_path="default_value", frame=1)
+
+
+def _check_color_change(context):
+    span, dist = _color_change(context)
+    return span >= 20 and dist >= 0.6
+
+
+def _anim_run_color_change(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_color_change(context):
+        return
+    if not _check_color_start(context):
+        _anim_run_color_start(context)
+    sock = _color_socket(main)
+    if sock is None:
+        return
+    scene = context.scene
+    scene.frame_set(48)
+    sock.default_value = (0.08, 0.25, 0.9, 1.0)
+    sock.keyframe_insert(data_path="default_value", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_color_finish(context):
+    return (_check_saved(context)
+            and _check_color_change(context))
+
+
+def _anim_run_color_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_COLOR_STEPS = [
+    {"title": "Pick the thing that will change colour",
+     "skill": "One thing, chosen: a colour change starts "
+              "with a single thing whose paint will travel",
+     "how": "Every piece so far changed a thing's place, "
+            "facing or size. This piece changes its PAINT: "
+            "the colour itself becomes the journey - a "
+            "signal light turning, a chameleon, a mood "
+            "shifting. The way is the memories way again, "
+            "but the memories hold the thing's colour, not "
+            "its place: one colour remembered, a different "
+            "colour remembered later, and Blender blends "
+            "between them. Start by picking the thing: "
+            "any shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will change colour.",
+         "2. Leave it where it is. Nothing moves in this "
+         "piece; only the paint travels.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The change will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting colour",
+     "skill": "The starting colour, remembered: a colour "
+              "memory at frame 1 on the thing's paint",
+     "how": "A change needs a colour to start from. Give "
+            "the thing a paint if it has none - the "
+            "reference build paints it red - go to frame "
+            "1, and remember the colour there. A colour "
+            "memory is a keyframe on the paint's Base "
+            "Color slot itself (in Blender's own words, "
+            "on the material's node tree). The tick reads "
+            "the colour memories themselves: a colour "
+            "remembered at the start must really be "
+            "there - a thing merely wearing a colour "
+            "holds nothing to change FROM.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Give the thing a colour if it has none: "
+         "press Give it a colour above, or add a "
+         "material in the Material tab. The reference "
+         "build wears red.",
+         "3. Hover over the Base Color field in the "
+         "Material tab and press I - that remembers the "
+         "colour at frame 1. Scrub forward: nothing "
+         "changes yet. One colour alone cannot make a "
+         "change."],
+     "missing": "No starting colour remembered yet - "
+                "paint the thing and remember its colour "
+                "at frame 1.",
+     "tools": ["give_colour"],
+     "run": _anim_run_color_start,
+     "check": _check_color_start},
+    {"title": "Change the colour, and remember again",
+     "skill": "The change itself: a clearly different "
+              "colour remembered at least 20 frames later",
+     "how": "Jump to frame 48, change the paint to a "
+            "clearly different colour - the reference "
+            "build changes red to blue - and remember the "
+            "colour again there. Blender blends between "
+            "the two memories, so the thing's colour "
+            "travels through the shades between (red to "
+            "blue passes through purple). The tick reads "
+            "the real evaluated colour at the first and "
+            "last colour memories: the span must run at "
+            "least 20 frames and the colour must really "
+            "travel - a distance of at least 0.6 through "
+            "colour space, where red to blue measures "
+            "about 1.1. A nudge of the same colour does "
+            "not tick it. Probed before building on both "
+            "supported Blenders: a red memory at frame 1 "
+            "and a blue one at frame 48 read back and "
+            "blend identically on each.",
+     "teach": [
+         "1. Jump to frame 48 in the Timeline.",
+         "2. Change the Base Color to a clearly "
+         "different colour - the reference build picks "
+         "blue - and press I over the field to remember "
+         "it there.",
+         "3. Scrub the Timeline: the thing's colour "
+         "travels from the first colour to the second, "
+         "through every shade between."],
+     "missing": "No real colour change yet - a clearly "
+                "different colour remembered at least 20 "
+                "frames after the start.",
+     "tools": ["play_it"],
+     "run": _anim_run_color_change,
+     "check": _check_color_change},
+    {"title": "Watch it change, then save it",
+     "skill": "Finishing a colour change: the paint "
+              "really travels, and the file is saved with "
+              "both colour memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "colour travel. Then save the file. The "
+            "colour memories are saved with it, so the "
+            "change still plays when the file is opened "
+            "again. The tick checks the save and that the "
+            "change is still proven from the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the paint, not the place - the colour "
+         "is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the change is still "
+         "proven.",
+         "3. That is animation's eleventh piece: "
+         "changing colour - one thing, its paint "
+         "remembered in one colour and remembered "
+         "again in a clearly different one, and "
+         "Blender blending between. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the colour change still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_color_finish,
+     "check": _check_color_finish},
 ]
 
 PACKAGES = [
@@ -11123,6 +11391,28 @@ PACKAGES = [
               "the same lean. Each step ticks only when "
               "the scene itself proves it.",
      "steps": ANIM_SWING_STEPS},
+    {"id": "anim_color",
+     "kind": "flow",
+     "name": "Make it change colour",
+     "byline": "Animation's eleventh piece: changing "
+               "colour - one thing, its paint remembered "
+               "in one colour, remembered again in a "
+               "different one, and the blend filled in "
+               "between.",
+     "intro": "Buddy's eleventh animation piece - "
+              "changing colour. The earlier pieces changed "
+              "a thing's place, facing or size; this piece "
+              "changes its paint: the colour remembered at "
+              "frame 1, a clearly different colour "
+              "remembered at frame 48, and Blender blends "
+              "between them. Checked from the colour "
+              "memories themselves and the real evaluated "
+              "colour at the first and last memories - the "
+              "span must run at least 20 frames and the "
+              "colour must really travel through colour "
+              "space. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_COLOR_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -16088,6 +16378,10 @@ _STEP_SCREENS = {
     ("anim_swing", 1): ("Buddy Model", None, None, None),
     ("anim_swing", 2): ("Buddy Model", None, None, None),
     ("anim_swing", 3): ("Buddy Finish", None, None, None),
+    ("anim_color", 0): ("Buddy Model", None, None, None),
+    ("anim_color", 1): ("Buddy Model", None, None, None),
+    ("anim_color", 2): ("Buddy Model", None, None, None),
+    ("anim_color", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -16928,7 +17222,11 @@ _COVERAGE_LINES = (
     "'Make it swing', teaches swinging - one thing, "
     "its facing remembered leaned one way, leaned the "
     "other way, and back, and the sweep filled in "
-    "between. They are first "
+    "between. An eleventh piece, 'Make it change "
+    "colour', teaches changing colour - one thing, "
+    "its paint remembered in one colour and remembered "
+    "again in a clearly different one, and the blend "
+    "filled in between. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
