@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 19, 0),
+    "version": (3, 20, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -11335,7 +11335,9 @@ ANIM_FADE_STEPS = [
          "3. That is animation's twelfth piece: "
          "fading - one thing, solid remembered, mostly "
          "gone remembered again, and Blender blending "
-         "between. It is still not the whole craft: "
+         "between. The next piece pulses a thing - "
+         "swells it and settles it back. It is still not "
+         "the whole craft: "
          "performances are built from pieces like "
          "this, one change at a time."],
      "missing": "Not finished: the file needs a save, "
@@ -11343,6 +11345,226 @@ ANIM_FADE_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_fade_finish,
      "check": _check_fade_finish},
+]
+
+def _pulse_arc(context):
+    """(span, peak size ratio, ends gap) for the main
+    thing's size memories. A real pulse swells and
+    settles back: the peak reads the biggest evaluated
+    size ratio across the span, sampled by putting the
+    play line across it, against the size at the first
+    memory, and the ends must sit back at about the
+    starting size - a grow that never settles is not a
+    pulse. Probed on Blender 5.3.0 and 4.2.5 before
+    building: size memories at 1.0, 2.5 and 1.0 across
+    frames 1/24/48 read back and interpolate identically
+    on both versions."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 1.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 3:
+        return 0, 1.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 1.0, 99.0
+    start = _anim_eval(context, main, first, "scale")
+    end = _anim_eval(context, main, last, "scale")
+    ends = 0.0
+    for i in range(3):
+        if start[i] > 0.05:
+            ends = max(ends, abs(end[i] / start[i] - 1.0))
+    step = max(1, (last - first) // 24)
+    peak = 1.0
+    frame = first
+    while frame <= last:
+        here = _anim_eval(context, main, frame, "scale")
+        for i in range(3):
+            if start[i] > 0.05:
+                peak = max(peak, here[i] / start[i])
+        frame += step
+    return last - first, peak, ends
+
+
+def _check_pulse_start(context):
+    return _check_scale_start(context)
+
+
+def _anim_run_pulse_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_pulse_start(context):
+        return
+    context.scene.frame_set(1)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _check_pulse(context):
+    span, peak, ends = _pulse_arc(context)
+    return span >= 20 and peak >= 1.8 and ends <= 0.3
+
+
+def _anim_run_pulse(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_pulse(context):
+        return
+    scene = context.scene
+    start = _anim_eval(context, main, 1, "scale")
+    if not _check_pulse_start(context):
+        scene.frame_set(1)
+        main.keyframe_insert(data_path="scale", frame=1)
+        start = tuple(main.scale)
+    scene.frame_set(24)
+    main.scale = (start[0] * 2.5, start[1] * 2.5,
+                  start[2] * 2.5)
+    main.keyframe_insert(data_path="scale", frame=24)
+    scene.frame_set(48)
+    main.scale = tuple(start)
+    main.keyframe_insert(data_path="scale", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_pulse_finish(context):
+    return (_check_saved(context)
+            and _check_pulse(context))
+
+
+def _anim_run_pulse_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_PULSE_STEPS = [
+    {"title": "Pick the thing that will pulse",
+     "skill": "One thing, chosen: a pulse starts with a "
+              "single thing whose size will swell and settle",
+     "how": "The grow piece changed a thing's size once, "
+            "small to big. This piece changes it twice: "
+            "big, then back to the size it started - a "
+            "heartbeat, a breathing creature, a warning "
+            "light swelling and settling. The way is the "
+            "size-memories way again: the starting size "
+            "remembered, the swollen size remembered in "
+            "the middle, the starting size remembered "
+            "again at the end, and Blender fills in the "
+            "swell and the settle between them. Start by "
+            "picking the thing: any shape you already "
+            "have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will pulse.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the swell comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The pulse will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The starting size, remembered: a size "
+              "memory at frame 1 the pulse will return to",
+     "how": "A pulse needs a home size: the size it "
+            "swells FROM and settles back TO. Go to "
+            "frame 1 and remember the thing's size there "
+            "- Blender stores a scale memory (a keyframe "
+            "on the thing's Scale). Nothing visibly "
+            "changes: the memory is the anchor, holding "
+            "today's size so the end of the pulse has "
+            "somewhere exact to come back to. The tick "
+            "reads the size memories themselves: one must "
+            "sit at the start.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. With the thing picked, press Remember "
+         "where it is right now above - Buddy remembers "
+         "its size along with its place, and this piece "
+         "reads the size memory.",
+         "3. Scrub forward and back: nothing swells yet. "
+         "One memory alone cannot make a pulse - it "
+         "takes three."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_pulse_start,
+     "check": _check_pulse_start},
+    {"title": "Swell it, then settle it back",
+     "skill": "The pulse itself: clearly bigger in the "
+              "middle, back at the starting size at the end",
+     "how": "Jump to frame 24, make the thing clearly "
+            "bigger - the reference build multiplies its "
+            "size by two and a half - and remember its "
+            "size there. Then jump to frame 48, put its "
+            "size back exactly where it started, and "
+            "remember again. Blender fills in the swell "
+            "up and the settle down between the three "
+            "memories. The tick samples the real "
+            "evaluated size across the whole span: it "
+            "must run at least 20 frames, the peak must "
+            "really multiply (at least 1.8 times the "
+            "start), and the ends must sit back together "
+            "(within 0.3 of the starting size) - a grow "
+            "that never settles does not tick it, and "
+            "neither does a small swell. Probed before "
+            "building on both supported Blenders: size "
+            "memories at the start, the swell and the "
+            "settle read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Jump to frame 24, scale the thing up a "
+         "clear amount - about 2.5, evenly - and "
+         "remember its size.",
+         "2. Jump to frame 48, set its size back to "
+         "exactly what it started at, and remember "
+         "again.",
+         "3. Scrub the Timeline: the thing swells to "
+         "full in the middle and settles back to its "
+         "starting size at the end."],
+     "missing": "No real pulse yet - a clear swell in "
+                "the middle and the starting size back "
+                "again at least 20 frames later.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_pulse,
+     "check": _check_pulse},
+    {"title": "Watch it pulse, then save it",
+     "skill": "Finishing a pulse: the swell and the "
+              "settle really play, and the file is saved "
+              "with all three size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing swell and settle - home size, full "
+            "size, home size again. Then save the file. "
+            "The size memories are saved with it, so the "
+            "pulse still plays when the file is opened "
+            "again. The tick checks the save and that the "
+            "pulse is still proven from the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the size, not the place - swelling and "
+         "settling is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the pulse is still proven.",
+         "3. That is animation's thirteenth piece: "
+         "pulsing - one thing, its size remembered at "
+         "home, remembered swollen, and remembered "
+         "home again, and Blender filling in the swell "
+         "and the settle between. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the pulse still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_pulse_finish,
+     "check": _check_pulse_finish},
 ]
 
 PACKAGES = [
@@ -11729,6 +11951,29 @@ PACKAGES = [
               "Each step ticks only when the scene itself "
               "proves it.",
      "steps": ANIM_FADE_STEPS},
+    {"id": "anim_pulse",
+     "kind": "flow",
+     "name": "Make it pulse",
+     "byline": "Animation's thirteenth piece: pulsing - "
+               "one thing, its size remembered at home, "
+               "remembered swollen, and remembered home "
+               "again, and the swell and settle filled "
+               "in between.",
+     "intro": "Buddy's thirteenth animation piece - "
+              "pulsing. The grow piece changed a thing's "
+              "size once; this piece changes it twice: "
+              "starting size remembered at frame 1, "
+              "swollen size remembered at frame 24, "
+              "starting size remembered again at frame "
+              "48, and Blender fills in the swell and "
+              "the settle between them. Checked from "
+              "the size memories themselves and the real "
+              "evaluated size sampled across the span - "
+              "it must run at least 20 frames, peak at "
+              "least 1.8 times the start, and end back "
+              "at the starting size. Each step ticks "
+              "only when the scene itself proves it.",
+     "steps": ANIM_PULSE_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -16702,6 +16947,10 @@ _STEP_SCREENS = {
     ("anim_fade", 1): ("Buddy Model", None, None, None),
     ("anim_fade", 2): ("Buddy Model", None, None, None),
     ("anim_fade", 3): ("Buddy Finish", None, None, None),
+    ("anim_pulse", 0): ("Buddy Model", None, None, None),
+    ("anim_pulse", 1): ("Buddy Model", None, None, None),
+    ("anim_pulse", 2): ("Buddy Model", None, None, None),
+    ("anim_pulse", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -17549,7 +17798,11 @@ _COVERAGE_LINES = (
     "filled in between. A twelfth piece, 'Make it fade', "
     "teaches fading - one thing, solid remembered and "
     "mostly gone remembered again, and the melt filled "
-    "in between. They are first "
+    "in between. A thirteenth piece, 'Make it pulse', "
+    "teaches pulsing - one thing, its size remembered "
+    "at home, remembered swollen, and remembered home "
+    "again, and the swell and settle filled in "
+    "between. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "

@@ -33,13 +33,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "anim_follow",
                                     "anim_scale", "anim_bounce",
                                     "anim_swing", "anim_color",
-                                    "anim_fade"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_fade",
+                                    "anim_pulse"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS twenty flows registered; every step's "
+print("FLOWS_PASS twenty-one flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -84,6 +85,7 @@ walk("anim_bounce")
 walk("anim_swing")
 walk("anim_color")
 walk("anim_fade")
+walk("anim_pulse")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -603,6 +605,49 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[2], checks
 print("FLOWS_PASS anim_fade negative: a slight dimming "
       "does not prove the fade")
+
+# --- anim_pulse negatives: the pulse must be proven -----
+# A plain scene ticks only step 1; a starting size alone
+# does not tick the pulse step; a grow that never settles
+# does not prove a pulse; and a small swell does not
+# prove one either.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_pulse")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_pulse negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_pulse negative: a starting size "
+      "alone does not prove the pulse")
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(48)
+main.scale = (2.5, 2.5, 2.5)
+main.keyframe_insert(data_path="scale", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_pulse negative: a grow that never "
+      "settles does not prove the pulse")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_pulse")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=1)
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(24)
+main.scale = (1.3, 1.3, 1.3)
+main.keyframe_insert(data_path="scale", frame=24)
+ctx.scene.frame_set(48)
+main.scale = (1, 1, 1)
+main.keyframe_insert(data_path="scale", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_pulse negative: a small swell does "
+      "not prove the pulse")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")
