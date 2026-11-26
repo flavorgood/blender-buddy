@@ -31,13 +31,13 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "anim_character",
                                     "anim_loop", "anim_path",
                                     "anim_follow",
-                                    "anim_scale"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_scale", "anim_bounce"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS sixteen flows registered; every step's "
+print("FLOWS_PASS seventeen flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -78,6 +78,7 @@ walk("anim_loop")
 walk("anim_path")
 walk("anim_follow")
 walk("anim_scale")
+walk("anim_bounce")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -438,6 +439,49 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[2], checks
 print("FLOWS_PASS anim_scale negative: a small nudge of "
       "size does not prove the grow")
+
+# --- anim_bounce negatives: the bounce must be proven ----
+# A plain scene ticks only step 1; a starting place alone
+# does not tick the bounce step; a straight rise that never
+# comes back down does not prove a bounce; and a small hop
+# (half a unit) does not prove one either.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_bounce")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_bounce negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_bounce negative: a starting place "
+      "alone does not prove the bounce")
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(48)
+main.location = (0, 0, 2.5)
+main.keyframe_insert(data_path="location", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_bounce negative: a straight rise "
+      "that never comes back does not prove the bounce")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_bounce")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=1)
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(24)
+main.location = (0, 0, 0.5)
+main.keyframe_insert(data_path="location", frame=24)
+ctx.scene.frame_set(48)
+main.location = (0, 0, 0)
+main.keyframe_insert(data_path="location", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_bounce negative: a small hop does "
+      "not prove the bounce")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

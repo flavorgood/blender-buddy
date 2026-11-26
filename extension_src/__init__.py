@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 15, 0),
+    "version": (3, 16, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -10328,7 +10328,8 @@ ANIM_SCALE_STEPS = [
          "3. That is animation's eighth piece: "
          "growing - one thing, its size remembered "
          "small and remembered big, and Blender "
-         "filling in the growth between. It is still "
+         "filling in the growth between. The next "
+         "piece makes a thing bounce. It is still "
          "not the whole craft: performances are built "
          "from pieces like this, one change at a "
          "time."],
@@ -10338,6 +10339,208 @@ ANIM_SCALE_STEPS = [
      "run": _anim_run_scale_finish,
      "check": _check_scale_finish},
 ]
+def _bounce_arc(context):
+    """(span, peak height above the lower end, height gap
+    between the ends) for the main thing's location
+    memories. A real bounce leaves the ground and comes
+    back to it: the peak reads the highest evaluated
+    height across the span, sampled by putting the play
+    line across it, and the ends must sit at about the
+    same height - a rise that never comes back is not
+    a bounce."""
+    main = _flow_main(context)
+    if main is None:
+        return 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 3:
+        return 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    low = min(start[2], end[2])
+    step = max(1, (last - first) // 24)
+    peak = 0.0
+    frame = first
+    while frame <= last:
+        here = _anim_eval(context, main, frame, "location")
+        peak = max(peak, here[2] - low)
+        frame += step
+    return last - first, peak, abs(end[2] - start[2])
+
+
+def _check_bounce_arc(context):
+    span, peak, ends = _bounce_arc(context)
+    return span >= 20 and peak >= 1.5 and ends <= 0.3
+
+
+def _anim_run_bounce_arc(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_bounce_arc(context):
+        return
+    scene = context.scene
+    start = _anim_eval(context, main, 1, "location")
+    if not _check_anim_start(context):
+        scene.frame_set(1)
+        main.keyframe_insert(data_path="location", frame=1)
+        start = tuple(main.location)
+    mid = 24
+    scene.frame_set(mid)
+    main.location = (start[0], start[1], start[2] + 2.5)
+    main.keyframe_insert(data_path="location", frame=mid)
+    scene.frame_set(48)
+    main.location = start
+    main.keyframe_insert(data_path="location", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_bounce_finish(context):
+    return (_check_saved(context)
+            and _check_bounce_arc(context))
+
+
+def _anim_run_bounce_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_BOUNCE_STEPS = [
+    {"title": "Pick the thing that will bounce",
+     "skill": "One thing, chosen: a bounce starts with a "
+              "single thing that will leave the ground",
+     "how": "Every piece so far moved a thing across the "
+            "ground, along a path, or changed its size. "
+            "This piece sends it UP and brings it back "
+            "down: a ball bouncing, a character hopping, "
+            "a crate dropped and rebounding. The way is "
+            "the first piece's way - memories of its "
+            "place - but the journey is vertical: low, "
+            "high, low again. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh ball here - a ball reads best.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will bounce.",
+         "2. Leave it on the ground for now. The low "
+         "starting place is remembered first; the jump "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The bounce will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, down low",
+     "skill": "The starting place, remembered low: a "
+              "place memory at frame 1",
+     "how": "A bounce needs a ground to leave and to "
+            "come back to. Go to frame 1 and remember "
+            "the thing's place there, down low - Blender "
+            "stores a place memory (a keyframe on the "
+            "thing's Location). Nothing visibly changes: "
+            "the memory is the change, holding the low "
+            "place so the high place has something to "
+            "rise FROM and return TO. The tick reads the "
+            "place memories themselves: one must sit at "
+            "the start.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. With the thing picked, press Remember "
+         "where it is right now above - Buddy remembers "
+         "its place there.",
+         "3. Scrub forward and back: nothing bounces "
+         "yet. One low memory alone cannot make a "
+         "bounce - it takes the rise and the return."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_start,
+     "check": _check_anim_start},
+    {"title": "Send it up, and bring it back down",
+     "skill": "The bounce itself: a high memory in the "
+              "middle, and the low place remembered "
+              "again at the end",
+     "how": "Jump to frame 24, lift the thing clearly "
+            "into the air - the reference build raises "
+            "it two and a half units - and remember its "
+            "place. Then jump to frame 48, put it back "
+            "at its starting height, and remember again. "
+            "Blender fills in the rise and the fall "
+            "between the three memories, so the thing "
+            "leaves the ground and lands back on it. "
+            "The tick reads the real evaluated height "
+            "across the whole span: the span must run "
+            "at least 20 frames, the peak must really "
+            "clear the ground - at least one and a half "
+            "units above the lower end - and the two "
+            "ends must sit at about the same height. A "
+            "rise that never comes back down does not "
+            "tick it, and neither does a small hop. "
+            "Probed before building on both supported "
+            "Blenders: a low-high-low set of memories "
+            "reads back and interpolates identically "
+            "on each - 0 at frame 1, two and a half at "
+            "frame 24, 0 again at frame 48.",
+     "teach": [
+         "1. Jump to frame 24. Lift the thing straight "
+         "up a clear amount - press G then Z and drag, "
+         "or set its Z place about 2.5 higher in the "
+         "Item panel - and remember its place.",
+         "2. Jump to frame 48. Put it back down at its "
+         "starting height and remember its place "
+         "again.",
+         "3. Scrub the Timeline: the thing rises to "
+         "its high memory and falls back to the low "
+         "one - up, and back down."],
+     "missing": "No real bounce yet - a high place "
+                "remembered in the middle, and the low "
+                "place remembered again at least 20 "
+                "frames after the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_bounce_arc,
+     "check": _check_bounce_arc},
+    {"title": "Watch it bounce, then save it",
+     "skill": "Finishing a bounce: the rise and fall "
+              "really play, and the file is saved with "
+              "all three place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing leave the ground, hang at the top, "
+            "and land back where it started. Then save "
+            "the file. The place memories are saved with "
+            "it, so the bounce still plays when the file "
+            "is opened again. The tick checks the save "
+            "and that the bounce is still proven from "
+            "the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the height, not the travel - rising "
+         "and falling is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the bounce is still "
+         "proven.",
+         "3. That is animation's ninth piece: "
+         "bouncing - one thing, its place remembered "
+         "low, high, and low again, and Blender "
+         "filling in the rise and the fall between. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the bounce still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_bounce_finish,
+     "check": _check_bounce_finish},
+]
+
 PACKAGES = [
     {"id": "donut",
      "name": "Make a Donut",
@@ -10635,6 +10838,28 @@ PACKAGES = [
               "really multiply. Each step ticks only "
               "when the scene itself proves it.",
      "steps": ANIM_SCALE_STEPS},
+    {"id": "anim_bounce",
+     "kind": "flow",
+     "name": "Make it bounce",
+     "byline": "Animation's ninth piece: bouncing - "
+               "one thing, its place remembered low, "
+               "high, and low again, and the rise and "
+               "fall filled in between.",
+     "intro": "Buddy's ninth animation piece - "
+              "bouncing. The earlier pieces moved a "
+              "thing across the ground or changed its "
+              "size; this piece sends it up and brings "
+              "it back down: the place remembered low "
+              "at frame 1, high at frame 24, and low "
+              "again at frame 48, and Blender fills in "
+              "the rise and the fall between. Checked "
+              "from the place memories themselves and "
+              "the real evaluated height across the "
+              "span - the peak must really clear the "
+              "ground and the ends must sit at about "
+              "the same height. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_BOUNCE_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -15592,6 +15817,10 @@ _STEP_SCREENS = {
     ("anim_scale", 1): ("Buddy Model", None, None, None),
     ("anim_scale", 2): ("Buddy Model", None, None, None),
     ("anim_scale", 3): ("Buddy Finish", None, None, None),
+    ("anim_bounce", 0): ("Buddy Model", None, None, None),
+    ("anim_bounce", 1): ("Buddy Model", None, None, None),
+    ("anim_bounce", 2): ("Buddy Model", None, None, None),
+    ("anim_bounce", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -16425,7 +16654,10 @@ _COVERAGE_LINES = (
     "together with the gap held. An eighth piece, "
     "'Make it grow', teaches growing - one thing, "
     "its size remembered small and remembered big, "
-    "and the growth filled in between. They are first "
+    "and the growth filled in between. A ninth piece, "
+    "'Make it bounce', teaches bouncing - one thing, "
+    "its place remembered low, high, and low again, "
+    "and the rise and fall filled in between. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
