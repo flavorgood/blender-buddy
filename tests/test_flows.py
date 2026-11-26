@@ -32,13 +32,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "anim_loop", "anim_path",
                                     "anim_follow",
                                     "anim_scale", "anim_bounce",
-                                    "anim_swing", "anim_color"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_swing", "anim_color",
+                                    "anim_fade"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS nineteen flows registered; every step's "
+print("FLOWS_PASS twenty flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -82,6 +83,7 @@ walk("anim_scale")
 walk("anim_bounce")
 walk("anim_swing")
 walk("anim_color")
+walk("anim_fade")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -574,6 +576,33 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[2], checks
 print("FLOWS_PASS anim_color negative: a nudge of the same "
       "colour does not prove the change")
+
+# --- anim_fade negatives: the fade must be proven --------
+# A plain scene ticks only step 1; a solid start alone
+# does not tick the fade step; and a slight dimming does
+# not prove a fade either.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_fade")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_fade negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_fade negative: a solid start "
+      "alone does not prove the fade")
+main = bb._flow_main(ctx)
+sock = bb._fade_socket(main)
+ctx.scene.frame_set(48)
+sock.default_value = 0.8
+sock.keyframe_insert(data_path="default_value", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_fade negative: a slight dimming "
+      "does not prove the fade")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

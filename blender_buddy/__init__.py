@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 18, 0),
+    "version": (3, 19, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -11039,7 +11039,8 @@ ANIM_COLOR_STEPS = [
          "changing colour - one thing, its paint "
          "remembered in one colour and remembered "
          "again in a clearly different one, and "
-         "Blender blending between. It is still not "
+         "Blender blending between. The next piece "
+         "fades a thing away. It is still not "
          "the whole craft: performances are built "
          "from pieces like this, one change at a "
          "time."],
@@ -11048,6 +11049,300 @@ ANIM_COLOR_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_color_finish,
      "check": _check_color_finish},
+]
+
+def _fade_socket(main):
+    """The main thing's see-through slot: the Alpha slot
+    of the first material on it that paints through the
+    standard surface (Principled BSDF). Returns the slot,
+    or None when the thing carries no such paint yet.
+    Probed on Blender 5.3.0 and 4.2.5 before building:
+    the Alpha slot is inputs[4] on both versions."""
+    if main is None or getattr(main, "data", None) is None:
+        return None
+    for mat in getattr(main.data, "materials", ()):
+        if mat is None or not getattr(mat, "use_nodes", False):
+            continue
+        tree = getattr(mat, "node_tree", None)
+        if tree is None:
+            continue
+        node = tree.nodes.get("Principled BSDF")
+        if node is not None and "Alpha" in node.inputs:
+            return node.inputs["Alpha"]
+    return None
+
+
+def _fade_make_visible(mat):
+    """Let the fade actually show: a paint only renders
+    its Alpha when the material is set to blend its
+    see-through parts. Blender 5.x calls the setting the
+    surface render method; 4.x calls it the blend method.
+    Set whichever the running Blender carries."""
+    if mat is None:
+        return
+    try:
+        mat.surface_render_method = "BLENDED"
+    except Exception:
+        pass
+    try:
+        mat.blend_method = "BLEND"
+    except Exception:
+        pass
+
+
+def _fade_frames(main):
+    """Every frame holding a fade memory: the frames on
+    the Alpha curves of the main thing's paint, read
+    through the same cross-version helper as every other
+    memory - the paint's node tree carries its own action
+    the same way a thing does. Probed on Blender 5.3.0
+    and 4.2.5 before building: a solid memory at frame 1
+    and a faded one at frame 48 read back identically on
+    both, and the fade between them passes 0.564 at
+    frame 24."""
+    sock = _fade_socket(main)
+    if sock is None:
+        return []
+    node = sock.id_data.nodes.get("Principled BSDF")
+    idx = list(node.inputs).index(sock)
+    frag = "inputs[%d].default_value" % idx
+    tree = sock.id_data
+    frames = set()
+    for fc in _anim_fcurves(tree):
+        if frag in fc.data_path:
+            frames.update(int(kp.co.x) for kp in fc.keyframe_points)
+    return sorted(frames)
+
+
+def _fade_eval(context, main, frame):
+    """The thing's real see-through amount at one frame
+    (1 is solid, 0 is gone), read by putting the play
+    line there - the amount the window would show. The
+    play line is put back afterwards."""
+    sock = _fade_socket(main)
+    if sock is None:
+        return None
+    scene = context.scene
+    here = scene.frame_current
+    scene.frame_set(int(frame))
+    value = float(sock.default_value)
+    scene.frame_set(here)
+    return value
+
+
+def _fade_change(context):
+    """(span, first alpha, last alpha) between the
+    evaluated see-through amount at the first fade
+    memory and at the last: how long the fade runs, and
+    how far it travels from solid toward gone. A real
+    fade starts solid and ends mostly gone - the
+    reference build goes from 1.0 to 0.1 - while a
+    slight dimming barely moves."""
+    main = _flow_main(context)
+    frames = _fade_frames(main)
+    if len(frames) < 2:
+        return 0, 0.0, 0.0
+    first = _fade_eval(context, main, frames[0])
+    last = _fade_eval(context, main, frames[-1])
+    if first is None or last is None:
+        return 0, 0.0, 0.0
+    return frames[-1] - frames[0], first, last
+
+
+def _check_fade_start(context):
+    """The solid start, remembered: a fade memory at the
+    start (frame 2 or earlier) on the main thing's paint,
+    with the thing solid there (alpha at least 0.9). A
+    fade has to start from something fully there."""
+    main = _flow_main(context)
+    frames = _fade_frames(main)
+    if not frames or frames[0] > 2:
+        return False
+    first = _fade_eval(context, main, frames[0])
+    return first is not None and first >= 0.9
+
+
+def _anim_run_fade_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_fade_start(context):
+        return
+    sock = _fade_socket(main)
+    if sock is None:
+        mat = bpy.data.materials.new(name="Buddy Fade")
+        mat.use_nodes = True
+        main.data.materials.append(mat)
+        sock = _fade_socket(main)
+    if sock is None:
+        return
+    _fade_make_visible(sock.id_data)
+    base = _color_socket(main)
+    if base is not None:
+        base.default_value = (0.8, 0.12, 0.08, 1.0)
+    context.scene.frame_set(1)
+    sock.default_value = 1.0
+    sock.keyframe_insert(data_path="default_value", frame=1)
+
+
+def _check_fade(context):
+    span, first, last = _fade_change(context)
+    return span >= 20 and first >= 0.9 and last <= 0.35
+
+
+def _anim_run_fade(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_fade(context):
+        return
+    if not _check_fade_start(context):
+        _anim_run_fade_start(context)
+    sock = _fade_socket(main)
+    if sock is None:
+        return
+    _fade_make_visible(sock.id_data)
+    scene = context.scene
+    scene.frame_set(48)
+    sock.default_value = 0.1
+    sock.keyframe_insert(data_path="default_value", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_fade_finish(context):
+    return (_check_saved(context)
+            and _check_fade(context))
+
+
+def _anim_run_fade_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_FADE_STEPS = [
+    {"title": "Pick the thing that will fade",
+     "skill": "One thing, chosen: a fade starts with a "
+              "single thing that will melt away",
+     "how": "Every piece so far changed a thing's place, "
+            "facing, size or colour. This piece changes "
+            "how THERE it is: solid at the start, mostly "
+            "gone at the end - a ghost arriving in "
+            "reverse, a prop dissolving, an idea leaving. "
+            "The way is the memories way again, but the "
+            "memories hold the thing's see-through amount "
+            "(in Blender's own words, the Alpha on its "
+            "paint): solid remembered, faded remembered "
+            "later, and Blender blends between them. Start "
+            "by picking the thing: any shape you already "
+            "have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will fade.",
+         "2. Leave it where it is. Nothing moves in this "
+         "piece; the thing itself melts away.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The fade will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember it solid",
+     "skill": "The solid start, remembered: a fade memory "
+              "at frame 1 with the thing fully there",
+     "how": "A fade needs a solid thing to start from. "
+            "Give the thing a paint if it has none - the "
+            "reference build paints it red and sets the "
+            "paint to show its see-through parts - go to "
+            "frame 1, and remember the Alpha there at "
+            "1.0, fully solid. A fade memory is a keyframe "
+            "on the paint's Alpha slot itself (in "
+            "Blender's own words, on the material's node "
+            "tree). The tick reads the fade memories "
+            "themselves and the real amount at the first "
+            "one: a thing merely sitting there solid holds "
+            "nothing to fade FROM until it is remembered.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Give the thing a colour if it has none: "
+         "press Give it a colour above, or add a "
+         "material in the Material tab. The reference "
+         "build wears red, with its paint set to blend "
+         "(that setting is what lets the see-through "
+         "amount show at all).",
+         "3. Hover over the Alpha field in the Material "
+         "tab and press I - that remembers solid at "
+         "frame 1. Scrub forward: nothing changes yet. "
+         "Solid alone cannot make a fade."],
+     "missing": "No solid start remembered yet - paint "
+                "the thing and remember its Alpha at "
+                "frame 1.",
+     "tools": ["give_colour"],
+     "run": _anim_run_fade_start,
+     "check": _check_fade_start},
+    {"title": "Fade it, and remember again",
+     "skill": "The fade itself: mostly gone, remembered "
+              "at least 20 frames later",
+     "how": "Jump to frame 48, drop the paint's Alpha to "
+            "nearly gone - the reference build fades to "
+            "0.1 - and remember it again there. Blender "
+            "blends between the two memories, so the "
+            "thing melts away evenly across the span "
+            "(halfway, at frame 24, it reads 0.564 - a "
+            "little more than half there). The tick reads "
+            "the real evaluated amount at the first and "
+            "last fade memories: the span must run at "
+            "least 20 frames, it must start solid (at "
+            "least 0.9) and it must end mostly gone (at "
+            "most 0.35). A slight dimming does not tick "
+            "it. Probed before building on both supported "
+            "Blenders: a solid memory at frame 1 and a "
+            "0.1 memory at frame 48 read back and blend "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 48 in the Timeline.",
+         "2. Drop the Alpha field to 0.1 and press I "
+         "over the field to remember it there.",
+         "3. Scrub the Timeline: the thing melts from "
+         "solid to nearly gone, evenly, across the "
+         "whole span."],
+     "missing": "No real fade yet - mostly gone, "
+                "remembered at least 20 frames after the "
+                "solid start.",
+     "tools": ["play_it"],
+     "run": _anim_run_fade,
+     "check": _check_fade},
+    {"title": "Watch it fade, then save it",
+     "skill": "Finishing a fade: the thing really melts "
+              "away, and the file is saved with both fade "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing disappear. Then save the file. The "
+            "fade memories are saved with it, so the fade "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the fade "
+            "is still proven from the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing itself, not its place - "
+         "melting away is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the fade is still proven.",
+         "3. That is animation's twelfth piece: "
+         "fading - one thing, solid remembered, mostly "
+         "gone remembered again, and Blender blending "
+         "between. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the fade still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_fade_finish,
+     "check": _check_fade_finish},
 ]
 
 PACKAGES = [
@@ -11413,6 +11708,27 @@ PACKAGES = [
               "space. Each step ticks only when the scene "
               "itself proves it.",
      "steps": ANIM_COLOR_STEPS},
+    {"id": "anim_fade",
+     "kind": "flow",
+     "name": "Make it fade",
+     "byline": "Animation's twelfth piece: fading - "
+               "one thing, solid remembered, mostly gone "
+               "remembered again, and the melt filled in "
+               "between.",
+     "intro": "Buddy's twelfth animation piece - "
+              "fading. The earlier pieces changed a "
+              "thing's place, facing, size or paint; this "
+              "piece changes how there it is: solid "
+              "remembered at frame 1, mostly gone "
+              "remembered at frame 48, and Blender blends "
+              "between them. Checked from the fade "
+              "memories themselves and the real evaluated "
+              "see-through amount at the first and last "
+              "memories - the span must run at least 20 "
+              "frames, start solid and end mostly gone. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_FADE_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -16382,6 +16698,10 @@ _STEP_SCREENS = {
     ("anim_color", 1): ("Buddy Model", None, None, None),
     ("anim_color", 2): ("Buddy Model", None, None, None),
     ("anim_color", 3): ("Buddy Finish", None, None, None),
+    ("anim_fade", 0): ("Buddy Model", None, None, None),
+    ("anim_fade", 1): ("Buddy Model", None, None, None),
+    ("anim_fade", 2): ("Buddy Model", None, None, None),
+    ("anim_fade", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -17226,7 +17546,10 @@ _COVERAGE_LINES = (
     "colour', teaches changing colour - one thing, "
     "its paint remembered in one colour and remembered "
     "again in a clearly different one, and the blend "
-    "filled in between. They are first "
+    "filled in between. A twelfth piece, 'Make it fade', "
+    "teaches fading - one thing, solid remembered and "
+    "mostly gone remembered again, and the melt filled "
+    "in between. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
