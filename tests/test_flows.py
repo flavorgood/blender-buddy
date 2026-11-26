@@ -31,13 +31,14 @@ assert {p["id"] for p in flows} == {"hard_surface", "look_real",
                                     "anim_character",
                                     "anim_loop", "anim_path",
                                     "anim_follow",
-                                    "anim_scale", "anim_bounce"}, [p["id"] for p in bb.PACKAGES]
+                                    "anim_scale", "anim_bounce",
+                                    "anim_swing"}, [p["id"] for p in bb.PACKAGES]
 for pkg in flows:
     for step in pkg["steps"]:
         assert "tools" in step, (pkg["id"], step["title"])
         for tid in step["tools"]:
             assert tid in bb.ACTIONS_BY_ID, (pkg["id"], tid)
-print("FLOWS_PASS seventeen flows registered; every step's "
+print("FLOWS_PASS eighteen flows registered; every step's "
       "tools are real Buddy buttons")
 
 
@@ -79,6 +80,7 @@ walk("anim_path")
 walk("anim_follow")
 walk("anim_scale")
 walk("anim_bounce")
+walk("anim_swing")
 
 # --- sculpt_symmetry negatives: the mirror must be proven ------
 # A plain ball ticks only step 1 (it is symmetric, but nothing
@@ -482,6 +484,68 @@ checks, _current = bb.tour_state(ctx)
 assert not checks[2], checks
 print("FLOWS_PASS anim_bounce negative: a small hop does "
       "not prove the bounce")
+
+# --- anim_swing negatives: the swing must be proven ------
+# A plain scene ticks only step 1; a starting lean alone
+# does not tick the swing step; a one-way turn that ends
+# leaned the other way does not prove a swing; a tip that
+# never crosses the middle (0 -> 1.2 -> 0) does not prove
+# one either; and a small sway does not prove one.
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_swing")
+bpy.ops.buddy.tour_do(step=0)
+checks, _current = bb.tour_state(ctx)
+assert checks[0] and not any(checks[1:]), checks
+print("FLOWS_PASS anim_swing negative: a plain scene ticks "
+      "only step 1")
+bpy.ops.buddy.tour_do(step=1)
+checks, _current = bb.tour_state(ctx)
+assert checks[1] and not checks[2], checks
+print("FLOWS_PASS anim_swing negative: a starting lean "
+      "alone does not prove the swing")
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(48)
+main.rotation_euler = (0, 0.7, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_swing negative: a one-way turn "
+      "does not prove the swing")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_swing")
+bpy.ops.buddy.tour_do(step=0)
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(1)
+main.rotation_euler = (0, 0, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=1)
+ctx.scene.frame_set(24)
+main.rotation_euler = (0, 1.2, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=24)
+ctx.scene.frame_set(48)
+main.rotation_euler = (0, 0, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_swing negative: a tip that never "
+      "crosses the middle does not prove the swing")
+bpy.ops.wm.read_factory_settings(use_empty=False)
+ctx = bpy.context
+bpy.ops.buddy.tour_start(package="anim_swing")
+bpy.ops.buddy.tour_do(step=0)
+bpy.ops.buddy.tour_do(step=1)
+main = bb._flow_main(ctx)
+ctx.scene.frame_set(24)
+main.rotation_euler = (0, 0.2, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=24)
+ctx.scene.frame_set(48)
+main.rotation_euler = (0, -0.2, 0)
+main.keyframe_insert(data_path="rotation_euler", frame=48)
+checks, _current = bb.tour_state(ctx)
+assert not checks[2], checks
+print("FLOWS_PASS anim_swing negative: a small sway does "
+      "not prove the swing")
 
 bb.unregister()
 print("ALL FLOWS TESTS PASSED")

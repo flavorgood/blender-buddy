@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 16, 0),
+    "version": (3, 17, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -10531,6 +10531,7 @@ ANIM_BOUNCE_STEPS = [
          "bouncing - one thing, its place remembered "
          "low, high, and low again, and Blender "
          "filling in the rise and the fall between. "
+         "The next piece makes a thing swing. "
          "It is still not the whole craft: "
          "performances are built from pieces like "
          "this, one change at a time."],
@@ -10539,6 +10540,246 @@ ANIM_BOUNCE_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_bounce_finish,
      "check": _check_bounce_finish},
+]
+
+def _check_swing_start(context):
+    """The starting facing, remembered while leaned one
+    way: a facing (rotation) memory at the start whose
+    evaluated facing really leans - at least 0.3 rad on
+    some axis. A facing remembered upright holds no lean
+    to swing FROM."""
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first, "rotation_euler")
+    return max(abs(v) for v in rot) >= 0.3
+
+
+def _anim_run_swing_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_swing_start(context):
+        return
+    scene = context.scene
+    scene.frame_set(1)
+    rot = _anim_eval(context, main, 1, "rotation_euler")
+    main.rotation_euler = (rot[0], -0.7, rot[2])
+    main.keyframe_insert(data_path="rotation_euler", frame=1)
+
+
+def _swing_arc(context):
+    """(span, lean range, ends gap, lowest lean, highest
+    lean) on the main thing's busiest facing axis. A real
+    swing crosses the middle: it leans clearly to BOTH
+    sides and comes back to its starting lean, so the
+    range is read across the whole span by putting the
+    play line across it, the ends must sit at about the
+    same lean, and the sampled lean must reach clearly
+    negative AND clearly positive on that one axis - a
+    one-way turn ends somewhere else, and a tip that
+    never crosses the middle is not a swing."""
+    main = _flow_main(context)
+    if main is None:
+        return 0.0, 0.0, 99.0, 0.0, 0.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 3:
+        return 0.0, 0.0, 99.0, 0.0, 0.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0.0, 0.0, 99.0, 0.0, 0.0
+    lows = [99.0, 99.0, 99.0]
+    highs = [-99.0, -99.0, -99.0]
+    step = max(1, (last - first) // 24)
+    frame = first
+    while frame <= last:
+        here = _anim_eval(context, main, frame, "rotation_euler")
+        for i in range(3):
+            lows[i] = min(lows[i], here[i])
+            highs[i] = max(highs[i], here[i])
+        frame += step
+    axis = max(range(3), key=lambda i: highs[i] - lows[i])
+    start = _anim_eval(context, main, first, "rotation_euler")
+    end = _anim_eval(context, main, last, "rotation_euler")
+    return (last - first, highs[axis] - lows[axis],
+            abs(end[axis] - start[axis]), lows[axis], highs[axis])
+
+
+def _check_swing_arc(context):
+    span, rng, ends, low, high = _swing_arc(context)
+    return (span >= 20 and rng >= 1.0 and ends <= 0.3
+            and low <= -0.35 and high >= 0.35)
+
+
+def _anim_run_swing_arc(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_swing_arc(context):
+        return
+    scene = context.scene
+    if not _check_swing_start(context):
+        _anim_run_swing_start(context)
+    start = _anim_eval(context, main, 1, "rotation_euler")
+    scene.frame_set(24)
+    main.rotation_euler = (start[0], 0.7, start[2])
+    main.keyframe_insert(data_path="rotation_euler", frame=24)
+    scene.frame_set(48)
+    main.rotation_euler = start
+    main.keyframe_insert(data_path="rotation_euler", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_swing_finish(context):
+    return (_check_saved(context)
+            and _check_swing_arc(context))
+
+
+def _anim_run_swing_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SWING_STEPS = [
+    {"title": "Pick the thing that will swing",
+     "skill": "One thing, chosen: a swing starts with a "
+              "single thing that will lean both ways",
+     "how": "Every piece so far moved a thing's place or "
+            "changed its size. This piece turns its "
+            "FACING back and forth: a hanging sign, a "
+            "pendulum, a character swaying. The way is "
+            "the memories way again, but the memories "
+            "hold the thing's facing (its turn), not its "
+            "place: leaned one way, leaned the other "
+            "way, and back. Start by picking the thing: "
+            "any shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will swing.",
+         "2. Leave its facing alone for now. The first "
+         "lean is remembered first; the swing comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The swing will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its facing, leaned one way",
+     "skill": "The starting facing, remembered leaned: a "
+              "facing memory at frame 1, leaning at least "
+              "a third of a radian",
+     "how": "A swing needs a lean to start from. Go to "
+            "frame 1, lean the thing clearly to one side "
+            "- the reference build leans it 0.7 radians "
+            "to the left - and remember its facing there. "
+            "Blender stores a facing memory (a keyframe "
+            "on the thing's Rotation). The tick reads the "
+            "facing memories themselves and the real "
+            "facing at the first one: it must really lean "
+            "- a facing remembered upright holds nothing "
+            "to swing from.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Lean the thing to one side - press R then Y "
+         "and drag, or set its Y turn to about -0.7 in "
+         "the Item panel.",
+         "3. With the thing picked, press Remember where "
+         "it is right now above - Buddy remembers its "
+         "facing there. Scrub forward: nothing swings "
+         "yet. One lean alone cannot make a swing."],
+     "missing": "No leaned facing remembered yet - lean "
+                "the thing at frame 1 and remember its "
+                "facing there.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_swing_start,
+     "check": _check_swing_start},
+    {"title": "Lean it the other way, and back",
+     "skill": "The swing itself: a facing memory leaned "
+              "the other way in the middle, and the first "
+              "lean remembered again at the end",
+     "how": "Jump to frame 24, lean the thing clearly "
+            "the OTHER way - the reference build leans "
+            "it 0.7 radians to the right - and remember "
+            "its facing. Then jump to frame 48, put its "
+            "facing back at the first lean, and remember "
+            "again. Blender fills in the sweep between "
+            "the three memories, so the thing swings "
+            "across the middle and back. The tick reads "
+            "the real evaluated facing across the whole "
+            "span: the span must run at least 20 frames, "
+            "the lean must sweep at least one radian end "
+            "to end, it must reach clearly to BOTH sides "
+            "of upright on the same axis, and the two "
+            "ends must sit at about the same lean. A "
+            "one-way turn does not tick it - it ends "
+            "somewhere else - and neither does a tip that "
+            "never crosses the middle, or a small sway. "
+            "Probed before building on both supported "
+            "Blenders: a lean-lean-back set of facing "
+            "memories reads back and interpolates "
+            "identically on each - minus 0.7 at frame 1, "
+            "plus 0.7 at frame 24, minus 0.7 again at "
+            "frame 48.",
+     "teach": [
+         "1. Jump to frame 24. Lean the thing the other "
+         "way - its Y turn to about +0.7 - and remember "
+         "its facing.",
+         "2. Jump to frame 48. Put its facing back at "
+         "the first lean (Y turn about -0.7) and "
+         "remember its facing again.",
+         "3. Scrub the Timeline: the thing leans left, "
+         "sweeps through upright, leans right, and "
+         "comes back - a swing."],
+     "missing": "No real swing yet - a facing leaned "
+                "the other way remembered in the middle, "
+                "and the first lean remembered again at "
+                "least 20 frames after the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_swing_arc,
+     "check": _check_swing_arc},
+    {"title": "Watch it swing, then save it",
+     "skill": "Finishing a swing: the lean really plays "
+              "both ways, and the file is saved with all "
+              "three facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean one way, sweep across, lean the "
+            "other way, and come back. Then save the "
+            "file. The facing memories are saved with it, "
+            "so the swing still plays when the file is "
+            "opened again. The tick checks the save and "
+            "that the swing is still proven from the "
+            "memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the lean, not the travel - side to "
+         "side is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the swing is still "
+         "proven.",
+         "3. That is animation's tenth piece: "
+         "swinging - one thing, its facing remembered "
+         "leaned one way, leaned the other way, and "
+         "back, and Blender filling in the sweep "
+         "between. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the swing still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_swing_finish,
+     "check": _check_swing_finish},
 ]
 
 PACKAGES = [
@@ -10860,6 +11101,28 @@ PACKAGES = [
               "the same height. Each step ticks only "
               "when the scene itself proves it.",
      "steps": ANIM_BOUNCE_STEPS},
+    {"id": "anim_swing",
+     "kind": "flow",
+     "name": "Make it swing",
+     "byline": "Animation's tenth piece: swinging - "
+               "one thing, its facing remembered leaned "
+               "one way, leaned the other way, and back, "
+               "and the sweep filled in between.",
+     "intro": "Buddy's tenth animation piece - "
+              "swinging. The earlier pieces changed a "
+              "thing's place or its size; this piece "
+              "turns its facing back and forth: the "
+              "facing remembered leaned one way at "
+              "frame 1, leaned the other way at frame "
+              "24, and back at frame 48, and Blender "
+              "fills in the sweep between. Checked from "
+              "the facing memories themselves and the "
+              "real evaluated facing across the span - "
+              "the lean must really reach both sides of "
+              "upright and the ends must sit at about "
+              "the same lean. Each step ticks only when "
+              "the scene itself proves it.",
+     "steps": ANIM_SWING_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -15821,6 +16084,10 @@ _STEP_SCREENS = {
     ("anim_bounce", 1): ("Buddy Model", None, None, None),
     ("anim_bounce", 2): ("Buddy Model", None, None, None),
     ("anim_bounce", 3): ("Buddy Finish", None, None, None),
+    ("anim_swing", 0): ("Buddy Model", None, None, None),
+    ("anim_swing", 1): ("Buddy Model", None, None, None),
+    ("anim_swing", 2): ("Buddy Model", None, None, None),
+    ("anim_swing", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -16657,7 +16924,11 @@ _COVERAGE_LINES = (
     "and the growth filled in between. A ninth piece, "
     "'Make it bounce', teaches bouncing - one thing, "
     "its place remembered low, high, and low again, "
-    "and the rise and fall filled in between. They are first "
+    "and the rise and fall filled in between. A tenth piece, "
+    "'Make it swing', teaches swinging - one thing, "
+    "its facing remembered leaned one way, leaned the "
+    "other way, and back, and the sweep filled in "
+    "between. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
