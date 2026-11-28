@@ -50,7 +50,7 @@ from bpy.types import AddonPreferences, Menu, Operator, Panel, WorkSpaceTool
 bl_info = {
     "name": "Blender Buddy - Blender in Plain Words",
     "author": "Blender Buddy prototype",
-    "version": (3, 21, 0),
+    "version": (3, 85, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N key) > Blender Buddy tab",
     "description": "Put the power in the hands of average people who can't spend 10k hours learning a skill: Blender "
@@ -11816,8 +11816,10 @@ ANIM_FLIP_STEPS = [
          "flipping - one thing, its facing remembered "
          "upright, remembered upside down, and "
          "remembered upright again as one full turn, "
-         "and Blender filling in the roll between. It "
-         "is still not the whole craft: performances "
+         "and Blender filling in the roll between. The "
+         "next piece stretches a thing - longer one way, "
+         "the same the other ways. It is still not the "
+         "whole craft: performances "
          "are built from pieces like this, one change "
          "at a time."],
      "missing": "Not finished: the file needs a save, "
@@ -11825,6 +11827,18636 @@ ANIM_FLIP_STEPS = [
      "tools": ["play_it", "save_work"],
      "run": _anim_run_flip_finish,
      "check": _check_flip_finish},
+]
+
+def _stretch_shape(context):
+    """(span, long ratio, other drift) for the main
+    thing's size memories. A real stretch lengthens ONE
+    axis while the others hold: the long ratio reads the
+    biggest evaluated size ratio between the first and
+    last memories, and the drift reads the biggest ratio
+    change on the OTHER two axes - a grow that swells
+    every axis together is not a stretch, however big.
+    Probed on Blender 5.3.0 and 4.2.5 before building:
+    size memories at (1,1,1) and (2.5,1,1) across frames
+    1/48 read back and interpolate identically on both
+    versions (frame 24 reading about 1.726 on the long
+    axis, the others still 1.0)."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 1.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 1.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 1.0, 99.0
+    start = _anim_eval(context, main, first, "scale")
+    end = _anim_eval(context, main, last, "scale")
+    ratios = []
+    for i in range(3):
+        if start[i] > 0.05:
+            ratios.append(end[i] / start[i])
+        else:
+            ratios.append(1.0)
+    long_ratio = max(ratios)
+    axis = ratios.index(long_ratio)
+    drift = 0.0
+    for i in range(3):
+        if i != axis:
+            drift = max(drift, abs(ratios[i] - 1.0))
+    return last - first, long_ratio, drift
+
+
+def _check_stretch_start(context):
+    return _check_scale_start(context)
+
+
+def _anim_run_stretch_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_stretch_start(context):
+        return
+    context.scene.frame_set(1)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _check_stretch(context):
+    span, long_ratio, drift = _stretch_shape(context)
+    return span >= 20 and long_ratio >= 1.8 and drift <= 0.3
+
+
+def _anim_run_stretch(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_stretch(context):
+        return
+    scene = context.scene
+    if not _check_stretch_start(context):
+        scene.frame_set(1)
+        main.keyframe_insert(data_path="scale", frame=1)
+    start = _anim_eval(context, main, 1, "scale")
+    scene.frame_set(48)
+    main.scale = (start[0] * 2.5, start[1], start[2])
+    main.keyframe_insert(data_path="scale", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_stretch_finish(context):
+    return (_check_saved(context)
+            and _check_stretch(context))
+
+
+def _anim_run_stretch_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_STRETCH_STEPS = [
+    {"title": "Pick the thing that will stretch",
+     "skill": "One thing, chosen: a stretch starts with a "
+              "single thing that will lengthen one way",
+     "how": "The grow piece made a thing bigger all over, "
+            "and the pulse swelled it and settled it back. "
+            "This piece changes its SHAPE: longer in one "
+            "direction, the same in the others - a rubber "
+            "band pulled, a cartoon run-up, dough rolled "
+            "out. The way is the size-memories way again: "
+            "the starting size remembered, then the thing "
+            "stretched along one axis and remembered "
+            "again, and Blender fills in the lengthening "
+            "between them. Start by picking the thing: "
+            "any shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will stretch.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the stretch comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The stretch will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The starting size, remembered: a size "
+              "memory at frame 1 that the stretch is "
+              "measured from",
+     "how": "A stretch is measured against the size the "
+            "thing starts at, so that size is remembered "
+            "first, at frame 1 - Blender stores a size "
+            "memory (a keyframe on the thing's Scale). "
+            "Nothing visibly changes: the memory is the "
+            "mark. The tick reads the size memories "
+            "themselves: one must sit at the start.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. With the thing picked, press Remember where "
+         "it is right now above - Buddy remembers its "
+         "size along with its place, and this piece "
+         "reads the size memory.",
+         "3. Scrub forward and back: nothing stretches "
+         "yet. One memory alone cannot make a stretch - "
+         "it takes two."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_stretch_start,
+     "check": _check_stretch_start},
+    {"title": "Stretch it along one way",
+     "skill": "The stretch itself: one axis lengthened "
+              "a clear amount, the other two held",
+     "how": "Jump to frame 48 and make the thing longer "
+            "in ONE direction only - its size along that "
+            "axis two and a half times what it was - "
+            "while its size along the other two directions "
+            "stays as it started, and remember its size "
+            "again. Blender fills in the lengthening "
+            "between the two memories. The tick reads the "
+            "real evaluated size at the first and last "
+            "memories: the span must run at least 20 "
+            "frames, the longest axis must reach at least "
+            "1.8 times its start, and the other axes must "
+            "stay within 0.3 of their start - a grow that "
+            "swells every axis together does not tick it, "
+            "and neither does a small tug. Probed before "
+            "building on both supported Blenders: size "
+            "memories at even and stretched read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Jump to frame 48, and stretch the thing "
+         "along one axis - make that one Scale number "
+         "about two and a half times bigger, and leave "
+         "the other two alone.",
+         "2. Remember its size there.",
+         "3. Scrub the Timeline: the thing lengthens one "
+         "way and keeps its other sizes - a new shape, "
+         "not just a bigger one."],
+     "missing": "No real stretch yet - one axis at "
+                "least 1.8 times longer, the others held, "
+                "at least 20 frames later.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_stretch,
+     "check": _check_stretch},
+    {"title": "Watch it stretch, then save it",
+     "skill": "Finishing a stretch: the lengthening "
+              "really plays, and the file is saved with "
+              "both size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lengthen one way. Then save the file. "
+            "The size memories are saved with it, so the "
+            "stretch still plays when the file is opened "
+            "again. The tick checks the save and that the "
+            "stretch is still proven from the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the shape, not the place - lengthening "
+         "one way is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the stretch is still proven.",
+         "3. That is animation's fifteenth piece: "
+         "stretching - one thing, its size remembered, "
+         "stretched along one axis and remembered "
+         "again, and Blender filling in the lengthening "
+         "between. The next piece orbits a thing - "
+         "all the way round one centre and home. It is "
+         "still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the stretch still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_stretch_finish,
+     "check": _check_stretch_finish},
+]
+
+def _orbit_sweep(context):
+    """(span, sweep, mean radius, radius variation, ends
+    gap) for the main thing's place memories. A real orbit
+    travels ALL the way around one centre: the evaluated
+    place is sampled across the span, the centre is the
+    samples' own middle, the sweep is the total angle
+    travelled around that centre, and the radius variation
+    is how far the distance from the centre strays - a
+    straight move or an out-and-back journey strays wildly
+    (variation about 1.5), a true circle holds it (about
+    0.18). Probed on Blender 5.3.0 and 4.2.5 before
+    building: place memories at the four quarter points of
+    a radius-3 circle across frames 1/13/25/37/48 read back
+    and interpolate identically on both versions (sweep
+    6.2594, mean radius 2.8693, variation 0.1784, reading
+    (-2.9696, 0.3741) at frame 24)."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    sample_frames = list(range(first, last + 1, 2))
+    if sample_frames[-1] != last:
+        sample_frames.append(last)
+    samples = [_anim_eval(context, main, f, "location")
+               for f in sample_frames]
+    cx = sum(s[0] for s in samples) / len(samples)
+    cy = sum(s[1] for s in samples) / len(samples)
+    radii = [math.hypot(s[0] - cx, s[1] - cy) for s in samples]
+    mean_r = sum(radii) / len(radii)
+    if mean_r <= 0.05:
+        return last - first, 0.0, mean_r, 99.0, 99.0
+    var = (max(radii) - min(radii)) / mean_r
+    sweep = 0.0
+    prev = None
+    for s in samples:
+        ang = math.atan2(s[1] - cy, s[0] - cx)
+        if prev is not None:
+            d = ang - prev
+            while d > math.pi:
+                d -= 2 * math.pi
+            while d < -math.pi:
+                d += 2 * math.pi
+            sweep += abs(d)
+        prev = ang
+    a = samples[0]
+    b = samples[-1]
+    ends = math.sqrt(sum((b[i] - a[i]) ** 2 for i in range(3)))
+    return last - first, sweep, mean_r, var, ends
+
+
+def _check_orbit_start(context):
+    return _check_anim_start(context)
+
+
+def _anim_run_orbit_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_orbit_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (3, 0, 1)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_orbit(context):
+    span, sweep, mean_r, var, ends = _orbit_sweep(context)
+    return (span >= 20 and sweep >= 5.0 and mean_r >= 1.5
+            and var <= 0.5 and ends <= 0.3)
+
+
+def _anim_run_orbit(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_orbit(context):
+        return
+    scene = context.scene
+    for f, place in ((1, (3, 0, 1)), (13, (0, 3, 1)),
+                     (25, (-3, 0, 1)), (37, (0, -3, 1)),
+                     (48, (3, 0, 1))):
+        scene.frame_set(f)
+        main.location = place
+        main.keyframe_insert(data_path="location", frame=f)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_orbit_finish(context):
+    return (_check_saved(context)
+            and _check_orbit(context))
+
+
+def _anim_run_orbit_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_ORBIT_STEPS = [
+    {"title": "Pick the thing that will orbit",
+     "skill": "One thing, chosen: an orbit starts with a "
+              "single thing that will circle a centre",
+     "how": "The path piece sent a thing along a drawn "
+            "route, and the loop piece sent it out and "
+            "back for ever. This piece travels a CIRCLE: "
+            "out at the edge of a ring, around through "
+            "every side of one centre, and home to the "
+            "start - a planet round its sun, a camera "
+            "round a product, a guard round a yard. The "
+            "way is the place-memories way again: the "
+            "quarter points of the circle remembered, "
+            "and Blender fills in the ring between them. "
+            "Start by picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will orbit.",
+         "2. Leave its place alone for now. The starting "
+         "place is remembered first; the circle comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The orbit will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting place",
+     "skill": "The starting place, remembered: a place "
+              "memory at frame 1, out at the edge of the "
+              "circle it will travel",
+     "how": "An orbit is measured around its centre, so "
+            "the thing starts out at the edge of its "
+            "circle - three units to one side of the "
+            "middle - and that place is remembered first, "
+            "at frame 1. Blender stores a place memory (a "
+            "keyframe on the thing's Location). The tick "
+            "reads the place memories themselves: one "
+            "must sit at the start.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Put the thing out at the edge of its "
+         "circle - three units along from the middle - "
+         "and press Remember where it is right now "
+         "above.",
+         "3. Scrub forward and back: nothing orbits "
+         "yet. One memory alone cannot make a circle - "
+         "it takes the quarter points."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_orbit_start,
+     "check": _check_orbit_start},
+    {"title": "Go all the way around",
+     "skill": "The orbit itself: the four quarter points "
+              "of one circle remembered in turn, home to "
+              "the start at the end",
+     "how": "Remember the thing's place at each quarter "
+            "of the circle: across the top at frame 13, "
+            "the far side at frame 25, back underneath at "
+            "frame 37, and home to the starting place at "
+            "frame 48 - the same distance from the middle "
+            "every time. Blender fills in the ring "
+            "between the quarter points. The tick reads "
+            "the real evaluated place sampled across the "
+            "whole span: it must run at least 20 frames, "
+            "the angle travelled around the samples' own "
+            "middle must reach at least 5.0 radians, the "
+            "circle must be a clear size (average radius "
+            "at least 1.5), the distance from the middle "
+            "must hold (variation at most 0.5), and the "
+            "ends must meet back at the start - a "
+            "straight move strays wildly in distance and "
+            "does not tick it, and neither does a quarter "
+            "arc. Probed before building on both "
+            "supported Blenders: the quarter-point "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 13 and put the thing the "
+         "same distance from the middle, a quarter of "
+         "the way round. Remember its place there.",
+         "2. Do the same at frame 25 (halfway round, "
+         "the far side) and frame 37 (three quarters "
+         "round).",
+         "3. At frame 48 put it back exactly where it "
+         "started and remember it there. Scrub the "
+         "Timeline: the thing travels a ring, the same "
+         "distance from the middle the whole way."],
+     "missing": "No real orbit yet - all the way around "
+                "one centre, the same distance out, at "
+                "least 20 frames, and home to the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_orbit,
+     "check": _check_orbit},
+    {"title": "Watch it orbit, then save it",
+     "skill": "Finishing an orbit: the ring really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing circle its centre and come home. Then "
+            "save the file. The place memories are saved "
+            "with it, so the orbit still plays when the "
+            "file is opened again. The tick checks the "
+            "save and that the orbit is still proven from "
+            "the sampled places.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the place, not the shape - the ring is "
+         "the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the orbit is still proven.",
+         "3. That is animation's sixteenth piece: "
+         "orbiting - one thing, its place remembered at "
+         "the quarter points of one circle, and Blender "
+         "filling in the ring between. The next piece "
+         "rolls a thing - travelling and turning over "
+         "together across the ground. It is still not "
+         "the whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the orbit still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_orbit_finish,
+     "check": _check_orbit_finish},
+]
+
+def _roll_measure(context):
+    """(span, travel, turn, travel-per-turn) for the main
+    thing's place and facing memories together. A real
+    roll couples the two: the thing travels across the
+    ground AND turns over as it goes, at a pace matching
+    its size - a thing resting one unit above the ground
+    travels about one unit for every radian it turns.
+    A slide travels without turning (turn 0), and a spin
+    turns without travelling (travel 0); neither is a
+    roll. Probed on Blender 5.3.0 and 4.2.5 before
+    building: place and facing memories at (-2, 0, 1) /
+    level and (2, 0, 1) / turned -4 radians across
+    frames 1/48 read back and interpolate identically
+    on both versions (travel 4.0, turn 4.0, ratio 1.0,
+    reading (-0.0638, 0, 1) turned -1.9362 at frame
+    24)."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0
+    loc_keys = _anim_keys(main, "location")
+    rot_keys = _anim_keys(main, "rotation_euler")
+    if not loc_keys or not rot_keys:
+        return 0, 0.0, 0.0, 99.0
+    frames = [k[0] for k in loc_keys] + [k[0] for k in rot_keys]
+    first, last = int(min(frames)), int(max(frames))
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0
+    a_loc = _anim_eval(context, main, first, "location")
+    b_loc = _anim_eval(context, main, last, "location")
+    a_rot = _anim_eval(context, main, first, "rotation_euler")
+    b_rot = _anim_eval(context, main, last, "rotation_euler")
+    travel = math.sqrt(sum((b_loc[i] - a_loc[i]) ** 2
+                           for i in range(3)))
+    turn = max(abs(b_rot[i] - a_rot[i]) for i in range(3))
+    ratio = travel / turn if turn > 0.001 else 99.0
+    return last - first, travel, turn, ratio
+
+
+def _check_roll_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    loc_keys = _anim_keys(main, "location")
+    rot_keys = _anim_keys(main, "rotation_euler")
+    return (bool(loc_keys) and bool(rot_keys)
+            and min(k[0] for k in loc_keys) <= 2
+            and min(k[0] for k in rot_keys) <= 2)
+
+
+def _anim_run_roll_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_roll_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (-2, 0, 1)
+    main.rotation_euler = (0, 0, 0)
+    main.keyframe_insert(data_path="location", frame=1)
+    main.keyframe_insert(data_path="rotation_euler", frame=1)
+
+
+def _check_roll(context):
+    span, travel, turn, ratio = _roll_measure(context)
+    return (span >= 20 and travel >= 2.0 and turn >= 2.5
+            and 0.4 <= ratio <= 2.5)
+
+
+def _anim_run_roll(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_roll(context):
+        return
+    scene = context.scene
+    for f, place, facing in ((1, (-2, 0, 1), (0, 0, 0)),
+                             (48, (2, 0, 1), (0, -4, 0))):
+        scene.frame_set(f)
+        main.location = place
+        main.rotation_euler = facing
+        main.keyframe_insert(data_path="location", frame=f)
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=f)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_roll_finish(context):
+    return (_check_saved(context)
+            and _check_roll(context))
+
+
+def _anim_run_roll_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_ROLL_STEPS = [
+    {"title": "Pick the thing that will roll",
+     "skill": "One thing, chosen: a roll starts with a "
+              "single thing that will travel and turn "
+              "over together",
+     "how": "The move piece travelled in a straight "
+            "line and the flip piece turned on the spot. "
+            "This piece joins the two: a roll travels "
+            "across the ground WHILE turning over, the "
+            "way a ball, a barrel or a dropped box moves "
+            "- the turning and the travelling are one "
+            "motion, paced to each other. The way is the "
+            "memories way again: place and facing "
+            "remembered together at the start and at the "
+            "end, and Blender fills in the roll between "
+            "them. Start by picking the thing: any shape "
+            "you already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will roll.",
+         "2. Leave its place and facing alone for now. "
+         "The start is remembered first; the roll comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The roll will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, and which way it faces",
+     "skill": "The start, remembered whole: a place "
+              "memory and a facing memory together at "
+              "frame 1",
+     "how": "A roll is read from both memories at once, "
+            "so the start remembers the thing's place AND "
+            "its facing together, at frame 1: resting on "
+            "the ground two units to one side, facing "
+            "level. Blender stores a place memory and a "
+            "facing memory (keyframes on the thing's "
+            "Location and Rotation). The tick reads both "
+            "sets of memories: one of each must sit at "
+            "the start.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Put the thing resting on the ground, two "
+         "units to one side, facing level, and press "
+         "Remember where it is right now above - that "
+         "button remembers place and facing together.",
+         "3. Scrub forward and back: nothing rolls yet. "
+         "One remembered start cannot roll - it takes "
+         "the far end remembered too."],
+     "missing": "No start remembered yet - remember the "
+                "thing's place and facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_roll_start,
+     "check": _check_roll_start},
+    {"title": "Roll it across",
+     "skill": "The roll itself: the far end remembered "
+              "with the place travelled and the facing "
+              "turned over, the two paced to each other",
+     "how": "Move the thing four units across the "
+            "ground and turn it over as it goes - four "
+            "radians of turn for four units of travel, "
+            "because a thing resting one unit above the "
+            "ground rolls about one unit per radian - and "
+            "remember place and facing together at frame "
+            "48. Blender fills in the tumble between. The "
+            "tick reads the real evaluated place and "
+            "facing at the first and last memories: the "
+            "span must run at least 20 frames, the travel "
+            "at least 2.0 units, the turn at least 2.5 "
+            "radians, and the travel per radian must sit "
+            "between 0.4 and 2.5 - a slide travels without "
+            "turning and does not tick it, a spin on the "
+            "spot turns without travelling and does not "
+            "tick it either, and a turn wildly out of "
+            "pace with the travel does not tick it. "
+            "Probed before building on both supported "
+            "Blenders: the place and facing memories read "
+            "back and interpolate identically on each.",
+     "teach": [
+         "1. Jump to frame 48 and move the thing four "
+         "units across the ground.",
+         "2. Turn it over as it goes - about four "
+         "radians (a bit more than half a full turn) "
+         "tipped forward over its direction of travel.",
+         "3. Press Remember where it is right now. "
+         "Scrub the Timeline: the thing tumbles across, "
+         "turning as it travels, never sliding."],
+     "missing": "No real roll yet - travel at least 2 "
+                "units with at least 2.5 radians of turn, "
+                "paced to each other, at least 20 frames.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_roll,
+     "check": _check_roll},
+    {"title": "Watch it roll, then save it",
+     "skill": "Finishing a roll: the tumble really "
+              "plays, and the file is saved with the "
+              "place and facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing tumble across the ground. Then save "
+            "the file. The place and facing memories are "
+            "saved with it, so the roll still plays when "
+            "the file is opened again. The tick checks "
+            "the save and that the roll is still proven "
+            "from the evaluated place and facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the tumble, not just the travel - the "
+         "turning with the travelling is the roll.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the roll is still proven.",
+         "3. That is animation's seventeenth piece: "
+         "rolling - one thing, its place and facing "
+         "remembered at both ends of a journey, and "
+         "Blender filling in the tumble between. The "
+         "next piece drops a thing - from up high to "
+         "the ground, to land and stay there. It is "
+         "still not the whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the roll still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_roll_finish,
+     "check": _check_roll_finish},
+]
+
+def _fall_measure(context):
+    """(span, drop, end height, horizontal drift) for the
+    main thing's place memories. A real fall starts up
+    high and ends on the ground, and it goes down, not
+    sideways: the drop is the first memory's height
+    minus the last one's, the end height is the last
+    memory's own height, and the drift is how far the
+    thing wandered sideways between the two. A slide at
+    height drops nothing, and a bounce that comes back
+    up ends high, so neither can pass. Probed on
+    Blender 5.3.0 and 4.2.5 before building: place
+    memories at (0, 0, 4) and (0, 0, 1) across frames
+    1/48 read back and interpolate identically on both
+    versions (span 47, drop 3.0, end height 1.0, drift
+    0.0, reading (0, 0, 2.5479) at frame 24); a slide
+    at height read drop 0.0, a down-then-up bounce read
+    drop 0.0 and end height 4.0, a small dip read drop
+    0.5, and a fall drifting 2.0 sideways over a 3.0
+    drop read drift 2.0 - all failing the bars below."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    a = _anim_eval(context, main, first, "location")
+    b = _anim_eval(context, main, last, "location")
+    drop = a[2] - b[2]
+    drift = math.sqrt((b[0] - a[0]) ** 2
+                      + (b[1] - a[1]) ** 2)
+    return last - first, drop, b[2], drift
+
+
+def _check_fall_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] >= 3.0
+
+
+def _anim_run_fall_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_fall_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (0, 0, 4)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_fall(context):
+    span, drop, end, drift = _fall_measure(context)
+    return (span >= 20 and drop >= 1.5 and end <= 1.3
+            and drift <= 0.5 * drop)
+
+
+def _anim_run_fall(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_fall(context):
+        return
+    scene = context.scene
+    for f, place in ((1, (0, 0, 4)), (48, (0, 0, 1))):
+        scene.frame_set(f)
+        main.location = place
+        main.keyframe_insert(data_path="location", frame=f)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_fall_finish(context):
+    return (_check_saved(context)
+            and _check_fall(context))
+
+
+def _anim_run_fall_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_FALL_STEPS = [
+    {"title": "Pick the thing that will fall",
+     "skill": "One thing, chosen: a fall starts with a "
+              "single thing that will drop",
+     "how": "The bounce piece sent a thing up and "
+            "brought it back down; this piece is the "
+            "one-way trip: a thing starts up high, lets "
+            "go, and lands on the ground to stay there. "
+            "The way is the memories way again: the "
+            "place remembered up high at the start and "
+            "on the ground at the end, and Blender fills "
+            "in the fall between them. Start by picking "
+            "the thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will fall.",
+         "2. Leave its place alone for now. The high "
+         "start is remembered first; the fall comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The fall will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, up high",
+     "skill": "The start, remembered in the air: a place "
+              "memory at frame 1, at least three units up",
+     "how": "A fall is read from where the thing "
+            "starts, so the start remembers the thing's "
+            "place at frame 1 resting in the air, its "
+            "centre at least three units up - high "
+            "enough that the drop to the ground is "
+            "unmistakable. Blender stores a place memory "
+            "(a keyframe on the thing's Location). The "
+            "tick reads the memories and the real "
+            "evaluated place at the first one: a memory "
+            "must sit at the start, and the thing must "
+            "really be up high there.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Lift the thing up into the air, its centre "
+         "at least three units up, and press Remember "
+         "where it is right now above.",
+         "3. Scrub forward and back: nothing falls yet. "
+         "One remembered start cannot fall - it takes "
+         "the landing remembered too."],
+     "missing": "No high start remembered yet - "
+                "remember the thing's place at frame 1, "
+                "at least three units up.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_fall_start,
+     "check": _check_fall_start},
+    {"title": "Let it drop to the ground and stay there",
+     "skill": "The fall itself: the landing remembered "
+              "on the ground at the far end, the drop "
+              "clear and the fall straight down",
+     "how": "Bring the thing down to rest on the "
+            "ground - for the usual two-unit thing its "
+            "centre sits one unit up - and remember its "
+            "place at frame 48. Blender fills in the "
+            "fall between. The tick reads the real "
+            "evaluated place at the first and last "
+            "memories: the span must run at least 20 "
+            "frames, the drop at least 1.5 units, the "
+            "end height at most 1.3 so the thing truly "
+            "lands, and the sideways drift at most half "
+            "the drop - a fall goes down, not sideways. "
+            "A slide at height drops nothing and does "
+            "not tick it, a bounce that comes back up "
+            "ends high and does not tick it, and a small "
+            "dip does not tick it either. Probed before "
+            "building on both supported Blenders: the "
+            "place memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 48 and bring the thing down "
+         "to rest on the ground, under where it "
+         "started - a fall goes down, not sideways.",
+         "2. Press Remember where it is right now.",
+         "3. Scrub the Timeline: the thing drops from "
+         "the air to the ground and stays there."],
+     "missing": "No real fall yet - drop at least 1.5 "
+                "units to the ground, at least 20 "
+                "frames, with little sideways drift.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_fall,
+     "check": _check_fall},
+    {"title": "Watch it fall, then save it",
+     "skill": "Finishing a fall: the drop really plays, "
+              "and the file is saved with the place "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing drop and land. Then save the file. "
+            "The place memories are saved with it, so "
+            "the fall still plays when the file is "
+            "opened again. The tick checks the save and "
+            "that the fall is still proven from the "
+            "evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the drop and the landing - the thing "
+         "ends on the ground and stays there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the fall is still proven.",
+         "3. That is animation's eighteenth piece: "
+         "falling - one thing, its place remembered up "
+         "high and remembered on the ground, and "
+         "Blender filling in the fall between. The "
+         "next piece rises a thing - from the ground "
+         "up high, to climb and stay there. It is "
+         "still not the whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the fall still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_fall_finish,
+     "check": _check_fall_finish},
+]
+
+def _rise_measure(context):
+    """(span, rise, start height, end height, horizontal
+    drift) for the main thing's place memories. A real
+    rise starts on the ground and ends up high, and it
+    goes up, not sideways: the rise is the last memory's
+    height minus the first one's, the start height is
+    the first memory's own height, the end height is the
+    last memory's own height, and the drift is how far
+    the thing wandered sideways between the two. A slide
+    on the ground rises nothing, and a fall ends low, so
+    neither can pass. Probed on Blender 5.3.0 and 4.2.5
+    before building: place memories at (0, 0, 1) and
+    (0, 0, 4) across frames 1/48 read back and
+    interpolate identically on both versions (span 47,
+    rise 3.0, start height 1.0, end height 4.0, drift
+    0.0, reading (0, 0, 2.4521) at frame 24); a fall
+    read rise -3.0, a slide on the ground read rise 0.0,
+    a small lift read rise 0.5, and a rise drifting 2.0
+    sideways over a 3.0 rise read drift 2.0 - all
+    failing the bars below."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0.0, 99.0
+    a = _anim_eval(context, main, first, "location")
+    b = _anim_eval(context, main, last, "location")
+    rise = b[2] - a[2]
+    drift = math.sqrt((b[0] - a[0]) ** 2
+                      + (b[1] - a[1]) ** 2)
+    return last - first, rise, a[2], b[2], drift
+
+
+def _check_rise_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] <= 1.3
+
+
+def _anim_run_rise_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_rise_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (0, 0, 1)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_rise(context):
+    span, rise, start, end, drift = _rise_measure(context)
+    return (span >= 20 and rise >= 1.5 and start <= 1.3
+            and end >= 3.0 and drift <= 0.5 * rise)
+
+
+def _anim_run_rise(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_rise(context):
+        return
+    scene = context.scene
+    for f, place in ((1, (0, 0, 1)), (48, (0, 0, 4))):
+        scene.frame_set(f)
+        main.location = place
+        main.keyframe_insert(data_path="location", frame=f)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_rise_finish(context):
+    return (_check_saved(context)
+            and _check_rise(context))
+
+
+def _anim_run_rise_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_RISE_STEPS = [
+    {"title": "Pick the thing that will rise",
+     "skill": "One thing, chosen: a rise starts with a "
+              "single thing that will climb",
+     "how": "The fall piece dropped a thing from up "
+            "high to the ground; this piece is the trip "
+            "back up: a thing starts on the ground, "
+            "rises up high, and stays there. The way is "
+            "the memories way again: the place "
+            "remembered on the ground at the start and "
+            "up high at the end, and Blender fills in "
+            "the rise between them. Start by picking "
+            "the thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will rise.",
+         "2. Leave its place alone for now. The ground "
+         "start is remembered first; the rise comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The rise will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, resting on the "
+              "ground",
+     "how": "A rise is read from where the thing "
+            "starts, so the start remembers the thing's "
+            "place at frame 1 resting on the ground - "
+            "for the usual two-unit thing its centre "
+            "sits one unit up. Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the memories and "
+            "the real evaluated place at the first one: "
+            "a memory must sit at the start, and the "
+            "thing must really be down on the ground "
+            "there.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Set the thing down to rest on the ground, "
+         "and press Remember where it is right now "
+         "above.",
+         "3. Scrub forward and back: nothing rises yet. "
+         "One remembered start cannot rise - it takes "
+         "the high end remembered too."],
+     "missing": "No ground start remembered yet - "
+                "remember the thing's place at frame 1, "
+                "resting on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_rise_start,
+     "check": _check_rise_start},
+    {"title": "Let it rise up high and stay there",
+     "skill": "The rise itself: the high end remembered "
+              "in the air at the far end, the climb "
+              "clear and the rise straight up",
+     "how": "Lift the thing up into the air - its "
+            "centre at least three units up - and "
+            "remember its place at frame 48. Blender "
+            "fills in the rise between. The tick reads "
+            "the real evaluated place at the first and "
+            "last memories: the span must run at least "
+            "20 frames, the rise at least 1.5 units, the "
+            "start height at most 1.3 so the thing truly "
+            "starts on the ground, the end height at "
+            "least 3.0 so it truly ends up high, and the "
+            "sideways drift at most half the rise - a "
+            "rise goes up, not sideways. A fall ends low "
+            "and does not tick it, a slide on the ground "
+            "rises nothing and does not tick it, and a "
+            "small lift does not tick it either. Probed "
+            "before building on both supported Blenders: "
+            "the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Jump to frame 48 and lift the thing up "
+         "into the air, above where it started - a "
+         "rise goes up, not sideways.",
+         "2. Press Remember where it is right now.",
+         "3. Scrub the Timeline: the thing rises from "
+         "the ground into the air and stays there."],
+     "missing": "No real rise yet - rise at least 1.5 "
+                "units up high, at least 20 frames, "
+                "with little sideways drift.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_rise,
+     "check": _check_rise},
+    {"title": "Watch it rise, then save it",
+     "skill": "Finishing a rise: the climb really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing climb and stay up high. Then save "
+            "the file. The place memories are saved with "
+            "it, so the rise still plays when the file "
+            "is opened again. The tick checks the save "
+            "and that the rise is still proven from the "
+            "evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the climb - the thing ends up high "
+         "and stays there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the rise is still proven.",
+         "3. That is animation's nineteenth piece: "
+         "rising - one thing, its place remembered on "
+         "the ground and remembered up high, and "
+         "Blender filling in the rise between. The "
+         "next piece shrinks a thing - from full size "
+         "down small, evenly on every side. The next "
+         "piece spins a thing - one full turn around "
+         "the upright axis, staying upright and in "
+         "place. The next piece shakes a thing - "
+         "side to side and back home, again and "
+         "again, at its home height. It is "
+         "still not the whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the rise still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_rise_finish,
+     "check": _check_rise_finish},
+]
+
+def _shrink_measure(context):
+    """(span, end ratio) for the main thing's size
+    memories. A real shrink makes the thing smaller on
+    EVERY side: the ratio is the biggest axis ratio
+    between the evaluated size at the last memory and
+    the size at the first, so one axis left full size
+    holds the ratio at 1.0 and cannot pass - that is a
+    stretch the other way, not a shrink. Probed on
+    Blender 5.3.0 and 4.2.5 before building: size
+    memories at (1, 1, 1) and (0.4, 0.4, 0.4) across
+    frames 1/48 read back and interpolate identically
+    on both versions (span 47, ratio 0.4, reading
+    0.7096 at frame 24); a grow read ratio 2.5, a small
+    shrink read 0.8, and a one-axis-only change read
+    ratio 1.0 - all failing the bar below."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 1.0
+    keys = _anim_keys(main, "scale")
+    if len(keys) < 2:
+        return 0, 1.0
+    frames = [k[0] for k in keys]
+    first, last = int(min(frames)), int(max(frames))
+    if last - first < 1:
+        return 0, 1.0
+    a = _anim_eval(context, main, first, "scale")
+    b = _anim_eval(context, main, last, "scale")
+    ratio = 0.0
+    for i in range(3):
+        if a[i] > 0.05:
+            ratio = max(ratio, b[i] / a[i])
+    return last - first, ratio
+
+
+def _check_shrink_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_shrink_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_shrink_start(context):
+        return
+    context.scene.frame_set(1)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _check_shrink(context):
+    span, ratio = _shrink_measure(context)
+    return span >= 20 and ratio <= 0.55
+
+
+def _anim_run_shrink(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_shrink(context):
+        return
+    scene = context.scene
+    if not _check_shrink_start(context):
+        scene.frame_set(1)
+        main.keyframe_insert(data_path="scale", frame=1)
+    start = _anim_eval(context, main, 1, "scale")
+    scene.frame_set(48)
+    main.scale = (start[0] * 0.4, start[1] * 0.4,
+                  start[2] * 0.4)
+    main.keyframe_insert(data_path="scale", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_shrink_finish(context):
+    return (_check_saved(context)
+            and _check_shrink(context))
+
+
+def _anim_run_shrink_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SHRINK_STEPS = [
+    {"title": "Pick the thing that will shrink",
+     "skill": "One thing, chosen: a shrink starts with a "
+              "single thing whose size will fall",
+     "how": "The grow piece made a thing bigger over "
+            "time; this piece is the trip back down: a "
+            "thing starts at its full size and shrinks "
+            "to a small size, evenly on every side. The "
+            "way is the memories way again: the size "
+            "remembered full at the start and remembered "
+            "small at the end, and Blender fills in the "
+            "shrinking between them. Start by picking "
+            "the thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will shrink.",
+         "2. Leave its size alone for now. The full "
+         "size is remembered first; the shrink comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The shrink will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at full size: a "
+              "size memory at frame 1",
+     "how": "A shrink is read from the size the thing "
+            "starts at, so the start remembers the "
+            "thing's size at frame 1 - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its size along with "
+         "its place, and this piece reads the size "
+         "memory.",
+         "3. Scrub forward and back: nothing shrinks "
+         "yet. One remembered start cannot shrink - it "
+         "takes the small end remembered too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_shrink_start,
+     "check": _check_shrink_start},
+    {"title": "Shrink it small and remember again",
+     "skill": "The shrink itself: the small end "
+              "remembered at the far end, every side "
+              "down to about two fifths",
+     "how": "Make the thing clearly smaller - evenly, "
+            "on every side, down to about two fifths of "
+            "its starting size - and remember its size "
+            "at frame 48. Blender fills in the shrinking "
+            "between. The tick reads the real evaluated "
+            "size at the first and last memories: the "
+            "span must run at least 20 frames, and the "
+            "biggest side's end ratio must be at most "
+            "0.55 of its start, so every side truly "
+            "shrank. A grow ends bigger and does not tick "
+            "it, a small shrink (0.8) does not tick it, "
+            "and shrinking one side only does not tick "
+            "it either. Probed before building on both "
+            "supported Blenders: the size memories read "
+            "back and interpolate identically on each.",
+     "teach": [
+         "1. Jump to frame 48 and shrink the thing "
+         "evenly - press S and drag in, or set its "
+         "Scale to about 0.4 in the Item panel.",
+         "2. Press Remember where it is right now.",
+         "3. Scrub the Timeline: the thing shrinks "
+         "from full size to small across the span."],
+     "missing": "No real shrink yet - shrink every "
+                "side to at most 0.55 of its start, at "
+                "least 20 frames on.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_shrink,
+     "check": _check_shrink},
+    {"title": "Watch it shrink, then save it",
+     "skill": "Finishing a shrink: the shrinking "
+              "really plays, and the file is saved with "
+              "the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing get smaller and stay small. Then save "
+            "the file. The size memories are saved with "
+            "it, so the shrink still plays when the file "
+            "is opened again. The tick checks the save "
+            "and that the shrink is still proven from "
+            "the evaluated size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing shrink - it ends small and "
+         "stays small.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the shrink is still "
+         "proven.",
+         "3. That is animation's twentieth piece: "
+         "shrinking - one thing, its size remembered "
+         "full and remembered small, and Blender "
+         "filling in the shrinking between. It is "
+         "still not the whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the shrink still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_shrink_finish,
+     "check": _check_shrink_finish},
+]
+
+def _spin_measure(context):
+    """(span, total turn, lean, ends gap, drift) for the
+    main thing's facing memories, read on the upright
+    (Z) axis only. A real spin turns all the way around
+    while staying upright and staying in place: the
+    turn is totalled by sampling the evaluated facing
+    across the span and adding up every step on the Z
+    axis, the lean is the largest tilt on the other two
+    axes anywhere across the span, the ends must land
+    at the same facing allowing whole turns, and the
+    drift is how far the thing's place wanders from
+    where it started. Probed on Blender 5.3.0 and
+    4.2.5 before building: facing memories at 0, pi
+    and 2*pi on Z across frames 1/24/48 read back and
+    interpolate identically on both versions (turn
+    6.2832, ends gap 0.0, reading 0.9175 a quarter of
+    the way across at frame 12); a half spin read turn
+    3.1416 with ends gap 3.1416, a rock back and forth
+    read turn 2.0, and a flip on the X axis read Z
+    turn 0.0 with lean 6.2832 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    turn = sum(abs(rots[j + 1][2] - rots[j][2])
+               for j in range(len(rots) - 1))
+    lean = max(max(abs(r[0]), abs(r[1])) for r in rots)
+    raw_gap = abs(rots[-1][2] - rots[0][2])
+    ends = abs((raw_gap + math.pi) % (2 * math.pi)
+               - math.pi)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return last - first, turn, lean, ends, drift
+
+
+def _check_spin_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_spin_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_spin_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_spin(context):
+    span, turn, lean, ends, drift = _spin_measure(context)
+    return (span >= 20 and turn >= 5.0 and lean <= 0.35
+            and ends <= 0.4 and drift <= 0.5)
+
+
+def _anim_run_spin(context):
+    import math
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_spin(context):
+        return
+    scene = context.scene
+    if not _check_spin_start(context):
+        _anim_run_spin_start(context)
+    start = _anim_eval(context, main, 1, "rotation_euler")
+    scene.frame_set(24)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] + math.pi)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=24)
+    scene.frame_set(48)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] + 2 * math.pi)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_spin_finish(context):
+    return (_check_saved(context)
+            and _check_spin(context))
+
+
+def _anim_run_spin_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SPIN_STEPS = [
+    {"title": "Pick the thing that will spin",
+     "skill": "One thing, chosen: a spin starts with a "
+              "single thing that will turn in place",
+     "how": "The flip piece turned a thing over; this "
+            "piece turns it around: the thing stays "
+            "upright and stays where it is, and goes "
+            "all the way around once, like a turntable. "
+            "The way is the memories way again: the "
+            "facing remembered at the start, remembered "
+            "halfway around, and remembered home again "
+            "after one full turn, and Blender fills in "
+            "the spinning between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will spin.",
+         "2. Leave its facing alone for now. The start "
+         "facing is remembered first; the spin comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The spin will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The start, remembered upright: a facing "
+              "memory at frame 1, level on every axis",
+     "how": "A spin is read from the facing the thing "
+            "starts at, so the start remembers the "
+            "thing's facing at frame 1 - Blender stores "
+            "a facing memory (a keyframe on the thing's "
+            "Rotation). The tick reads the facing "
+            "memories themselves: one must sit at the "
+            "start, and the facing there must be level, "
+            "so the spin has a clean home to come back "
+            "to.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its facing along "
+         "with its place, and this piece reads the "
+         "facing memory.",
+         "3. Scrub forward and back: nothing spins "
+         "yet. One remembered start cannot spin - it "
+         "takes the full turn remembered too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_spin_start,
+     "check": _check_spin_start},
+    {"title": "Spin it all the way around and remember",
+     "skill": "The spin itself: half a turn remembered "
+              "at frame 24, one full turn remembered at "
+              "frame 48, upright and in place throughout",
+     "how": "Turn the thing around the upright axis - "
+            "half a turn (pi) by frame 24 and one full "
+            "turn (2 pi) by frame 48 - and remember its "
+            "facing at both. Blender fills in the "
+            "spinning between. The tick samples the "
+            "real evaluated facing across the span: the "
+            "span must run at least 20 frames, the "
+            "total turn on the upright axis must be at "
+            "least 5.0 rad, the tilt on the other axes "
+            "must stay within 0.35 rad so it never "
+            "tips, the ends must land on the same "
+            "facing allowing whole turns, and the "
+            "thing must stay within half a unit of "
+            "where it started. A half spin does not "
+            "tick it, a rock back and forth does not "
+            "tick it, and a flip over the side does not "
+            "tick it either. Probed before building on "
+            "both supported Blenders: the facing "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 24 and turn the thing half "
+         "a turn around the upright axis - press R, "
+         "then Z, and type 180 - then press Remember "
+         "where it is right now.",
+         "2. Jump to frame 48, turn it the other half "
+         "(R, Z, 180 again), and remember again. It "
+         "faces home again, one full turn on.",
+         "3. Scrub the Timeline: the thing spins all "
+         "the way around, upright, without travelling."],
+     "missing": "No real spin yet - one full turn on "
+                "the upright axis, at least 20 frames "
+                "across, staying upright and in place.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_spin,
+     "check": _check_spin},
+    {"title": "Watch it spin, then save it",
+     "skill": "Finishing a spin: the spinning really "
+              "plays, and the file is saved with the "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn all the way around and face "
+            "home again. Then save the file. The facing "
+            "memories are saved with it, so the spin "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the spin "
+            "is still proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing spin - it ends facing home, "
+         "one full turn on.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the spin is still "
+         "proven.",
+         "3. That is animation's twenty-first piece: "
+         "spinning - one thing, its facing remembered "
+         "at the start, halfway around and home again, "
+         "and Blender filling in the spinning between. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the spin still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_spin_finish,
+     "check": _check_spin_finish},
+]
+
+def _shake_measure(context):
+    """(span, travel, reversals, ends gap, height
+    variation) for the main thing's place memories. A
+    real shake rattles side to side around one home
+    place and settles back there: the evaluated place
+    is sampled across the span, the travel is the range
+    on the busiest horizontal axis, the reversals are
+    how many times the movement along that axis changes
+    direction, the ends gap is how far the last sampled
+    place sits from the first, and the height variation
+    is the range on the upright axis - a shake stays at
+    its home height, so a bounce, whose travel is all
+    height, cannot pass. Probed on Blender 5.3.0 and
+    4.2.5 before building: place memories at home
+    (0, 0, 1), then (-0.7, 0, 1) / (0.7, 0, 1)
+    alternating across frames 10/19/29/38, home again
+    at frame 48 read back and interpolate identically
+    on both versions (travel 1.4, reversals 4, ends
+    gap 0.0, height variation 0.0, reading (0.1162, 0,
+    1) crossing home at frame 15); a one-way move read
+    travel 3.0 with reversals 0 and ends gap 3.0, a
+    bounce read horizontal travel 0.0 with height
+    variation 2.0, and a small wiggle read travel 0.4
+    - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0, 99.0, 99.0
+    step = max(1, (last - first) // 48)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if places[-1] is not None and (last - first) % step:
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    ranges = [max(p[i] for p in places)
+              - min(p[i] for p in places) for i in range(3)]
+    axis = 0 if ranges[0] >= ranges[1] else 1
+    travel = ranges[axis]
+    signs = []
+    for j in range(len(places) - 1):
+        d = places[j + 1][axis] - places[j][axis]
+        if d > 1e-6:
+            signs.append(1)
+        elif d < -1e-6:
+            signs.append(-1)
+    reversals = sum(1 for j in range(1, len(signs))
+                    if signs[j] != signs[j - 1])
+    ends = math.sqrt(sum((places[-1][i] - places[0][i]) ** 2
+                         for i in range(3)))
+    return last - first, travel, reversals, ends, ranges[2]
+
+
+def _check_shake_start(context):
+    return _check_anim_start(context)
+
+
+def _anim_run_shake_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_shake_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (0, 0, 1)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_shake(context):
+    span, travel, reversals, ends, height = _shake_measure(context)
+    return (span >= 20 and travel >= 1.0 and reversals >= 3
+            and ends <= 0.3 and height <= 0.35)
+
+
+def _anim_run_shake(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_shake(context):
+        return
+    scene = context.scene
+    if not _check_shake_start(context):
+        _anim_run_shake_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    home = _anim_eval(context, main, first, "location")
+    for f, place in ((first + 9, (home[0] - 0.7, home[1],
+                                  home[2])),
+                     (first + 18, (home[0] + 0.7, home[1],
+                                   home[2])),
+                     (first + 28, (home[0] - 0.7, home[1],
+                                   home[2])),
+                     (first + 37, (home[0] + 0.7, home[1],
+                                   home[2])),
+                     (first + 47, home)):
+        scene.frame_set(f)
+        main.location = place
+        main.keyframe_insert(data_path="location", frame=f)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_shake_finish(context):
+    return (_check_saved(context)
+            and _check_shake(context))
+
+
+def _anim_run_shake_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SHAKE_STEPS = [
+    {"title": "Pick the thing that will shake",
+     "skill": "One thing, chosen: a shake starts with a "
+              "single thing that will rattle in place",
+     "how": "The bounce piece sent a thing up and down; "
+            "this piece rattles it side to side: the "
+            "thing stays at its home height, swings one "
+            "way then the other, again and again, and "
+            "settles back home - a phone buzzing on a "
+            "table, a washing machine off balance, a "
+            "dog shaking off water. The way is the "
+            "place-memories way again: the home place "
+            "remembered at the start, the two swung-out "
+            "places remembered in turn across the span, "
+            "and home remembered again at the end, and "
+            "Blender fills in the rattling between. "
+            "Start by picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will shake.",
+         "2. Leave its place alone for now. The home "
+         "place is remembered first; the shaking comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The shake will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, resting home",
+     "skill": "The home place, remembered: a place "
+              "memory at frame 1, the thing resting where "
+              "it lives",
+     "how": "A shake is read against the place the "
+            "thing starts from, so the start remembers "
+            "the thing's place at frame 1, resting in "
+            "its home place - Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start. Every swing of the shake is measured "
+            "from this home, and the shake must end "
+            "back here.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, and "
+         "this piece reads the place memory.",
+         "3. Scrub forward and back: nothing shakes "
+         "yet. One remembered home cannot shake - it "
+         "takes the swings remembered too."],
+     "missing": "No home place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_shake_start,
+     "check": _check_shake_start},
+    {"title": "Shake it side to side and settle it home",
+     "skill": "The shake itself: swung one way and the "
+              "other across the span, remembered in "
+              "turn, and home again at the last frame",
+     "how": "Swing the thing to one side and remember "
+            "its place, swing it to the other side and "
+            "remember again - out to each side in turn "
+            "across the span - and put it back at its "
+            "home place at the last frame and remember "
+            "it there. Blender fills in the rattling "
+            "between. The tick samples the real "
+            "evaluated place across the span: the span "
+            "must run at least 20 frames, the travel on "
+            "the busiest sideways axis must reach at "
+            "least 1.0 unit, the movement along that "
+            "axis must change direction at least 3 "
+            "times, the thing must end within 0.3 of "
+            "where it started, and its height must hold "
+            "within 0.35 the whole way. A one-way move "
+            "does not tick it, a bounce up and down "
+            "does not tick it, and a small wiggle does "
+            "not tick it either. Probed before building "
+            "on both supported Blenders: the place "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump a little way in and pull the thing "
+         "to one side, about 0.7 across, and press "
+         "Remember where it is right now.",
+         "2. Keep going: swing it the same amount to "
+         "the other side and remember, back and forth "
+         "in turn across the span.",
+         "3. At the last frame put it back exactly at "
+         "its home place and remember it there. Scrub "
+         "the Timeline: the thing rattles side to "
+         "side and settles home."],
+     "missing": "No real shake yet - side to side at "
+                "least 1.0 across, changing direction at "
+                "least 3 times, at least 20 frames "
+                "across, and home again at the end.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_shake,
+     "check": _check_shake},
+    {"title": "Watch it shake, then save it",
+     "skill": "Finishing a shake: the rattling really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing rattle side to side and settle back "
+            "home. Then save the file. The place "
+            "memories are saved with it, so the shake "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the shake "
+            "is still proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing shake - it ends resting "
+         "back at its home place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the shake is still "
+         "proven.",
+         "3. That is animation's twenty-second piece: "
+         "shaking - one thing, its home place "
+         "remembered at the start, swung out to each "
+         "side in turn, and remembered home again, "
+         "and Blender filling in the rattling between. "
+         "The next piece slides a thing - flat "
+         "across the ground to a far place, staying "
+         "at its ground height the whole way. It is "
+         "still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the shake still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_shake_finish,
+     "check": _check_shake_finish},
+]
+
+def _slide_measure(context):
+    """(span, horizontal travel, height change, height
+    variation) for the main thing's place memories. A
+    real slide travels across the ground and stays at
+    its ground height the whole way: the travel is the
+    flat distance between the evaluated place at the
+    first memory and the place at the last, the height
+    change is how much the height differs between those
+    two places, and the height variation is the range
+    of heights sampled across the span - a slide holds
+    its height, so a rise, whose travel is all height,
+    and a bounce, whose height swings up and down,
+    cannot pass. Probed on Blender 5.3.0 and 4.2.5
+    before building: place memories at (0, 0, 1) and
+    (3, 0, 1) across frames 1/48 read back and
+    interpolate identically on both versions (travel
+    3.0, height change 0.0, height variation 0.0,
+    reading (1.4521, 0, 1) partway across at frame
+    24); a rise read travel 0.0 with height change
+    3.0, a bounce read travel 0.0 with height
+    variation 2.0, and a small shuffle read travel
+    0.5 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 48)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if places[-1] is not None and (last - first) % step:
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start, end = places[0], places[-1]
+    travel = math.sqrt((end[0] - start[0]) ** 2
+                       + (end[1] - start[1]) ** 2)
+    heights = [p[2] for p in places]
+    return (last - first, travel, abs(end[2] - start[2]),
+            max(heights) - min(heights))
+
+
+def _check_slide_start(context):
+    return _check_anim_start(context)
+
+
+def _anim_run_slide_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_slide_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (0, 0, 1)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_slide(context):
+    span, travel, hchange, hvar = _slide_measure(context)
+    return (span >= 20 and travel >= 2.0 and hchange <= 0.35
+            and hvar <= 0.35)
+
+
+def _anim_run_slide(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_slide(context):
+        return
+    scene = context.scene
+    if not _check_slide_start(context):
+        _anim_run_slide_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 47)
+    main.location = (start[0] + 3.0, start[1], start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_slide_finish(context):
+    return (_check_saved(context)
+            and _check_slide(context))
+
+
+def _anim_run_slide_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SLIDE_STEPS = [
+    {"title": "Pick the thing that will slide",
+     "skill": "One thing, chosen: a slide starts with a "
+              "single thing that will glide across the "
+              "ground",
+     "how": "The shake piece rattled a thing in place; "
+            "this piece sends it somewhere: the thing "
+            "glides flat across the ground from where it "
+            "starts to a far place, staying at its ground "
+            "height the whole way - a puck across ice, a "
+            "drawer sliding out, a stone skimming a "
+            "floor. The way is the place-memories way "
+            "again: the starting place remembered at the "
+            "start, the far place remembered at the end, "
+            "and Blender fills in the gliding between. "
+            "Start by picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will slide.",
+         "2. Leave its place alone for now. The starting "
+         "place is remembered first; the sliding comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The slide will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The starting place, remembered: a place "
+              "memory at frame 1, the thing resting on the "
+              "ground",
+     "how": "A slide is read against the place the "
+            "thing starts from, so the start remembers "
+            "the thing's place at frame 1, resting on the "
+            "ground - Blender stores a place memory (a "
+            "keyframe on the thing's Location). The tick "
+            "reads the place memories themselves: one "
+            "must sit at the start. The whole slide is "
+            "measured from this place, and the height "
+            "here is the height the thing must hold all "
+            "the way across.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, and "
+         "this piece reads the place memory.",
+         "3. Scrub forward and back: nothing slides "
+         "yet. One remembered place cannot slide - it "
+         "takes the far place remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_slide_start,
+     "check": _check_slide_start},
+    {"title": "Slide it across the ground to a far place",
+     "skill": "The slide itself: one long flat glide "
+              "across the ground, the far place "
+              "remembered at the last frame",
+     "how": "Move the thing a long way across the "
+            "ground - keeping it at the same height it "
+            "started at, neither rising nor dipping - "
+            "and remember its place at the last frame. "
+            "Blender fills in the gliding between. The "
+            "tick reads the real evaluated place at the "
+            "first and last memories and samples it "
+            "across the span: the span must run at least "
+            "20 frames, the flat travel between the two "
+            "places must reach at least 2.0 units, the "
+            "height at the end must sit within 0.35 of "
+            "the height at the start, and the height "
+            "must hold within 0.35 the whole way across. "
+            "A rise straight up does not tick it, a "
+            "bounce does not tick it, and a small "
+            "shuffle does not tick it either. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to the last frame, frame 48.",
+         "2. Pull the thing a long way across the "
+         "ground - about 3 units over - keeping it at "
+         "the height it started at, and press Remember "
+         "where it is right now.",
+         "3. Scrub the Timeline: the thing glides flat "
+         "across the ground from its start to the far "
+         "place."],
+     "missing": "No real slide yet - at least 2.0 "
+                "across the ground, at least 20 frames "
+                "across, and the height held the whole "
+                "way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_slide,
+     "check": _check_slide},
+    {"title": "Watch it slide, then save it",
+     "skill": "Finishing a slide: the gliding really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing glide flat across the ground to its "
+            "far place. Then save the file. The place "
+            "memories are saved with it, so the slide "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the slide "
+            "is still proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing slide - it ends resting at "
+         "its far place, still on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the slide is still "
+         "proven.",
+         "3. That is animation's twenty-third piece: "
+         "sliding - one thing, its place remembered on "
+         "the ground at the start, remembered again "
+         "far across the ground, and Blender filling "
+         "in the gliding between. The next piece "
+         "paces a thing - a long way out across the "
+         "ground and all the way back home again. It is "
+         "still not the whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the slide still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_slide_finish,
+     "check": _check_slide_finish},
+]
+
+def _pace_measure(context):
+    """(span, range, reversals, ends gap, height
+    variation) for the main thing's place memories. A
+    real pace goes a long way out and comes all the
+    way back home: the evaluated place is sampled
+    across the span, the range is the travel on the
+    busiest horizontal axis, the reversals are how
+    many times the movement along that axis changes
+    direction, the ends gap is how far the last
+    sampled place sits from the first, and the height
+    variation is the range on the upright axis - a
+    pace stays at its ground height the whole way, so
+    a bounce, whose travel is all height, cannot
+    pass. Probed on Blender 5.3.0 and 4.2.5 before
+    building: place memories at home (0, 0, 1), far
+    (3, 0, 1) at frame 24 and home again at frame 48
+    read back and interpolate identically on both
+    versions (range 3.0, reversals 1, ends gap 0.0,
+    height variation 0.0); a one-way slide read range
+    3.0 with reversals 0 and ends gap 3.0, a bounce
+    read range 0.0 with height variation 2.0, a small
+    back-and-forth read range 0.5, and a shake read
+    range 1.4 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0, 99.0, 99.0
+    step = max(1, (last - first) // 48)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if places[-1] is not None and (last - first) % step:
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    ranges = [max(p[i] for p in places)
+              - min(p[i] for p in places) for i in range(3)]
+    axis = 0 if ranges[0] >= ranges[1] else 1
+    signs = []
+    for j in range(len(places) - 1):
+        d = places[j + 1][axis] - places[j][axis]
+        if d > 1e-6:
+            signs.append(1)
+        elif d < -1e-6:
+            signs.append(-1)
+    reversals = sum(1 for j in range(1, len(signs))
+                    if signs[j] != signs[j - 1])
+    ends = math.sqrt(sum((places[-1][i] - places[0][i]) ** 2
+                         for i in range(3)))
+    return last - first, ranges[axis], reversals, ends, ranges[2]
+
+
+def _check_pace_start(context):
+    return _check_anim_start(context)
+
+
+def _anim_run_pace_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_pace_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (0, 0, 1)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_pace(context):
+    span, rng, reversals, ends, hvar = _pace_measure(context)
+    return (span >= 20 and rng >= 2.5 and reversals >= 1
+            and ends <= 0.3 and hvar <= 0.35)
+
+
+def _anim_run_pace(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_pace(context):
+        return
+    scene = context.scene
+    if not _check_pace_start(context):
+        _anim_run_pace_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] + 3.0, start[1], start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0], start[1], start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_pace_finish(context):
+    return (_check_saved(context)
+            and _check_pace(context))
+
+
+def _anim_run_pace_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_PACE_STEPS = [
+    {"title": "Pick the thing that will pace",
+     "skill": "One thing, chosen: a pace starts with a "
+              "single thing that will walk its ground "
+              "out and back",
+     "how": "The slide piece sent a thing somewhere "
+            "and left it there; this piece brings it "
+            "home: the thing travels a long way across "
+            "the ground to a far place, turns around, "
+            "and comes all the way back to where it "
+            "started - a guard pacing a wall, a dog "
+            "running a fence line. The way is the "
+            "place-memories way again: the home place "
+            "remembered at the start, the far place "
+            "remembered in the middle, home remembered "
+            "again at the end, and Blender fills in the "
+            "walking between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will pace.",
+         "2. Leave its place alone for now. The home "
+         "place is remembered first; the pacing comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The pace will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, its home place",
+     "skill": "The home place, remembered: a place "
+              "memory at frame 1, the thing resting on "
+              "the ground where it will return",
+     "how": "A pace is read against the place the "
+            "thing starts from and must come back to, "
+            "so the start remembers the thing's place "
+            "at frame 1, resting on the ground - Blender "
+            "stores a place memory (a keyframe on the "
+            "thing's Location). The tick reads the "
+            "place memories themselves: one must sit at "
+            "the start. The whole pace is measured from "
+            "this place, and the end of the pace must "
+            "land back on it.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, and "
+         "this piece reads the place memory.",
+         "3. Scrub forward and back: nothing paces "
+         "yet. One remembered place cannot pace - it "
+         "takes the far place and the return remembered "
+         "too."],
+     "missing": "No home place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_pace_start,
+     "check": _check_pace_start},
+    {"title": "Send it far out and bring it home",
+     "skill": "The pace itself: one long trip out "
+              "across the ground, then the whole way "
+              "back, home remembered again at the last "
+              "frame",
+     "how": "Move the thing a long way across the "
+            "ground and remember its place in the "
+            "middle of the span, then bring it all the "
+            "way back to its home place and remember "
+            "that at the last frame, keeping it at the "
+            "same height the whole way. Blender fills "
+            "in the walking between. The tick reads the "
+            "real evaluated place sampled across the "
+            "span: the span must run at least 20 frames, "
+            "the travel on the busiest sideways axis "
+            "must reach at least 2.5 units, the "
+            "movement must turn around at least once, "
+            "the end must land within 0.3 of the start, "
+            "and the height must hold within 0.35 the "
+            "whole way. A one-way slide does not tick "
+            "it, a bounce does not tick it, a small "
+            "back-and-forth does not tick it, and a "
+            "shake - which turns often but travels "
+            "little - does not tick it either. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to the middle frame, frame 24.",
+         "2. Pull the thing a long way across the "
+         "ground - about 3 units over - keeping it at "
+         "the height it started at, and press Remember "
+         "where it is right now.",
+         "3. Go to the last frame, frame 48, bring the "
+         "thing all the way back to its home place, "
+         "and press Remember where it is right now "
+         "again. Scrub the Timeline: the thing paces "
+         "out and home."],
+     "missing": "No real pace yet - at least 2.5 "
+                "across the ground, out and back home, "
+                "at least 20 frames across, and the "
+                "height held the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_pace,
+     "check": _check_pace},
+    {"title": "Watch it pace, then save it",
+     "skill": "Finishing a pace: the out-and-back "
+              "really plays, and the file is saved with "
+              "the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing travel out to its far place and come "
+            "home again. Then save the file. The place "
+            "memories are saved with it, so the pace "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the pace "
+            "is still proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing pace - it ends resting back "
+         "at its home place, still on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the pace is still "
+         "proven.",
+         "3. That is animation's twenty-fourth piece: "
+         "pacing - one thing, its home place "
+         "remembered at the start, a far place "
+         "remembered in the middle, home remembered "
+         "again at the end, and Blender filling in "
+         "the walking between. The next piece "
+         "tilts a thing - leaned over to one side "
+         "and left leaning. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the pace still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_pace_finish,
+     "check": _check_pace_finish},
+]
+
+def _tilt_measure(context):
+    """(span, end tilt, peak tilt, upright drift,
+    place drift) for the main thing's facing memories.
+    A real tilt leans a thing over to one side and
+    leaves it leaning: the end tilt is the largest
+    lean on the two side axes at the last sampled
+    facing measured against the first, the peak tilt
+    is the largest lean anywhere across the span, the
+    upright drift is how far the upright (Z) facing
+    ever wanders from its start, and the place drift
+    is how far the thing's place wanders from where
+    it started. A tilt is a lean, not a tumble: the
+    end tilt must be a real lean but short of going
+    over, so a flip, which ends upright again after
+    turning 6.2832, cannot pass, and neither can a
+    spin, whose lean stays 0 while its upright facing
+    turns the whole way. Probed on Blender 5.3.0 and
+    4.2.5 before building: facing memories level at
+    frame 1 and leaned 1.0 rad on the X axis at frame
+    48 read back and interpolate identically on both
+    versions (end tilt 1.0, peak 1.0, upright drift
+    0.0, reading 0.484 partway leaned at frame 24); a
+    spin read end tilt 0.0 with upright drift 6.2832,
+    a flip read end tilt 6.2832, a small lean read
+    0.25, a rock that settles upright read end tilt
+    0.0, and an over-lean read 2.6 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    end_tilt = max(abs(rots[-1][0] - start[0]),
+                   abs(rots[-1][1] - start[1]))
+    peak = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return last - first, end_tilt, peak, zdrift, drift
+
+
+def _check_tilt_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_tilt_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_tilt_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_tilt(context):
+    span, end_tilt, peak, zdrift, drift = _tilt_measure(context)
+    return (span >= 20 and 0.6 <= end_tilt <= 1.8
+            and peak <= 2.2 and zdrift <= 0.35
+            and drift <= 0.5)
+
+
+def _anim_run_tilt(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_tilt(context):
+        return
+    scene = context.scene
+    if not _check_tilt_start(context):
+        _anim_run_tilt_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0] + 1.0, start[1],
+                           start[2])
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_tilt_finish(context):
+    return (_check_saved(context)
+            and _check_tilt(context))
+
+
+def _anim_run_tilt_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_TILT_STEPS = [
+    {"title": "Pick the thing that will tilt",
+     "skill": "One thing, chosen: a tilt starts with a "
+              "single thing that will lean",
+     "how": "The spin piece turned a thing around "
+            "where it stood and the flip piece turned "
+            "it all the way over; this piece does "
+            "neither - it leans a thing over to one "
+            "side and leaves it leaning: a sign tipping "
+            "in the wind, a tower starting to lean. "
+            "The way is the facing-memories way again: "
+            "the upright facing remembered at the "
+            "start, the leaned facing remembered at "
+            "the end, and Blender fills in the leaning "
+            "between. Start by picking the thing: any "
+            "shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will tilt.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "leaning comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The tilt will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A tilt is read against the facing the "
+            "thing starts from, so the start remembers "
+            "the thing's facing at frame 1, standing "
+            "upright - Blender stores a facing memory "
+            "(a keyframe on the thing's Rotation). The "
+            "tick reads the facing memories themselves: "
+            "one must sit at the start, level on every "
+            "axis. The whole lean is measured from "
+            "this facing.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing tilts "
+         "yet. One remembered facing cannot lean - it "
+         "takes the leaned facing remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_tilt_start,
+     "check": _check_tilt_start},
+    {"title": "Lean it over and remember the lean",
+     "skill": "The tilt itself: leaned over to one "
+              "side - a real lean, short of going over - "
+              "and left leaning at the last frame",
+     "how": "Lean the thing over to one side and "
+            "remember its facing at the last frame, "
+            "keeping it in its place and not turning "
+            "it around. Blender fills in the leaning "
+            "between. The tick reads the real evaluated "
+            "facing sampled across the span: the span "
+            "must run at least 20 frames, the lean at "
+            "the end must reach at least 0.6 of a turn "
+            "unit (radians) on a side axis but no more "
+            "than 1.8, the lean must never pass 2.2 "
+            "anywhere across the span, the upright "
+            "facing must hold within 0.35, and the "
+            "thing must stay within 0.5 of its place. "
+            "A spin does not tick it, a flip - which "
+            "goes all the way over and lands upright - "
+            "does not tick it, a small lean does not "
+            "tick it, and a rock that settles upright "
+            "again does not tick it either. Probed "
+            "before building on both supported "
+            "Blenders: the facing memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to the last frame, frame 48.",
+         "2. Lean the thing over to one side - about "
+         "a third of a quarter-turn, not over onto "
+         "its side - and press Remember how it faces "
+         "right now.",
+         "3. Scrub the Timeline: the thing leans over "
+         "and stays leaning."],
+     "missing": "No real tilt yet - a lean of 0.6 to "
+                "1.8 on one side at the end, at least "
+                "20 frames across, in its own place, "
+                "and no turning around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_tilt,
+     "check": _check_tilt},
+    {"title": "Watch it tilt, then save it",
+     "skill": "Finishing a tilt: the lean really "
+              "plays, and the file is saved with the "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean over and stay leaned. Then "
+            "save the file. The facing memories are "
+            "saved with it, so the tilt still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the tilt is "
+            "still proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing tilt - it ends resting "
+         "leaned over to one side, still in its "
+         "place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the tilt is still "
+         "proven.",
+         "3. That is animation's twenty-fifth piece: "
+         "tilting - one thing, its upright facing "
+         "remembered at the start, its leaned facing "
+         "remembered at the end, and Blender filling "
+         "in the leaning between. The next piece "
+         "squashes a thing - flattened down, sides "
+         "bulged out, settled back to its own shape. "
+         "It is still not the "
+         "whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the tilt still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_tilt_finish,
+     "check": _check_tilt_finish},
+]
+
+def _squash_measure(context):
+    """(span, lowest height ratio, widest side bulge,
+    ends gap) for the main thing's size memories. A
+    real squash flattens a thing down while its sides
+    bulge out, then lets it settle back to its starting
+    shape: the lowest height ratio is the smallest
+    evaluated height anywhere across the span against
+    the height at the first memory, the bulge is the
+    widest sideways size anywhere across the span
+    against its start, and the ends gap is how far the
+    size at the last memory sits from the size at the
+    first. A squash is the flatten-and-bulge together,
+    with a settle home - so a shrink, which flattens
+    every side together and never bulges or comes home,
+    cannot pass, and neither can a pulse, which swells
+    every side and never flattens, a stretch that stays
+    stretched, or a squash that never settles. Probed
+    on Blender 5.3.0 and 4.2.5 before building: size
+    memories at (1, 1, 1), (1.5, 1.5, 0.4) and
+    (1, 1, 1) across frames 1/24/48 read back and
+    interpolate identically on both versions (span 47,
+    low height 0.4, bulge 1.5, ends 0.0, reading
+    (1.2337, 1.2337, 0.7196) partway down at frame 12);
+    a shrink read bulge 1.0 with ends 0.6, a pulse read
+    low height 1.0, a stretch read low height 1.0 with
+    ends 1.5, a small squash read low height 0.8 with
+    bulge 1.1, and a squash that stayed squashed read
+    ends 0.6 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 1.0, 1.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 1.0, 1.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 1.0, 1.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 1.0, 1.0, 99.0
+    low = min(s[2] / start[2] for s in sizes)
+    bulge = max(max(s[0] / start[0], s[1] / start[1])
+                for s in sizes)
+    ends = max(abs(sizes[-1][i] - start[i]) / start[i]
+               for i in range(3))
+    return last - first, low, bulge, ends
+
+
+def _check_squash_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_squash_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_squash_start(context):
+        return
+    context.scene.frame_set(1)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _check_squash(context):
+    span, low, bulge, ends = _squash_measure(context)
+    return (span >= 20 and low <= 0.55 and bulge >= 1.25
+            and ends <= 0.3)
+
+
+def _anim_run_squash(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_squash(context):
+        return
+    scene = context.scene
+    if not _check_squash_start(context):
+        _anim_run_squash_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    mid = first + 23
+    scene.frame_set(mid)
+    main.scale = (start[0] * 1.5, start[1] * 1.5,
+                  start[2] * 0.4)
+    main.keyframe_insert(data_path="scale", frame=mid)
+    scene.frame_set(first + 47)
+    main.scale = tuple(start)
+    main.keyframe_insert(data_path="scale",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_squash_finish(context):
+    return (_check_saved(context)
+            and _check_squash(context))
+
+
+def _anim_run_squash_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SQUASH_STEPS = [
+    {"title": "Pick the thing that will squash",
+     "skill": "One thing, chosen: a squash starts with "
+              "a single thing that will flatten",
+     "how": "The pulse piece swelled a thing evenly and "
+            "settled it back, and the shrink piece made "
+            "it smaller on every side; this piece does "
+            "the cartoon classic neither of them does - "
+            "it flattens a thing down while its sides "
+            "bulge out, then lets it settle back to its "
+            "own shape: a ball landing, a character "
+            "crouching before a jump. The way is the "
+            "size-memories way again: the starting size "
+            "remembered at the start, the flattened, "
+            "bulged size remembered in the middle, the "
+            "starting size remembered again at the end, "
+            "and Blender fills in the flattening and "
+            "the settling between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will squash.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the flattening "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The squash will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1",
+     "how": "A squash is read against the shape the "
+            "thing starts from, so the start remembers "
+            "the thing's size at frame 1 - Blender stores "
+            "a size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. The "
+            "whole flatten is measured from this size, "
+            "and the thing must come back to it at the "
+            "end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing squashes "
+         "yet. One remembered size cannot flatten - it "
+         "takes the squashed size remembered too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_squash_start,
+     "check": _check_squash_start},
+    {"title": "Squash it flat, then let it settle back",
+     "skill": "The squash itself: flattened down to "
+              "0.4 of its height with its sides bulged "
+              "to 1.5 in the middle, its own shape "
+              "remembered again at the last frame",
+     "how": "Flatten the thing down and push its sides "
+            "out at the middle frame, then remember its "
+            "starting size again at the last frame. "
+            "Blender fills in the flattening and the "
+            "settling between. The tick reads the real "
+            "evaluated size sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "height must fall to at most 0.55 of its "
+            "start somewhere across the span, a side "
+            "must bulge to at least 1.25 of its start, "
+            "and the size at the end must land within "
+            "0.3 of the starting size. A shrink does not "
+            "tick it, a pulse does not tick it, a "
+            "stretch that stays stretched does not tick "
+            "it, and a squash that never settles does "
+            "not tick it either. Probed before building "
+            "on both supported Blenders: the size "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to the middle frame, frame 24. Flatten "
+         "the thing down to well under half its height "
+         "and push its sides out wider - and press "
+         "Remember how it faces right now.",
+         "2. Go to the last frame, frame 48. Put its "
+         "size back to exactly what it started at, and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing flattens, "
+         "bulges, and settles back to its own shape."],
+     "missing": "No real squash yet - flattened to "
+                "0.55 of its height or less with a side "
+                "bulged to 1.25 or more in the middle, "
+                "at least 20 frames across, and its own "
+                "shape back at the end.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_squash,
+     "check": _check_squash},
+    {"title": "Watch it squash, then save it",
+     "skill": "Finishing a squash: the flatten really "
+              "plays, and the file is saved with the "
+              "size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing flatten, bulge and settle back. Then "
+            "save the file. The size memories are saved "
+            "with it, so the squash still plays when the "
+            "file is opened again. The tick checks the "
+            "save and that the squash is still proven "
+            "from the evaluated size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing squash - it ends back at "
+         "its own shape, in its own place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the squash is still "
+         "proven.",
+         "3. That is animation's twenty-sixth piece: "
+         "squashing - one thing, its size remembered "
+         "at the start, flattened and bulged in the "
+         "middle, remembered at its own shape again "
+         "at the end, and Blender filling in the "
+         "flattening and the settling between. The "
+         "next piece hops a thing - up in the air "
+         "halfway across, landed far across at the "
+         "end. It is still not the "
+         "whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the squash still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_squash_finish,
+     "check": _check_squash_finish},
+]
+
+def _hop_measure(context):
+    """(span, peak height above the lower end, sideways
+    travel between the ends, ends height gap) for the
+    main thing's place memories. A real hop leaves the
+    ground AND lands somewhere else: the peak is the
+    highest evaluated height anywhere across the span
+    against the lower of the two ends, the travel is
+    the sideways distance between the place at the
+    first memory and the place at the last, and the
+    ends gap is how far apart the two ends sit in
+    height. A hop is the arc and the journey together -
+    so a bounce, which arcs in its own place and lands
+    where it started, cannot pass, and neither can a
+    slide, which travels without ever leaving the
+    ground, a rise that travels but never comes back
+    down, or a small hop that barely leaves the ground
+    and barely travels. Probed on Blender 5.3.0 and
+    4.2.5 before building: place memories at
+    (0, 0, 1), (1.5, 0, 3) and (3, 0, 1) across frames
+    1/24/48 read back and interpolate identically on
+    both versions (span 47, peak 2.0, travel 3.0, ends
+    0.0, reading (0.4381, 0, 1.9348) partway up at
+    frame 12); a bounce in place read travel 0.0, a
+    slide read peak 0.0, a travelling rise read ends
+    3.0, and a small hop read peak 0.5 with travel
+    1.0 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    low = min(start[2], end[2])
+    step = max(1, (last - first) // 24)
+    peak = 0.0
+    frame = first
+    while frame <= last:
+        here = _anim_eval(context, main, frame,
+                          "location")
+        peak = max(peak, here[2] - low)
+        frame += step
+    travel = ((end[0] - start[0]) ** 2
+              + (end[1] - start[1]) ** 2) ** 0.5
+    return last - first, peak, travel, abs(end[2]
+                                           - start[2])
+
+
+def _check_hop(context):
+    span, peak, travel, ends = _hop_measure(context)
+    return (span >= 20 and peak >= 1.5 and travel >= 2.0
+            and ends <= 0.3)
+
+
+def _anim_run_hop(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_hop(context):
+        return
+    scene = context.scene
+    if not _check_anim_start(context):
+        _anim_run_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    mid = first + 23
+    scene.frame_set(mid)
+    main.location = (start[0] + 1.5, start[1],
+                     start[2] + 2.0)
+    main.keyframe_insert(data_path="location", frame=mid)
+    scene.frame_set(first + 47)
+    main.location = (start[0] + 3.0, start[1], start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_hop_finish(context):
+    return (_check_saved(context)
+            and _check_hop(context))
+
+
+def _anim_run_hop_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_HOP_STEPS = [
+    {"title": "Pick the thing that will hop",
+     "skill": "One thing, chosen: a hop starts with a "
+              "single thing that will leave the ground "
+              "and land somewhere else",
+     "how": "The bounce piece sent a thing up and "
+            "brought it back down in its own place, and "
+            "the slide piece sent it across the ground "
+            "without ever leaving it; this piece does "
+            "the journey neither of them does - it sends "
+            "a thing up in the air AND across, landing "
+            "far from where it started: a frog's leap, a "
+            "character jumping a gap. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the high "
+            "place remembered halfway across in the "
+            "middle, the landing place remembered far "
+            "across at the end, and Blender fills in "
+            "the arc between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh ball here - a ball reads best.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will hop.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "leap comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The hop will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1",
+     "how": "A hop is read against the place the thing "
+            "leaps FROM, so the start remembers the "
+            "thing's place at frame 1, on the ground - "
+            "Blender stores a place memory (a keyframe "
+            "on the thing's Location). The tick reads "
+            "the place memories themselves: one must sit "
+            "at the start. The whole arc and the whole "
+            "journey are measured from this place, and "
+            "the thing must land at this same height, "
+            "far across, at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing hops "
+         "yet. One remembered place cannot leap - it "
+         "takes the high place and the landing "
+         "remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_start,
+     "check": _check_anim_start},
+    {"title": "Hop it up and across, and land it far away",
+     "skill": "The hop itself: up two units and halfway "
+              "across in the middle, landed three units "
+              "across at the last frame",
+     "how": "Lift the thing up and halfway across at "
+            "the middle frame, then land it far across "
+            "at the last frame, back at its starting "
+            "height. Blender fills in the arc between. "
+            "The tick reads the real evaluated place "
+            "sampled across the span: the span must run "
+            "at least 20 frames, the height must clear "
+            "at least 1.5 above the lower end somewhere "
+            "across the span, the landing must sit at "
+            "least 2.0 sideways from the start, and the "
+            "two ends must sit within 0.3 of each other "
+            "in height. A bounce in its own place does "
+            "not tick it, a slide along the ground does "
+            "not tick it, a rise that never lands does "
+            "not tick it, and a small hop does not tick "
+            "it either. Probed before building on both "
+            "supported Blenders: the place memories "
+            "read back and interpolate identically on "
+            "each.",
+     "teach": [
+         "1. Go to the middle frame, frame 24. Move "
+         "the thing halfway across and lift it well "
+         "clear of the ground - and press Remember "
+         "where it is right now.",
+         "2. Go to the last frame, frame 48. Move it "
+         "the rest of the way across, back down at "
+         "its starting height, and remember again.",
+         "3. Scrub the Timeline: the thing rises, "
+         "crosses, and lands far from where it "
+         "started."],
+     "missing": "No real hop yet - up 1.5 or more in "
+                "the middle, landed 2.0 or more across "
+                "at the end, at least 20 frames "
+                "across, and back at its starting "
+                "height when it lands.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_hop,
+     "check": _check_hop},
+    {"title": "Watch it hop, then save it",
+     "skill": "Finishing a hop: the arc really plays, "
+              "and the file is saved with the place "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing leave the ground, cross in the air, "
+            "and land far across. Then save the file. "
+            "The place memories are saved with it, so "
+            "the hop still plays when the file is "
+            "opened again. The tick checks the save and "
+            "that the hop is still proven from the "
+            "evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing hop - it ends on the "
+         "ground, far from where it started.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the hop is still "
+         "proven.",
+         "3. That is animation's twenty-seventh piece: "
+         "hopping - one thing, its place remembered "
+         "on the ground at the start, up in the air "
+         "halfway across in the middle, landed far "
+         "across at the end, and Blender filling in "
+         "the arc between. The "
+         "next piece zigzags a thing - forward leg "
+         "by leg, turning to each side in turn, on "
+         "to a far end. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the hop still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_hop_finish,
+     "check": _check_hop_finish},
+]
+
+def _zigzag_measure(context):
+    """(span, forward travel between the ends, sideways
+    range across the span, sideways direction reversals,
+    height variation) for the main thing's place
+    memories. A real zigzag travels forward AND turns
+    side to side as it goes, staying on the ground: the
+    forward travel is the end-to-end distance on the
+    busier horizontal axis, the sideways range and the
+    reversals are read on the other horizontal axis
+    from the real evaluated place sampled across the
+    span, and the height must hold. A zigzag is the
+    forward journey and the side-to-side turns
+    together - so a slide, which travels straight and
+    never turns, cannot pass, and neither can a pace,
+    which comes home and travels nowhere in the end, a
+    small zigzag that barely travels and turns only
+    once, or a hop, which leaves the ground. Probed on
+    Blender 5.3.0 and 4.2.5 before building: place
+    memories at (0, 0, 1), (1.2, 1.5, 1), (2.4, 0, 1),
+    (3.6, 1.5, 1) and (4.8, 0, 1) across frames
+    1/13/25/37/48 read back and interpolate identically
+    on both versions (span 47, forward travel 4.8,
+    sideways range 1.5, reversals 3, height variation
+    0.0, reading (1.0679, 1.4705, 1.0) near the first
+    turn at frame 12); a slide read reversals 0 with
+    sideways range 0.0, a pace read forward travel 0.0,
+    a small zigzag read forward travel 1.2 with
+    reversals 1, and a hop read height variation 2.0 -
+    none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    fwd = 0 if abs(end[0] - start[0]) >= abs(end[1]
+                                             - start[1]) else 1
+    side = 1 - fwd
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if places[-1] != end:
+        places.append(end)
+    side_vals = [p[side] for p in places]
+    reversals = 0
+    prev = 0
+    for i in range(1, len(places)):
+        d = places[i][side] - places[i - 1][side]
+        s = 1 if d > 0.001 else (-1 if d < -0.001 else 0)
+        if s and prev and s != prev:
+            reversals += 1
+        if s:
+            prev = s
+    heights = [p[2] for p in places]
+    return (last - first, abs(end[fwd] - start[fwd]),
+            max(side_vals) - min(side_vals), reversals,
+            max(heights) - min(heights))
+
+
+def _check_zigzag(context):
+    span, travel, srange, reversals, hvar = \
+        _zigzag_measure(context)
+    return (span >= 20 and travel >= 2.5
+            and srange >= 1.0 and reversals >= 2
+            and hvar <= 0.35)
+
+
+def _anim_run_zigzag(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_zigzag(context):
+        return
+    scene = context.scene
+    if not _check_anim_start(context):
+        _anim_run_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx, dy in ((12, 1.2, 1.5), (24, 2.4, 0.0),
+                        (36, 3.6, 1.5), (47, 4.8, 0.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1] + dy,
+                         start[2])
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_zigzag_finish(context):
+    return (_check_saved(context)
+            and _check_zigzag(context))
+
+
+def _anim_run_zigzag_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_ZIGZAG_STEPS = [
+    {"title": "Pick the thing that will zigzag",
+     "skill": "One thing, chosen: a zigzag starts with "
+              "a single thing that will travel forward "
+              "turning side to side",
+     "how": "The slide piece sent a thing straight "
+            "across the ground, and the pace piece sent "
+            "it out and brought it home; this piece "
+            "sends a thing forward in a zigzag - across, "
+            "turning to one side, back across the line, "
+            "turning to the other side, on to a far end: "
+            "a skier's traverse, a character dodging "
+            "down a path. The way is the place-memories "
+            "way again: the starting place remembered "
+            "on the ground, each turn remembered as the "
+            "thing reaches it, the far end remembered "
+            "last, and Blender fills in the legs "
+            "between. Start by picking the thing: any "
+            "shape you already have, or a fresh ball "
+            "here - a ball reads best.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will zigzag.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "turns come after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The zigzag will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1",
+     "how": "A zigzag is read against the place the "
+            "thing sets out FROM, so the start remembers "
+            "the thing's place at frame 1, on the ground "
+            "- Blender stores a place memory (a keyframe "
+            "on the thing's Location). The tick reads "
+            "the place memories themselves: one must sit "
+            "at the start. The whole forward journey and "
+            "every turn are measured from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing zigzags "
+         "yet. One remembered place cannot turn - it "
+         "takes the turns and the far end remembered "
+         "too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_start,
+     "check": _check_anim_start},
+    {"title": "Zigzag it forward, turning side to side",
+     "skill": "The zigzag itself: forward four and a "
+              "bit units in four legs, turning to each "
+              "side in turn, on the ground the whole way",
+     "how": "Send the thing forward leg by leg: out to "
+            "one side at the first turn, back across the "
+            "line at the next, out to the side again, "
+            "and on to the far end - each place "
+            "remembered as it is reached, its height "
+            "held the whole way. Blender fills in the "
+            "legs between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "forward travel between the ends must reach "
+            "at least 2.5, the sideways range must reach "
+            "at least 1.0, the sideways direction must "
+            "turn at least twice, and the height must "
+            "hold within 0.35. A straight slide does not "
+            "tick it, a pace that comes home does not "
+            "tick it, a small zigzag does not tick it, "
+            "and a hop that leaves the ground does not "
+            "tick it either. Probed before building on "
+            "both supported Blenders: the place "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 13. Move the thing forward "
+         "and out to one side, and press Remember "
+         "where it is right now.",
+         "2. Go to frame 25, move it forward and back "
+         "across the line, and remember again; then "
+         "frame 37, forward and out to the side once "
+         "more, remembered; then frame 48, forward to "
+         "the far end back on the line, remembered.",
+         "3. Scrub the Timeline: the thing travels "
+         "forward the whole time, turning side to "
+         "side as it goes, and stays on the ground."],
+     "missing": "No real zigzag yet - forward 2.5 or "
+                "more in the end, sideways 1.0 or more "
+                "across the span, at least two sideways "
+                "turns, at least 20 frames across, and "
+                "the height held the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_zigzag,
+     "check": _check_zigzag},
+    {"title": "Watch it zigzag, then save it",
+     "skill": "Finishing a zigzag: the turns really "
+              "play, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing travel forward, turning side to side "
+            "down its path. Then save the file. The "
+            "place memories are saved with it, so the "
+            "zigzag still plays when the file is opened "
+            "again. The tick checks the save and that "
+            "the zigzag is still proven from the "
+            "evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing zigzag - it ends far "
+         "forward from where it started, on the "
+         "ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the zigzag is still "
+         "proven.",
+         "3. That is animation's twenty-eighth piece: "
+         "zigzagging - one thing, its place remembered "
+         "on the ground at the start, each turn "
+         "remembered as it travels forward, the far "
+         "end remembered last, and Blender filling in "
+         "the legs between. The "
+         "next piece climbs a thing - up and "
+         "forward together, step by step, to a "
+         "high far end. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the zigzag still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_zigzag_finish,
+     "check": _check_zigzag_finish},
+]
+
+def _climb_measure(context):
+    """(span, rise from the start height to the end
+    height, forward travel between the ends on the
+    busiest horizontal axis, height drops across the
+    span) for the main thing's place memories. A real
+    climb goes up AND forward together, step by step,
+    and never drops back down: the rise is the
+    end-to-end height gain, the travel is the
+    end-to-end distance on the busier horizontal axis,
+    and the drops count the sampled steps where the
+    height falls by more than 0.35, all read from the
+    real evaluated place sampled across the span. A
+    climb is the up and the forward together - so a
+    rise on the spot, which goes up and travels
+    nowhere, cannot pass, and neither can a slide,
+    which travels and never rises, a hop, which ends
+    back at its starting height, a fall, which ends
+    lower than it starts, or a small climb that
+    barely rises and barely travels. Probed on
+    Blender 5.3.0 and 4.2.5 before building: place
+    memories at (0, 0, 1), (1, 0, 2), (2, 0, 3) and
+    (3, 0, 4) across frames 1/17/33/48 read back and
+    interpolate identically on both versions (span
+    47, rise 3.0, travel 3.0, drops 0, reading
+    (1.4344, 0, 2.4344) partway up at frame 24); a
+    rise on the spot read travel 0.0, a slide read
+    rise 0.0, a hop read rise 0.0, a fall read rise
+    -3.0, and a small climb read rise 1.0 with travel
+    1.0 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if places[-1] != end:
+        places.append(end)
+    drops = 0
+    for i in range(1, len(places)):
+        if places[i - 1][2] - places[i][2] > 0.35:
+            drops += 1
+    return (last - first, end[2] - start[2],
+            max(abs(end[0] - start[0]),
+                abs(end[1] - start[1])), drops)
+
+
+def _check_climb(context):
+    span, rise, travel, drops = _climb_measure(context)
+    return (span >= 20 and rise >= 2.5
+            and travel >= 2.5 and drops == 0)
+
+
+def _anim_run_climb(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_climb(context):
+        return
+    scene = context.scene
+    if not _check_anim_start(context):
+        _anim_run_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx, dz in ((16, 1.0, 1.0), (32, 2.0, 2.0),
+                        (47, 3.0, 3.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1],
+                         start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_climb_finish(context):
+    return (_check_saved(context)
+            and _check_climb(context))
+
+
+def _anim_run_climb_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_CLIMB_STEPS = [
+    {"title": "Pick the thing that will climb",
+     "skill": "One thing, chosen: a climb starts with "
+              "a single thing that will go up and "
+              "forward together",
+     "how": "The rise piece sent a thing straight up "
+            "and left it high, and the slide piece sent "
+            "it straight across the ground; this piece "
+            "sends a thing up a slope that is not there "
+            "- forward and up together, step by step, "
+            "like climbing stairs or a hillside: a "
+            "character scrambling up a bank, a ball "
+            "rolling up a ramp. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, each step "
+            "up remembered as the thing reaches it, the "
+            "top remembered last, and Blender fills in "
+            "the climb between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh ball here - a ball reads best.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will climb.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "steps up come after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The climb will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, its centre one "
+              "unit up",
+     "how": "A climb is read against the place the "
+            "thing sets out FROM, so the start remembers "
+            "the thing's place at frame 1, on the ground "
+            "- Blender stores a place memory (a keyframe "
+            "on the thing's Location). The tick reads "
+            "the place memories themselves: one must sit "
+            "at the start. The whole climb up and "
+            "forward is measured from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing climbs "
+         "yet. One remembered place cannot climb - it "
+         "takes the steps up and the top remembered "
+         "too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_start,
+     "check": _check_anim_start},
+    {"title": "Climb it diagonally, up and forward in steps",
+     "skill": "The climb itself: three units forward "
+              "and three units up in three even steps, "
+              "rising the whole way",
+     "how": "Send the thing up step by step: one unit "
+            "forward and one unit up at the first step, "
+            "another of each at the next, and the last "
+            "step onto the top - each place remembered "
+            "as it is reached. Blender fills in the "
+            "climb between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "rise from the start height to the end "
+            "height must reach at least 2.5, the forward "
+            "travel between the ends must reach at "
+            "least 2.5, and the height must never drop "
+            "back by more than 0.35 in a step. A rise on "
+            "the spot does not tick it, a slide along "
+            "the ground does not tick it, a hop that "
+            "lands back at its starting height does not "
+            "tick it, a fall does not tick it, and a "
+            "small climb does not tick it either. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 17. Move the thing forward "
+         "one unit and up one unit, and press Remember "
+         "where it is right now.",
+         "2. Go to frame 33, move it forward one more "
+         "unit and up one more, and remember again; "
+         "then frame 48, forward one more and up one "
+         "more onto the top, remembered.",
+         "3. Scrub the Timeline: the thing climbs the "
+         "whole time - forward and up together, step "
+         "by step, never dropping back down."],
+     "missing": "No real climb yet - up 2.5 or more "
+                "and forward 2.5 or more in the end, at "
+                "least 20 frames across, and the height "
+                "rising the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_climb,
+     "check": _check_climb},
+    {"title": "Watch it climb, then save it",
+     "skill": "Finishing a climb: the climb really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing climb - up and forward, step by step, "
+            "to its high far end. Then save the file. "
+            "The place memories are saved with it, so "
+            "the climb still plays when the file is "
+            "opened again. The tick checks the save and "
+            "that the climb is still proven from the "
+            "evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing climb - it ends high up and "
+         "far forward from where it started.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the climb is still "
+         "proven.",
+         "3. That is animation's twenty-ninth piece: "
+         "climbing - one thing, its place remembered "
+         "on the ground at the start, each step up "
+         "remembered as it climbs, the top remembered "
+         "last, and Blender filling in the climb "
+         "between. The next piece descends a thing - "
+         "down and forward together, step by step, "
+         "from up high to the ground. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the climb still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_climb_finish,
+     "check": _check_climb_finish},
+]
+
+def _descend_measure(context):
+    """(span, drop from the start height to the end
+    height, forward travel between the ends on the
+    busiest horizontal axis, height rises across the
+    span) for the main thing's place memories. A real
+    descend goes down AND forward together, step by
+    step, and never rises back up: the drop is the
+    start-to-end height loss, the travel is the
+    end-to-end distance on the busier horizontal axis,
+    and the rises count the sampled steps where the
+    height climbs by more than 0.35, all read from the
+    real evaluated place sampled across the span. A
+    descend is the down and the forward together - so
+    a fall on the spot, which drops and travels
+    nowhere, cannot pass, and neither can a slide,
+    which travels and never drops, a climb, which ends
+    higher than it starts, a hop that lands back at
+    its starting height, or a small descend that
+    barely drops and barely travels. Probed on
+    Blender 5.3.0 and 5.2.0 before building (no 4.2.5
+    binary on this cell this run): place memories at
+    (0, 0, 4), (1, 0, 3), (2, 0, 2) and (3, 0, 1)
+    across frames 1/17/33/48 read back and interpolate
+    identically on both versions (span 47, drop 3.0,
+    travel 3.0, rises 0, reading (1.4344, 0, 2.5656)
+    partway down at frame 24); a fall on the spot read
+    travel 0.0, a slide read drop 0.0, a climb read
+    drop -3.0, a hop read drop 0.0, and a small
+    descend read drop 1.0 with travel 1.0 - none can
+    pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if places[-1] != end:
+        places.append(end)
+    rises = 0
+    for i in range(1, len(places)):
+        if places[i][2] - places[i - 1][2] > 0.35:
+            rises += 1
+    return (last - first, start[2] - end[2],
+            max(abs(end[0] - start[0]),
+                abs(end[1] - start[1])), rises)
+
+
+def _check_descend(context):
+    span, drop, travel, rises = _descend_measure(context)
+    return (span >= 20 and drop >= 2.5
+            and travel >= 2.5 and rises == 0)
+
+
+def _check_descend_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] >= 3.0
+
+
+def _anim_run_descend_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_descend_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 4.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_descend(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_descend(context):
+        return
+    scene = context.scene
+    if not _check_descend_start(context):
+        _anim_run_descend_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx, dz in ((16, 1.0, -1.0), (32, 2.0, -2.0),
+                        (47, 3.0, -3.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1],
+                         start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_descend_finish(context):
+    return (_check_saved(context)
+            and _check_descend(context))
+
+
+def _anim_run_descend_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_DESCEND_STEPS = [
+    {"title": "Pick the thing that will descend",
+     "skill": "One thing, chosen: a descend starts "
+              "with a single thing that will go down "
+              "and forward together",
+     "how": "The climb piece sent a thing up and "
+            "forward together, step by step; this "
+            "piece brings a thing back down the same "
+            "way - down and forward together, step by "
+            "step, like walking down stairs or a "
+            "hillside: a character picking its way "
+            "down a bank, a ball rolling down a ramp. "
+            "The way is the place-memories way again: "
+            "the starting place remembered up high, "
+            "each step down remembered as the thing "
+            "reaches it, the bottom remembered last, "
+            "and Blender fills in the descend between. "
+            "Start by picking the thing: any shape you "
+            "already have, or a fresh ball here - a "
+            "ball reads best.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will descend.",
+         "2. Leave it where it is for now. The starting "
+         "place up high is remembered first; the steps "
+         "down come after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The descend will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, up high",
+     "skill": "The start, remembered up high: a place "
+              "memory at frame 1, its centre at least "
+              "three units up",
+     "how": "A descend is read against the place the "
+            "thing sets out FROM, so the start remembers "
+            "the thing's place at frame 1, up high - "
+            "Blender stores a place memory (a keyframe "
+            "on the thing's Location). The tick reads "
+            "the place memories themselves: one must sit "
+            "at the start, and the thing must be up high "
+            "there - its centre at least three units "
+            "up. The whole descend down and forward is "
+            "measured from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Lift the "
+         "thing up high - its centre at least three "
+         "units up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing descends "
+         "yet. One remembered place cannot descend - "
+         "it takes the steps down and the bottom "
+         "remembered too."],
+     "missing": "No high starting place remembered yet "
+                "- remember the thing's place at frame "
+                "1, up high.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_descend_start,
+     "check": _check_descend_start},
+    {"title": "Descend it diagonally, down and forward in steps",
+     "skill": "The descend itself: three units "
+              "forward and three units down in three "
+              "even steps, dropping the whole way",
+     "how": "Send the thing down step by step: one "
+            "unit forward and one unit down at the "
+            "first step, another of each at the next, "
+            "and the last step onto the ground - each "
+            "place remembered as it is reached. Blender "
+            "fills in the descend between. The tick "
+            "reads the real evaluated place sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the drop from the start "
+            "height to the end height must reach at "
+            "least 2.5, the forward travel between the "
+            "ends must reach at least 2.5, and the "
+            "height must never rise back by more than "
+            "0.35 in a step. A fall on the spot does "
+            "not tick it, a slide along the ground does "
+            "not tick it, a climb does not tick it, a "
+            "hop that lands back at its starting height "
+            "does not tick it, and a small descend does "
+            "not tick it either. Probed before building "
+            "on both Blenders available on this "
+            "machine: the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 17. Move the thing forward "
+         "one unit and down one unit, and press "
+         "Remember where it is right now.",
+         "2. Go to frame 33, move it forward one more "
+         "unit and down one more, and remember again; "
+         "then frame 48, forward one more and down "
+         "one more onto the ground, remembered.",
+         "3. Scrub the Timeline: the thing descends "
+         "the whole time - forward and down together, "
+         "step by step, never rising back up."],
+     "missing": "No real descend yet - down 2.5 or "
+                "more and forward 2.5 or more in the "
+                "end, at least 20 frames across, and "
+                "the height dropping the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_descend,
+     "check": _check_descend},
+    {"title": "Watch it descend, then save it",
+     "skill": "Finishing a descend: the descend "
+              "really plays, and the file is saved "
+              "with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing descend - down and forward, step by "
+            "step, to its low far end on the ground. "
+            "Then save the file. The place memories are "
+            "saved with it, so the descend still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the descend is "
+            "still proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing descend - it ends low down "
+         "on the ground and far forward from where "
+         "it started.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the descend is still "
+         "proven.",
+         "3. That is animation's thirtieth piece: "
+         "descending - one thing, its place "
+         "remembered up high at the start, each step "
+         "down remembered as it descends, the bottom "
+         "remembered last, and Blender filling in "
+         "the descend between. The next piece hovers a thing - "
+         "up high early, and staying there in its own "
+         "place to the end. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the descend still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_descend_finish,
+     "check": _check_descend_finish},
+]
+
+def _hover_measure(context):
+    """(span, rise from the start height to the end
+    height, end height, lowest height held across the
+    second half of the span, sideways drift from the
+    start place) for the main thing's place memories.
+    A real hover rises up and then STAYS up, in its
+    own place: the rise is the start-to-end height
+    gain, the hold is the lowest sampled height from
+    the middle of the span onward, and the drift is
+    the farthest any sampled place strays sideways
+    from the start, all read from the real evaluated
+    place sampled across the span. A hover is the
+    rise and the staying together - so a plain rise,
+    which is still climbing at the middle and only
+    arrives at the end, cannot pass, and neither can
+    a bounce that comes back down, a slide along the
+    ground, a small lift that never gets high, or a
+    climb that travels as it rises. Probed on
+    Blender 5.3.0 and 4.2.5 before building: place
+    memories at (0, 0, 1), (0, 0, 4) and (0, 0, 4)
+    across frames 1/24/48 read back and interpolate
+    identically on both versions (span 47, rise 3.0,
+    end 4.0, hold 4.0, drift 0.0, reading (0, 0,
+    2.4022) partway up at frame 12); a plain rise read
+    hold 2.4521, a bounce read end 1.0 with hold 1.0,
+    a slide read rise 0.0 with drift 3.0, a small lift
+    read rise 1.0 with end 2.0, and a diagonal climb
+    read hold 2.5 with drift 3.0 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    middle = first + (last - first) // 2
+    hold = min(p[2] for f, p in places if f >= middle)
+    drift = max(max(abs(p[0] - start[0]),
+                    abs(p[1] - start[1]))
+                for f, p in places)
+    return (last - first, end[2] - start[2], end[2],
+            hold, drift)
+
+
+def _check_hover(context):
+    span, rise, end, hold, drift = _hover_measure(context)
+    return (span >= 20 and rise >= 2.5 and end >= 3.0
+            and hold >= 2.8 and drift <= 0.5)
+
+
+def _check_hover_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] <= 1.3
+
+
+def _anim_run_hover_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_hover_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_hover(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_hover(context):
+        return
+    scene = context.scene
+    if not _check_hover_start(context):
+        _anim_run_hover_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dz in ((23, 3.0), (47, 3.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0], start[1],
+                         start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_hover_finish(context):
+    return (_check_saved(context)
+            and _check_hover(context))
+
+
+def _anim_run_hover_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_HOVER_STEPS = [
+    {"title": "Pick the thing that will hover",
+     "skill": "One thing, chosen: a hover starts "
+              "with a single thing that will rise "
+              "and stay up",
+     "how": "The rise piece sent a thing up high "
+            "and left it there at the end of its "
+            "journey; this piece teaches the staying "
+            "itself - rise up, arrive early, and hold "
+            "that high place, still and in its own "
+            "place, for the rest of the span: a drone "
+            "holding its height, a character floating "
+            "where it rose to. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the high "
+            "place remembered as the thing arrives, "
+            "and the same high place remembered again "
+            "at the end - Blender fills in the rise, "
+            "and the two high memories are what make "
+            "it a hover and not just a rise. Start by "
+            "picking the thing: any shape you already "
+            "have, or a fresh ball here - a ball reads "
+            "best.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will hover.",
+         "2. Leave it where it is for now. The starting "
+         "place on the ground is remembered first; "
+         "the rise comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The hover will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: "
+              "a place memory at frame 1, its centre "
+              "no more than 1.3 units up",
+     "how": "A hover is read against the place the "
+            "thing sets out FROM, so the start "
+            "remembers the thing's place at frame 1, "
+            "on the ground - Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start, and the thing must be low there - "
+            "its centre no more than 1.3 units up. "
+            "The whole rise is measured from this "
+            "place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing rises "
+         "yet. One remembered place cannot hover - "
+         "it takes the high place remembered, and "
+         "remembered again, too."],
+     "missing": "No ground starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_hover_start,
+     "check": _check_hover_start},
+    {"title": "Rise it up high and keep it there",
+     "skill": "The hover itself: three units up by "
+              "the middle of the span, and the same "
+              "high place held to the end",
+     "how": "Rise the thing straight up and then "
+            "keep it there: up three units remembered "
+            "at frame 24, and the same high place "
+            "remembered again at frame 48, in its own "
+            "place the whole way. Blender fills in the "
+            "rise between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "rise from the start height to the end "
+            "height must reach at least 2.5, the end "
+            "height must reach at least 3.0, the "
+            "lowest height from the middle of the span "
+            "onward must stay at least 2.8, and no "
+            "sampled place may stray more than 0.5 "
+            "sideways from the start place. A plain "
+            "rise does not tick it - it is still "
+            "climbing at the middle and only arrives "
+            "at the end; a bounce that comes back down "
+            "does not tick it, a slide along the "
+            "ground does not tick it, a small lift "
+            "does not tick it, and a climb that "
+            "travels as it rises does not tick it "
+            "either. Probed before building on both "
+            "Blenders on this machine: the place "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Lift the thing straight "
+         "up three units, and press Remember where "
+         "it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same high place - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing rises, "
+         "arrives by the middle, and then stays - "
+         "high, still, and in its own place to the "
+         "end."],
+     "missing": "No real hover yet - up 2.5 or more "
+                "in the end, high from the middle of "
+                "the span onward, and in its own place "
+                "the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_hover,
+     "check": _check_hover},
+    {"title": "Watch it hover, then save it",
+     "skill": "Finishing a hover: the hover really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing rise and then hold its high place, "
+            "still, to the end. Then save the file. "
+            "The place memories are saved with it, so "
+            "the hover still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the hover is still proven from "
+            "the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing rise and hover - it ends "
+         "high up, in the same place it rose to, "
+         "long after it arrived.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the hover is still "
+         "proven.",
+         "3. That is animation's thirty-first piece: "
+         "hovering - one thing, its place remembered "
+         "on the ground at the start, its high place "
+         "remembered as it arrives and remembered "
+         "again at the end, and Blender filling in "
+         "the rise between. The next piece lands a thing - "
+         "down on the ground early, and staying there in its own "
+         "place to the end. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the hover still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_hover_finish,
+     "check": _check_hover_finish},
+]
+
+def _land_measure(context):
+    """(span, drop from the start height to the end
+    height, end height, highest height across the
+    second half of the span, sideways drift from the
+    start place) for the main thing's place memories.
+    A real landing comes down and then STAYS down, in
+    its own place: the drop is the start-to-end height
+    loss, the ceiling is the highest sampled height
+    from the middle of the span onward, and the drift
+    is the farthest any sampled place strays sideways
+    from the start, all read from the real evaluated
+    place sampled across the span. A landing is the
+    drop and the staying together - so a plain fall,
+    which is still descending at the middle and only
+    arrives at the end, cannot pass, and neither can
+    a bounce that goes back up, a slide along at
+    height, a small drop that never gets low from
+    high, or a diagonal descend that travels as it
+    drops. Probed on Blender 4.2.5 before building
+    (the 5.3.0 pass is owed - no 5.3.0 binary is on
+    this cell this run): place memories at (0, 0, 4),
+    (0, 0, 1) and (0, 0, 1) across frames 1/24/48 read
+    back and interpolate as span 47, drop 3.0, end
+    1.0, ceiling 1.0, drift 0.0, reading (0, 0,
+    2.5978) partway down at frame 12; a plain fall
+    read ceiling 2.5479, a bounce read end 4.0 with
+    ceiling 4.0, a slide at height read drop 0.0 with
+    drift 3.0, a small drop read drop 1.0, and a
+    diagonal descend read ceiling 2.5 with drift
+    3.0 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    middle = first + (last - first) // 2
+    ceiling = max(p[2] for f, p in places if f >= middle)
+    drift = max(max(abs(p[0] - start[0]),
+                    abs(p[1] - start[1]))
+                for f, p in places)
+    return (last - first, start[2] - end[2], end[2],
+            ceiling, drift)
+
+
+def _check_land(context):
+    span, drop, end, ceiling, drift = _land_measure(context)
+    return (span >= 20 and drop >= 2.5 and end <= 1.3
+            and ceiling <= 1.7 and drift <= 0.5)
+
+
+def _check_land_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] >= 3.0
+
+
+def _anim_run_land_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_land_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 4.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_land(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_land(context):
+        return
+    scene = context.scene
+    if not _check_land_start(context):
+        _anim_run_land_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dz in ((23, -3.0), (47, -3.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0], start[1],
+                         start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_land_finish(context):
+    return (_check_saved(context)
+            and _check_land(context))
+
+
+def _anim_run_land_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_LAND_STEPS = [
+    {"title": "Pick the thing that will land",
+     "skill": "One thing, chosen: a landing starts "
+              "with a single thing that will come "
+              "down and stay down",
+     "how": "The fall piece dropped a thing to the "
+            "ground and left it there at the end of "
+            "its journey; this piece teaches the "
+            "staying itself - come down, arrive by "
+            "the middle of the span, and hold that "
+            "ground place to the end - its place "
+            "remembered up high at frame 1, its "
+            "ground place remembered at frame 24, "
+            "and the same ground place remembered "
+            "again at frame 48, and Blender fills in "
+            "the descent between. Checked from the "
+            "real evaluated place sampled across the "
+            "span - the span must run at least 20 "
+            "frames, the drop must reach at least "
+            "2.5, the end height must be no more "
+            "than 1.3, the highest height from the "
+            "middle onward must stay no more than "
+            "1.7, and no sampled place may stray more "
+            "than 0.5 sideways, so a plain fall, a "
+            "bounce, a slide at height, a small drop "
+            "or a diagonal descend cannot pass for a "
+            "landing. Each step ticks only when the "
+            "scene itself proves it.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will land.",
+         "2. Leave it where it is for now. The starting "
+         "place up high is remembered first; the "
+         "descent comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The landing will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, up high",
+     "skill": "The start, remembered up high: a "
+              "place memory at frame 1, its centre "
+              "at least 3 units up",
+     "how": "A landing is read against the place the "
+            "thing sets out FROM, so the start "
+            "remembers the thing's place at frame 1, "
+            "up high - Blender stores a place memory "
+            "(a keyframe on the thing's Location). "
+            "The tick reads the place memories "
+            "themselves: one must sit at the start, "
+            "and the thing must be high there - its "
+            "centre at least 3 units up. The whole "
+            "drop is measured from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Lift the "
+         "thing up high, three units or more.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing descends "
+         "yet. One remembered place cannot land - "
+         "it takes the ground place remembered, and "
+         "remembered again, too."],
+     "missing": "No high starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, up high.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_land_start,
+     "check": _check_land_start},
+    {"title": "Bring it down and keep it there",
+     "skill": "The landing itself: three units down "
+              "by the middle of the span, and the same "
+              "ground place held to the end",
+     "how": "Bring the thing straight down and then "
+            "keep it there: down three units "
+            "remembered at frame 24, and the same "
+            "ground place remembered again at frame "
+            "48, in its own place the whole way. "
+            "Blender fills in the descent between. "
+            "The tick reads the real evaluated place "
+            "sampled across the span: the span must "
+            "run at least 20 frames, the drop from "
+            "the start height to the end height must "
+            "reach at least 2.5, the end height must "
+            "be no more than 1.3, the highest height "
+            "from the middle of the span onward must "
+            "stay no more than 1.7, and no sampled "
+            "place may stray more than 0.5 sideways "
+            "from the start place. A plain fall does "
+            "not tick it - it is still descending at "
+            "the middle and only arrives at the end; "
+            "a bounce that goes back up does not tick "
+            "it, a slide along at height does not "
+            "tick it, a small drop does not tick it, "
+            "and a descend that travels as it drops "
+            "does not tick it either. Probed before "
+            "building on the Blender on this "
+            "machine: the place memories read back "
+            "and interpolate as proven there.",
+     "teach": [
+         "1. Go to frame 24. Bring the thing straight "
+         "down three units, to the ground, and press "
+         "Remember where it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same ground place - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing descends, "
+         "arrives by the middle, and then stays - "
+         "down, still, and in its own place to the "
+         "end."],
+     "missing": "No real landing yet - down 2.5 or "
+                "more in the end, low from the middle "
+                "of the span onward, and in its own "
+                "place the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_land,
+     "check": _check_land},
+    {"title": "Watch it land, then save it",
+     "skill": "Finishing a landing: the landing "
+              "really plays, and the file is saved "
+              "with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing come down and then hold its ground "
+            "place, still, to the end. Then save the "
+            "file. The place memories are saved with "
+            "it, so the landing still plays when the "
+            "file is opened again. The tick checks "
+            "the save and that the landing is still "
+            "proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing descend and land - it ends "
+         "on the ground, in the same place it came "
+         "down to, long after it arrived.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the landing is still "
+         "proven.",
+         "3. That is animation's thirty-second piece: "
+         "landing - one thing, its place remembered "
+         "up high at the start, its ground place "
+         "remembered as it arrives and remembered "
+         "again at the end, and Blender filling in "
+         "the descent between. The next piece glides a thing - "
+         "far across the air, sinking only a little, "
+         "and still flying at the end. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the landing still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_land_finish,
+     "check": _check_land_finish},
+]
+
+def _glide_measure(context):
+    """(span, forward travel between the ends on the
+    busiest horizontal axis, drop from the start
+    height to the end height, end height, height
+    rises across the span) for the main thing's place
+    memories. A real glide goes FAR across while
+    sinking only a little, and is still in the air at
+    the end: the travel is the end-to-end distance on
+    the busier horizontal axis, the drop is the
+    start-to-end height loss, and the rises count the
+    sampled steps where the height climbs by more
+    than 0.35, all read from the real evaluated place
+    sampled across the span. A glide is the far and
+    the nearly-level together - so a fall on the
+    spot, which drops three and travels nowhere,
+    cannot pass, and neither can a diagonal descend
+    that drops the full three, a slide along at
+    height that never sinks at all, a hop that ends
+    down low, or a small glide that barely travels
+    and barely sinks. Probed on Blender 4.2.5 before
+    building (no 5.3.0 binary is on this cell this
+    run - that pass is owed): place memories at
+    (0, 0, 4), (1.5, 0, 3.5) and (3, 0, 3) across
+    frames 1/24/48 read back and interpolate as span
+    47, travel 3.0, drop 1.0, end 3.0, rises 0,
+    reading (0.4381, 0, 3.854) partway across at
+    frame 12 and (1.5, 0, 3.5) halfway across at
+    frame 24; a fall on the spot read travel 0.0
+    with drop 3.0, a diagonal descend read drop 3.0
+    with end 1.0, a slide at height read drop 0.0, a
+    hop read end 1.0 with drop 3.0, and a small glide
+    read travel 1.0 with drop 0.3 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0.0, 99
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0.0, 99
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0.0, 99
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if places[-1] != end:
+        places.append(end)
+    rises = 0
+    for i in range(1, len(places)):
+        if places[i][2] - places[i - 1][2] > 0.35:
+            rises += 1
+    return (last - first,
+            max(abs(end[0] - start[0]),
+                abs(end[1] - start[1])),
+            start[2] - end[2], end[2], rises)
+
+
+def _check_glide(context):
+    span, travel, drop, end, rises = _glide_measure(context)
+    return (span >= 20 and travel >= 2.5
+            and 0.7 <= drop <= 1.8 and end >= 2.2
+            and rises == 0)
+
+
+def _check_glide_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] >= 3.0
+
+
+def _anim_run_glide_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_glide_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 4.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_glide(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_glide(context):
+        return
+    scene = context.scene
+    if not _check_glide_start(context):
+        _anim_run_glide_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx, dz in ((23, 1.5, -0.5), (47, 3.0, -1.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1],
+                         start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_glide_finish(context):
+    return (_check_saved(context)
+            and _check_glide(context))
+
+
+def _anim_run_glide_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_GLIDE_STEPS = [
+    {"title": "Pick the thing that will glide",
+     "skill": "One thing, chosen: a glide starts "
+              "with a single thing that will travel "
+              "far through the air",
+     "how": "The descend piece brought a thing down "
+            "and forward together, all the way to the "
+            "ground; this piece teaches the long, "
+            "nearly-level flight itself - far across, "
+            "sinking only a little, and still in the "
+            "air at the end - its place remembered up "
+            "high at frame 1, halfway across and only "
+            "half a unit lower remembered at frame 24, "
+            "and the far end, three across and only "
+            "one down, remembered at frame 48, and "
+            "Blender fills in the glide between. "
+            "Checked from the real evaluated place "
+            "sampled across the span - the span must "
+            "run at least 20 frames, the travel "
+            "between the ends must reach at least "
+            "2.5, the drop must sit between 0.7 and "
+            "1.8, the end height must stay at least "
+            "2.2, and the height must never rise back "
+            "by more than 0.35 in a step, so a fall on "
+            "the spot, a diagonal descend, a slide at "
+            "height, a hop or a small glide cannot "
+            "pass for a glide. Each step ticks only "
+            "when the scene itself proves it.",
+     "teach": [
+         "1. Press Add a ball above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will glide.",
+         "2. Leave it where it is for now. The starting "
+         "place up high is remembered first; the "
+         "glide comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The glide will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a ball, or pick a "
+                "shape you already have.",
+     "tools": ["add_ball", "add_cube"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, up high",
+     "skill": "The start, remembered up high: a "
+              "place memory at frame 1, its centre "
+              "at least 3 units up",
+     "how": "A glide is read against the place the "
+            "thing sets out FROM, so the start "
+            "remembers the thing's place at frame 1, "
+            "up high - Blender stores a place memory "
+            "(a keyframe on the thing's Location). "
+            "The tick reads the place memories "
+            "themselves: one must sit at the start, "
+            "and the thing must be high there - its "
+            "centre at least 3 units up. The whole "
+            "glide is measured from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Lift the "
+         "thing up high, three units or more.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing glides "
+         "yet. One remembered place cannot glide - "
+         "it takes the far places remembered too."],
+     "missing": "No high starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, up high.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_glide_start,
+     "check": _check_glide_start},
+    {"title": "Glide it far across, sinking only a little",
+     "skill": "The glide itself: three units across "
+              "and only one unit down, still in the "
+              "air at the end",
+     "how": "Send the thing far across the air while "
+            "it sinks only a little: halfway across - "
+            "one and a half units over and half a "
+            "unit down - remembered at frame 24, and "
+            "the far end - three units across and "
+            "only one unit down in all - remembered "
+            "at frame 48, still high in the air. "
+            "Blender fills in the glide between. The "
+            "tick reads the real evaluated place "
+            "sampled across the span: the span must "
+            "run at least 20 frames, the travel "
+            "between the ends must reach at least "
+            "2.5, the drop from the start height to "
+            "the end height must sit between 0.7 and "
+            "1.8, the end height must stay at least "
+            "2.2, and the height must never rise back "
+            "by more than 0.35 in a step. A fall on "
+            "the spot does not tick it - it drops the "
+            "whole way and travels nowhere; a "
+            "diagonal descend does not tick it - it "
+            "drops too far and ends on the ground; a "
+            "slide along at height does not tick it - "
+            "it never sinks at all; a hop that ends "
+            "down low does not tick it, and a small "
+            "glide that barely travels does not tick "
+            "it either. Probed before building on the "
+            "Blender on this machine: the place "
+            "memories read back and interpolate as "
+            "proven there.",
+     "teach": [
+         "1. Go to frame 24. Move the thing across "
+         "one and a half units and down only half a "
+         "unit, and press Remember where it is "
+         "right now.",
+         "2. Go to frame 48. Move it across to three "
+         "units from the start, one unit down in "
+         "all - still well up in the air - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing travels "
+         "far across, sinking slowly the whole way, "
+         "and is still flying at the end."],
+     "missing": "No real glide yet - across 2.5 or "
+                "more in the end, down between 0.7 and "
+                "1.8, and still at least 2.2 up at the "
+                "end.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_glide,
+     "check": _check_glide},
+    {"title": "Watch it glide, then save it",
+     "skill": "Finishing a glide: the glide really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing glide - far across the air, "
+            "sinking only a little, still flying at "
+            "the end. Then save the file. The place "
+            "memories are saved with it, so the glide "
+            "still plays when the file is opened "
+            "again. The tick checks the save and that "
+            "the glide is still proven from the "
+            "evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing glide - it ends far "
+         "across from where it started, still up in "
+         "the air.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the glide is still "
+         "proven.",
+         "3. That is animation's thirty-third piece: "
+         "gliding - one thing, its place remembered "
+         "up high at the start, far across and only "
+         "a little lower remembered as it travels, "
+         "and Blender filling in the glide between. "
+         "The next piece sways a thing - leaned "
+         "to one side, leaned to the other, and "
+         "settled upright again. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the glide still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_glide_finish,
+     "check": _check_glide_finish},
+]
+
+def _sway_measure(context):
+    """(span, most lean one way, most lean the other
+    way, direction reversals, ends gap, upright drift,
+    place drift) for the main thing's facing memories.
+    A real sway leans a thing to one side, then to
+    the other side, and settles it upright again: on
+    whichever side axis leans the most, the lean -
+    read against the starting facing - must reach at
+    least +0.6 one way and at least -0.6 the other,
+    the lean must change direction at least twice,
+    the ends must land back within 0.3 of level, the
+    upright (Z) facing must hold within 0.35, and the
+    thing must stay within 0.5 of its place. A tilt
+    cannot pass - it leans one way and stays, so its
+    lean the other way reads 0 and it ends leaned; a
+    spin cannot pass - its side axes never lean and
+    its upright facing turns the whole way; a small
+    sway cannot pass - it only leans 0.2 each way;
+    and a one-way rock cannot pass - it never leans
+    the other way and changes direction only once.
+    Probed on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_sway.py): facing memories
+    level at frame 1, leaned +0.8 on the X axis at
+    frame 17, leaned -0.8 at frame 33 and level again
+    at frame 48 read back and interpolate identically
+    on both versions (span 47, most lean +0.8 and
+    -0.8, reversals 2, ends 0.0, upright drift 0.0,
+    place drift 0.0); a tilt read most lean the other
+    way 0.0 with reversals 0 and ends 0.8, a spin read
+    upright drift 6.2832, a small sway read +0.2 and
+    -0.2, and a one-way rock read most lean the other
+    way 0.0 with reversals 1 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    series = {a: [r[a] - start[a] for r in rots]
+              for a in (0, 1)}
+    busiest = max((0, 1),
+                  key=lambda a: max(series[a])
+                  - min(series[a]))
+    lean = series[busiest]
+    diffs = [lean[i + 1] - lean[i]
+             for i in range(len(lean) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = max(abs(rots[-1][0] - start[0]),
+               abs(rots[-1][1] - start[1]))
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, max(lean), min(lean),
+            reversals, ends, zdrift, drift)
+
+
+def _check_sway_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_sway_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_sway_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_sway(context):
+    span, most, least, reversals, ends, zdrift, drift = \
+        _sway_measure(context)
+    return (span >= 20 and most >= 0.6 and least <= -0.6
+            and reversals >= 2 and ends <= 0.3
+            and zdrift <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_sway(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_sway(context):
+        return
+    scene = context.scene
+    if not _check_sway_start(context):
+        _anim_run_sway_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, lean in ((16, 0.8), (32, -0.8), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0] + lean,
+                               start[1], start[2])
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_sway_finish(context):
+    return (_check_saved(context)
+            and _check_sway(context))
+
+
+def _anim_run_sway_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SWAY_STEPS = [
+    {"title": "Pick the thing that will sway",
+     "skill": "One thing, chosen: a sway starts with a "
+              "single thing that will lean from side "
+              "to side",
+     "how": "The tilt piece leaned a thing over to "
+            "one side and left it leaning; this piece "
+            "leans it to one side, then to the other, "
+            "and settles it upright again - a tree in "
+            "the wind, a sign rocking on its post. The "
+            "way is the facing-memories way again: the "
+            "upright facing remembered at the start, "
+            "the lean each way remembered as it "
+            "passes, the upright facing remembered "
+            "again at the end, and Blender fills in "
+            "the swaying between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will sway.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "swaying comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The sway will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A sway is read against the facing the "
+            "thing starts from, so the start remembers "
+            "the thing's facing at frame 1, standing "
+            "upright - Blender stores a facing memory "
+            "(a keyframe on the thing's Rotation). The "
+            "tick reads the facing memories themselves: "
+            "one must sit at the start, level on every "
+            "axis. The whole sway is measured from "
+            "this facing, and the thing must come back "
+            "to it at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing sways "
+         "yet. One remembered facing cannot sway - "
+         "it takes the leans remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_sway_start,
+     "check": _check_sway_start},
+    {"title": "Sway it side to side and settle it upright",
+     "skill": "The sway itself: leaned one way, "
+              "leaned the other way, and upright again "
+              "at the last frame, in its own place the "
+              "whole way",
+     "how": "Lean the thing over to one side and "
+            "remember its facing, lean it over to the "
+            "other side and remember again, then set "
+            "it upright and remember once more at the "
+            "last frame, keeping it in its place and "
+            "not turning it around: leaned 0.8 of a "
+            "turn unit (radians) one way remembered "
+            "at frame 17, leaned 0.8 the other way "
+            "remembered at frame 33, and upright again "
+            "remembered at frame 48. Blender fills in "
+            "the swaying between. The tick reads the "
+            "real evaluated facing sampled across the "
+            "span: the span must run at least 20 "
+            "frames, on the side axis that leans the "
+            "most the lean must reach at least +0.6 "
+            "one way and at least -0.6 the other, the "
+            "lean must change direction at least "
+            "twice, the ends must land within 0.3 of "
+            "level, the upright facing must hold "
+            "within 0.35, and the thing must stay "
+            "within 0.5 of its place. A tilt does not "
+            "tick it - it leans one way and stays; a "
+            "spin does not tick it; a small sway that "
+            "barely leans does not tick it, and a "
+            "one-way rock that never leans the other "
+            "way does not tick it either. Probed "
+            "before building on both supported "
+            "Blenders: the facing memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 17. Lean the thing over to "
+         "one side - about a quarter of a "
+         "quarter-turn - and press Remember how it "
+         "faces right now.",
+         "2. Go to frame 33. Lean it over to the "
+         "other side by the same amount, and "
+         "remember again.",
+         "3. Go to frame 48. Set it upright again and "
+         "remember once more. Scrub the Timeline: "
+         "the thing sways from side to side and "
+         "settles upright."],
+     "missing": "No real sway yet - a lean of 0.6 or "
+                "more each way on one side axis, at "
+                "least two changes of direction, "
+                "upright again at the end, at least 20 "
+                "frames across, in its own place, and "
+                "no turning around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_sway,
+     "check": _check_sway},
+    {"title": "Watch it sway, then save it",
+     "skill": "Finishing a sway: the swaying really "
+              "plays, and the file is saved with the "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean one way, lean the other way, "
+            "and settle upright. Then save the file. "
+            "The facing memories are saved with it, so "
+            "the sway still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the sway is still proven from "
+            "the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing sway - it ends standing "
+         "upright again, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the sway is still "
+         "proven.",
+         "3. That is animation's thirty-fourth piece: "
+         "swaying - one thing, its upright facing "
+         "remembered at the start, leaned one way "
+         "and leaned the other way remembered as it "
+         "passes, upright again remembered at the "
+         "end, and Blender filling in the swaying "
+         "between. The next piece bows a thing - "
+         "leaned deep to one side only, and brought "
+         "back upright again. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the sway still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_sway_finish,
+     "check": _check_sway_finish},
+]
+
+def _bow_measure(context):
+    """(span, peak lean, lean the other way,
+    direction reversals, ends gap, upright drift,
+    place drift) for the main thing's facing
+    memories. A real bow leans a thing over to one
+    side only and brings it back upright: on
+    whichever side axis leans the most, the lean -
+    read against the starting facing - must reach
+    at least 0.6 one way, must never lean more
+    than 0.15 the other way, must change direction
+    at least once (the coming back), the ends must
+    land back within 0.3 of level, the upright (Z)
+    facing must hold within 0.35, and the thing
+    must stay within 0.5 of its place. A tilt
+    cannot pass - it leans and stays, so it never
+    comes back and ends leaned; a sway cannot pass
+    - it leans 0.8 the other way too; a spin cannot
+    pass - its upright facing turns the whole way;
+    and a small bow cannot pass - it only leans
+    0.2. Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_bow.py): facing
+    memories level at frame 1, leaned 0.9 on the X
+    axis at frame 24 and level again at frame 48
+    read back and interpolate identically on both
+    versions (span 47, peak 0.9, other way 0.0,
+    reversals 1, ends 0.0, upright drift 0.0, place
+    drift 0.0); a tilt read reversals 0 with ends
+    0.9, a sway read the other way 0.8, a spin read
+    upright drift 6.2832, and a small bow read peak
+    0.2 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    series = {a: [r[a] - start[a] for r in rots]
+              for a in (0, 1)}
+    busiest = max((0, 1),
+                  key=lambda a: max(series[a])
+                  - min(series[a]))
+    lean = series[busiest]
+    diffs = [lean[i + 1] - lean[i]
+             for i in range(len(lean) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = max(abs(rots[-1][0] - start[0]),
+               abs(rots[-1][1] - start[1]))
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    peak_val = max(lean, key=abs)
+    peak = abs(peak_val)
+    other = -min(lean) if peak_val > 0 else max(lean)
+    return (last - first, peak, other, reversals,
+            ends, zdrift, drift)
+
+
+def _check_bow_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_bow_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_bow_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_bow(context):
+    span, peak, other, reversals, ends, zdrift, drift = \
+        _bow_measure(context)
+    return (span >= 20 and peak >= 0.6 and other <= 0.15
+            and reversals >= 1 and ends <= 0.3
+            and zdrift <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_bow(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_bow(context):
+        return
+    scene = context.scene
+    if not _check_bow_start(context):
+        _anim_run_bow_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, lean in ((23, 0.9), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0] + lean,
+                               start[1], start[2])
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_bow_finish(context):
+    return (_check_saved(context)
+            and _check_bow(context))
+
+
+def _anim_run_bow_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_BOW_STEPS = [
+    {"title": "Pick the thing that will bow",
+     "skill": "One thing, chosen: a bow starts with a "
+              "single thing that will lean over and "
+              "come back up",
+     "how": "The tilt piece leaned a thing over and "
+            "left it leaning, and the sway piece "
+            "leaned it to both sides; this piece "
+            "leans it over to one side only and "
+            "brings it back upright - a performer "
+            "taking a bow, a sapling dipping under a "
+            "weight and springing back. The way is "
+            "the facing-memories way again: the "
+            "upright facing remembered at the start, "
+            "the deep lean remembered at the bottom "
+            "of the bow, the upright facing remembered "
+            "again at the end, and Blender fills in "
+            "the bowing between. Start by picking "
+            "the thing: any shape you already have, "
+            "or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will bow.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "bow comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The bow will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A bow is read against the facing the "
+            "thing starts from, so the start remembers "
+            "the thing's facing at frame 1, standing "
+            "upright - Blender stores a facing memory "
+            "(a keyframe on the thing's Rotation). The "
+            "tick reads the facing memories themselves: "
+            "one must sit at the start, level on every "
+            "axis. The whole bow is measured from "
+            "this facing, and the thing must come back "
+            "to it at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing bows "
+         "yet. One remembered facing cannot bow - "
+         "it takes the lean remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_bow_start,
+     "check": _check_bow_start},
+    {"title": "Bow it over and bring it back upright",
+     "skill": "The bow itself: leaned deep to one "
+              "side at the middle, never leaning the "
+              "other way, and upright again at the "
+              "last frame, in its own place the whole "
+              "way",
+     "how": "Lean the thing deep over to one side "
+            "and remember its facing, then set it "
+            "upright and remember once more at the "
+            "last frame, keeping it in its place, "
+            "not turning it around, and never leaning "
+            "it the other way: leaned 0.9 of a turn "
+            "unit (radians) one way remembered at "
+            "frame 24, and upright again remembered "
+            "at frame 48. Blender fills in the bowing "
+            "between. The tick reads the real "
+            "evaluated facing sampled across the "
+            "span: the span must run at least 20 "
+            "frames, on the side axis that leans the "
+            "most the lean must reach at least 0.6 "
+            "one way and no more than 0.15 the other "
+            "way, the lean must change direction at "
+            "least once (the coming back), the ends "
+            "must land within 0.3 of level, the "
+            "upright facing must hold within 0.35, "
+            "and the thing must stay within 0.5 of "
+            "its place. A tilt does not tick it - it "
+            "leans and stays, never coming back; a "
+            "sway does not tick it - it leans the "
+            "other way too; a spin does not tick it; "
+            "and a small bow that barely leans does "
+            "not tick it either. Probed before "
+            "building on both supported Blenders: "
+            "the facing memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Lean the thing deep "
+         "over to one side - about a quarter of a "
+         "quarter-turn - and press Remember how it "
+         "faces right now.",
+         "2. Go to frame 48. Set it upright again "
+         "and remember once more.",
+         "3. Scrub the Timeline: the thing bows "
+         "over to one side and comes back upright, "
+         "never leaning the other way."],
+     "missing": "No real bow yet - a lean of 0.6 or "
+                "more one way, no more than 0.15 the "
+                "other way, upright again at the end, "
+                "at least 20 frames across, in its own "
+                "place, and no turning around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_bow,
+     "check": _check_bow},
+    {"title": "Watch it bow, then save it",
+     "skill": "Finishing a bow: the bowing really "
+              "plays, and the file is saved with the "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean deep over to one side and "
+            "come back upright. Then save the file. "
+            "The facing memories are saved with it, so "
+            "the bow still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the bow is still proven from "
+            "the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing bow - it ends standing "
+         "upright again, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the bow is still "
+         "proven.",
+         "3. That is animation's thirty-fifth piece: "
+         "bowing - one thing, its upright facing "
+         "remembered at the start, leaned deep to "
+         "one side remembered at the bottom of the "
+         "bow, upright again remembered at the "
+         "end, and Blender filling in the bowing "
+         "between. The next piece nods a thing - "
+         "leaned a little to one side twice, and "
+         "settled upright again. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the bow still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_bow_finish,
+     "check": _check_bow_finish},
+]
+
+def _nod_measure(context):
+    """(span, peak lean, lean the other way,
+    direction reversals, ends gap, upright drift,
+    place drift) for the main thing's facing
+    memories. A real nod leans a thing a little way
+    to one side only, comes back upright, leans
+    again, and settles upright: on whichever side
+    axis leans the most, the lean - read against
+    the starting facing - must reach between 0.35
+    and 0.7 one way, must never lean more than
+    0.15 the other way, must change direction at
+    least three times (down, back, down, back),
+    the ends must land back within 0.3 of level,
+    the upright (Z) facing must hold within 0.35,
+    and the thing must stay within 0.5 of its
+    place. A bow cannot pass - it leans 0.9, past
+    the nod's cap, and comes back only once; a
+    tilt cannot pass - it leans and stays; a sway
+    cannot pass - it leans 0.8 the other way too;
+    a spin cannot pass - its upright facing turns
+    the whole way; a small nod cannot pass - it
+    only leans 0.15; and a single nod cannot pass
+    - it comes back only once. Probed on Blender
+    5.3.0 and 4.2.5 before building (probe
+    scratch/probe_nod.py): facing memories level
+    at frame 1, leaned 0.5 on the X axis at frame
+    13, level at frame 24, leaned 0.5 again at
+    frame 37 and level again at frame 48 read
+    back and interpolate identically on both
+    versions (span 47, peak 0.5, other way 0.0,
+    reversals 3, ends 0.0, upright drift 0.0,
+    place drift 0.0); a bow read peak 0.9 with
+    reversals 1, a tilt read reversals 0 with
+    ends 0.5, a sway read the other way 0.8, a
+    spin read upright drift 6.2832, a small nod
+    read peak 0.15, and a single nod read
+    reversals 1 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    series = {a: [r[a] - start[a] for r in rots]
+              for a in (0, 1)}
+    busiest = max((0, 1),
+                  key=lambda a: max(series[a])
+                  - min(series[a]))
+    lean = series[busiest]
+    diffs = [lean[i + 1] - lean[i]
+             for i in range(len(lean) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = max(abs(rots[-1][0] - start[0]),
+               abs(rots[-1][1] - start[1]))
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    peak_val = max(lean, key=abs)
+    peak = abs(peak_val)
+    other = -min(lean) if peak_val > 0 else max(lean)
+    return (last - first, peak, other, reversals,
+            ends, zdrift, drift)
+
+
+def _check_nod_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_nod_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_nod_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_nod(context):
+    span, peak, other, reversals, ends, zdrift, drift = \
+        _nod_measure(context)
+    return (span >= 20 and 0.35 <= peak <= 0.7
+            and other <= 0.15 and reversals >= 3
+            and ends <= 0.3 and zdrift <= 0.35
+            and drift <= 0.5)
+
+
+def _anim_run_nod(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_nod(context):
+        return
+    scene = context.scene
+    if not _check_nod_start(context):
+        _anim_run_nod_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, lean in ((12, 0.5), (23, 0.0),
+                      (36, 0.5), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0] + lean,
+                               start[1], start[2])
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_nod_finish(context):
+    return (_check_saved(context)
+            and _check_nod(context))
+
+
+def _anim_run_nod_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_NOD_STEPS = [
+    {"title": "Pick the thing that will nod",
+     "skill": "One thing, chosen: a nod starts with a "
+              "single thing that will lean a little "
+              "and come back, twice",
+     "how": "The bow piece leaned a thing deep to "
+            "one side once and brought it back; this "
+            "piece leans it a little way to one side, "
+            "brings it back upright, leans it again, "
+            "and settles it upright - a head nodding "
+            "yes, a flower bobbing in a light breeze. "
+            "The way is the facing-memories way again: "
+            "the upright facing remembered at the "
+            "start, the small lean remembered, the "
+            "upright facing remembered, the lean "
+            "remembered once more, and upright again "
+            "at the end, and Blender fills in the "
+            "nodding between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will nod.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "nod comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The nod will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A nod is read against the facing the "
+            "thing starts from, so the start remembers "
+            "the thing's facing at frame 1, standing "
+            "upright - Blender stores a facing memory "
+            "(a keyframe on the thing's Rotation). The "
+            "tick reads the facing memories themselves: "
+            "one must sit at the start, level on every "
+            "axis. The whole nod is measured from "
+            "this facing, and the thing must come back "
+            "to it between nods and at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing nods "
+         "yet. One remembered facing cannot nod - "
+         "it takes the leans remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_nod_start,
+     "check": _check_nod_start},
+    {"title": "Nod it twice and settle it upright",
+     "skill": "The nod itself: leaned a little to "
+              "one side, back upright, leaned again, "
+              "and upright at the last frame, never "
+              "leaning the other way, in its own "
+              "place the whole way",
+     "how": "Lean the thing a little over to one "
+            "side and remember its facing, set it "
+            "upright and remember again, lean it once "
+            "more and remember, then set it upright "
+            "and remember at the last frame, keeping "
+            "it in its place, not turning it around, "
+            "and never leaning it the other way: "
+            "leaned 0.5 of a turn unit (radians) one "
+            "way remembered at frame 13, upright at "
+            "frame 24, leaned 0.5 again at frame 37, "
+            "and upright again at frame 48. Blender "
+            "fills in the nodding between. The tick "
+            "reads the real evaluated facing sampled "
+            "across the span: the span must run at "
+            "least 20 frames, on the side axis that "
+            "leans the most the lean must reach "
+            "between 0.35 and 0.7 one way and no more "
+            "than 0.15 the other way, the lean must "
+            "change direction at least three times "
+            "(down, back, down, back), the ends must "
+            "land within 0.3 of level, the upright "
+            "facing must hold within 0.35, and the "
+            "thing must stay within 0.5 of its place. "
+            "A bow does not tick it - it leans too "
+            "deep and comes back only once; a tilt "
+            "does not tick it - it leans and stays; a "
+            "sway does not tick it - it leans the "
+            "other way too; a spin does not tick it; "
+            "a small nod that barely leans does not "
+            "tick it; and a single nod does not tick "
+            "it either - a nod here is two leans. "
+            "Probed before building on both "
+            "supported Blenders: the facing memories "
+            "read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Go to frame 13. Lean the thing a "
+         "little over to one side - about half the "
+         "bow's lean - and press Remember how it "
+         "faces right now. Go to frame 24, set it "
+         "upright, and remember once more.",
+         "2. Go to frame 37. Lean it the same way "
+         "again and remember. Go to frame 48, set "
+         "it upright, and remember once more.",
+         "3. Scrub the Timeline: the thing nods "
+         "twice to one side and settles upright, "
+         "never leaning the other way."],
+     "missing": "No real nod yet - two leans of "
+                "0.35 to 0.7 one way with upright "
+                "between and at the end, no more than "
+                "0.15 the other way, at least 20 "
+                "frames across, in its own place, and "
+                "no turning around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_nod,
+     "check": _check_nod},
+    {"title": "Watch it nod, then save it",
+     "skill": "Finishing a nod: the nodding really "
+              "plays, and the file is saved with the "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean a little to one side, come "
+            "back, lean again, and settle upright. "
+            "Then save the file. The facing memories "
+            "are saved with it, so the nod still "
+            "plays when the file is opened again. The "
+            "tick checks the save and that the nod is "
+            "still proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing nod - it ends standing "
+         "upright again, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the nod is still "
+         "proven.",
+         "3. That is animation's thirty-sixth piece: "
+         "nodding - one thing, its upright facing "
+         "remembered at the start, leaned a little "
+         "to one side remembered, upright "
+         "remembered, leaned again remembered, "
+         "upright again remembered at the end, and "
+         "Blender filling in the nodding between. "
+         "The next piece wags a thing - turned a "
+         "little one way, back through the middle "
+         "to the other way, back again, and settled "
+         "facing forward. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the nod still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_nod_finish,
+     "check": _check_nod_finish},
+]
+
+def _wag_measure(context):
+    """(span, highest turn, lowest turn,
+    direction reversals, ends gap, side-axis
+    drift, place drift) for the main thing's
+    facing memories. A real wag turns a thing a
+    little way one way on the upright (Z) axis,
+    back through the middle to the other way,
+    back again, and settles facing forward: the
+    turn - read against the starting facing -
+    must reach between 0.3 and 0.65 one way and
+    between -0.65 and -0.3 the other way, must
+    change direction at least three times (one
+    way, the other, back, settle), the ends must
+    land back within 0.3 of the starting facing,
+    the side axes (X and Y) must hold within 0.2,
+    and the thing must stay within 0.5 of its
+    place. A spin cannot pass - it turns the
+    whole way round; a nod cannot pass - it leans
+    on a side axis and never turns; a sway cannot
+    pass - it leans on a side axis too; a small
+    wag cannot pass - it only turns 0.15 each
+    way; a single swing cannot pass - it turns
+    one way and comes back only once; and a
+    one-way turn cannot pass - it turns and
+    stays. Probed on Blender 5.3.0 and 4.2.5
+    before building (probe
+    scratch/probe_wag.py): facing memories level
+    at frame 1, turned 0.4 on the Z axis at frame
+    13, turned -0.4 at frame 25, turned 0.4 again
+    at frame 37 and level again at frame 48 read
+    back and interpolate identically on both
+    versions (span 47, high 0.4, low -0.4,
+    reversals 3, ends 0.0, side drift 0.0, place
+    drift 0.0); a spin read high 6.2832 with ends
+    6.2832, a nod read high 0.0 with side drift
+    0.5, a sway read high 0.0 with side drift 0.8,
+    a small wag read high 0.15 and low -0.15, a
+    single swing read low 0.0 with reversals 1,
+    and a one-way turn read low 0.0 with reversals
+    0 and ends 0.4 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    turn = [r[2] - start[2] for r in rots]
+    diffs = [turn[i + 1] - turn[i]
+             for i in range(len(turn) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = abs(rots[-1][2] - start[2])
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, max(turn), min(turn),
+            reversals, ends, side, drift)
+
+
+def _check_wag_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_wag_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_wag_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_wag(context):
+    span, high, low, reversals, ends, side, drift = \
+        _wag_measure(context)
+    return (span >= 20 and 0.3 <= high <= 0.65
+            and -0.65 <= low <= -0.3
+            and reversals >= 3 and ends <= 0.3
+            and side <= 0.2 and drift <= 0.5)
+
+
+def _anim_run_wag(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_wag(context):
+        return
+    scene = context.scene
+    if not _check_wag_start(context):
+        _anim_run_wag_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, turn in ((12, 0.4), (24, -0.4),
+                      (36, 0.4), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0], start[1],
+                               start[2] + turn)
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_wag_finish(context):
+    return (_check_saved(context)
+            and _check_wag(context))
+
+
+def _anim_run_wag_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_WAG_STEPS = [
+    {"title": "Pick the thing that will wag",
+     "skill": "One thing, chosen: a wag starts with a "
+              "single thing that will turn a little "
+              "one way and the other, again and again",
+     "how": "The nod piece leaned a thing a little "
+            "to one side twice and brought it back; "
+            "this piece turns it a little one way, "
+            "back through the middle to the other "
+            "way, back again, and settles it facing "
+            "forward - a tail wagging, a thing "
+            "shaking its head no. The way is the "
+            "facing-memories way again: the facing "
+            "remembered at the start, the turn one "
+            "way remembered, the turn the other way "
+            "remembered, the first turn remembered "
+            "once more, and facing forward again at "
+            "the end, and Blender fills in the "
+            "wagging between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will wag.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "wag comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The wag will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A wag is read against the facing the "
+            "thing starts from, so the start remembers "
+            "the thing's facing at frame 1, facing "
+            "forward - Blender stores a facing memory "
+            "(a keyframe on the thing's Rotation). The "
+            "tick reads the facing memories themselves: "
+            "one must sit at the start, level on every "
+            "axis. The whole wag is measured from "
+            "this facing, and the thing must come back "
+            "to it at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing wags "
+         "yet. One remembered facing cannot wag - "
+         "it takes the turns remembered too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_wag_start,
+     "check": _check_wag_start},
+    {"title": "Wag it side to side and settle it forward",
+     "skill": "The wag itself: turned a little one "
+              "way, back through the middle to the "
+              "other way, back again, and facing "
+              "forward at the last frame, never "
+              "leaning, in its own place the whole way",
+     "how": "Turn the thing a little one way and "
+            "remember its facing, turn it back "
+            "through the middle to the other way and "
+            "remember again, turn it back the first "
+            "way and remember, then face it forward "
+            "and remember at the last frame, keeping "
+            "it in its place and never leaning it: "
+            "turned 0.4 of a turn unit (radians) one "
+            "way remembered at frame 13, turned 0.4 "
+            "the other way at frame 25, turned 0.4 "
+            "the first way again at frame 37, and "
+            "facing forward again at frame 48. "
+            "Blender fills in the wagging between. "
+            "The tick reads the real evaluated facing "
+            "sampled across the span: the span must "
+            "run at least 20 frames, the turn must "
+            "reach between 0.3 and 0.65 one way and "
+            "between 0.3 and 0.65 the other way, the "
+            "turn must change direction at least "
+            "three times (one way, the other, back, "
+            "settle), the ends must land within 0.3 "
+            "of the starting facing, the side axes "
+            "must hold within 0.2, and the thing must "
+            "stay within 0.5 of its place. A spin "
+            "does not tick it - it turns the whole "
+            "way round; a nod does not tick it - it "
+            "leans and never turns; a sway does not "
+            "tick it - it leans too; a small wag that "
+            "barely turns does not tick it; a single "
+            "swing does not tick it; and a one-way "
+            "turn does not tick it either - a wag "
+            "here goes both ways, twice over. Probed "
+            "before building on both supported "
+            "Blenders: the facing memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 13. Turn the thing a "
+         "little one way - about a quarter of the "
+         "way a spin would start - and press "
+         "Remember how it faces right now. Go to "
+         "frame 25, turn it the same amount the "
+         "other way, and remember once more.",
+         "2. Go to frame 37. Turn it back the first "
+         "way and remember. Go to frame 48, face it "
+         "forward, and remember once more.",
+         "3. Scrub the Timeline: the thing wags - "
+         "one way, the other way, back again - and "
+         "settles facing forward, never leaning."],
+     "missing": "No real wag yet - turns of 0.3 to "
+                "0.65 each way with the first way "
+                "repeated and facing forward at the "
+                "end, at least 20 frames across, in "
+                "its own place, and no leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_wag,
+     "check": _check_wag},
+    {"title": "Watch it wag, then save it",
+     "skill": "Finishing a wag: the wagging really "
+              "plays, and the file is saved with the "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn a little one way, back "
+            "through the middle to the other way, "
+            "back again, and settle facing forward. "
+            "Then save the file. The facing memories "
+            "are saved with it, so the wag still "
+            "plays when the file is opened again. The "
+            "tick checks the save and that the wag is "
+            "still proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing wag - it ends facing "
+         "forward again, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the wag is still "
+         "proven.",
+         "3. That is animation's thirty-seventh piece: "
+         "wagging - one thing, its facing "
+         "remembered at the start, turned a little "
+         "one way remembered, turned the other way "
+         "remembered, turned back again remembered, "
+         "facing forward again remembered at the "
+         "end, and Blender filling in the wagging "
+         "between. The next piece turns a thing "
+         "right around - the whole half circle, "
+         "left facing the other way. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the wag still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_wag_finish,
+     "check": _check_wag_finish},
+]
+
+def _turn_measure(context):
+    """(span, end turn, side-axis drift,
+    place drift) for the main thing's facing
+    memories. A real turn around turns a thing
+    the whole half circle on the upright (Z)
+    axis and leaves it facing the other way:
+    the end turn - read against the starting
+    facing - must land between 2.8 and 3.45,
+    the side axes (X and Y) must hold within
+    0.35, and the thing must stay within 0.5
+    of its place. A spin cannot pass - it
+    turns the whole way round and ends facing
+    forward again; a wag cannot pass - it ends
+    facing forward too; a small turn cannot
+    pass - it only turns 0.4; a tilt cannot
+    pass - it leans on a side axis and never
+    turns; and a sway or a nod cannot pass -
+    they lean on a side axis too. Probed on
+    Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_turn.py): facing
+    memories level at frame 1 and turned
+    3.1416 on the Z axis at frame 48 read back
+    and interpolate identically on both
+    versions (span 47, ends 3.1416, side drift
+    0.0, place drift 0.0, reading 1.5207
+    partway turned at frame 24); a spin read
+    ends 6.2832, a wag read ends 0.0, a small
+    turn read ends 0.4, a tilt read ends 0.0
+    with side drift 1.0, a sway read side
+    drift 0.8, and a nod read side drift 0.5
+    - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    ends = rots[-1][2] - start[2]
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, ends, side, drift)
+
+
+def _check_turn_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_turn_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_turn_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_turn(context):
+    span, ends, side, drift = \
+        _turn_measure(context)
+    return (span >= 20 and 2.8 <= ends <= 3.45
+            and side <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_turn(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_turn(context):
+        return
+    scene = context.scene
+    if not _check_turn_start(context):
+        _anim_run_turn_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] + 3.1416)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_turn_finish(context):
+    return (_check_saved(context)
+            and _check_turn(context))
+
+
+def _anim_run_turn_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_TURN_STEPS = [
+    {"title": "Pick the thing that will turn around",
+     "skill": "One thing, chosen: a turn around "
+              "starts with a single thing that will "
+              "turn the whole half circle and face "
+              "the other way",
+     "how": "The wag piece turned a thing a little "
+            "one way and the other and settled it "
+            "facing forward; this piece turns it "
+            "right around - the whole half circle - "
+            "and leaves it facing the other way. The "
+            "way is the facing-memories way again: "
+            "the facing remembered at the start, and "
+            "the turned-around facing remembered at "
+            "the end, and Blender fills in the "
+            "turning between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will turn around.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "turn comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The turn will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A turn around is read against the "
+            "facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, facing forward - Blender stores "
+            "a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole turn is measured from this facing.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns "
+         "yet. One remembered facing cannot turn - "
+         "it takes the turned facing remembered "
+         "too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_turn_start,
+     "check": _check_turn_start},
+    {"title": "Turn it right around and leave it facing the other way",
+     "skill": "The turn itself: turned right around "
+              "on the upright axis and left facing "
+              "the other way at the last frame, never "
+              "leaning, in its own place the whole way",
+     "how": "Turn the thing right around and "
+            "remember its facing at the last frame, "
+            "keeping it in its place and never "
+            "leaning it: turned 3.1416 of a turn unit "
+            "(radians) - the whole half circle - on "
+            "the upright axis remembered at frame 48. "
+            "Blender fills in the turning between. "
+            "The tick reads the real evaluated facing "
+            "sampled across the span: the span must "
+            "run at least 20 frames, the end turn on "
+            "the upright axis must land between 2.8 "
+            "and 3.45, the side axes must hold "
+            "within 0.35, and the thing must stay "
+            "within 0.5 of its place. A spin does not "
+            "tick it - it turns the whole way round "
+            "and ends facing forward again; a wag "
+            "does not tick it - it ends facing "
+            "forward too; a small turn does not tick "
+            "it - it barely turns; a tilt does not "
+            "tick it - it leans and never turns; and "
+            "a sway or a nod does not tick it either "
+            "- they lean too. Probed before building "
+            "on both supported Blenders: the facing "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 48. Turn the thing right "
+         "around - the whole half circle, so it "
+         "faces the other way - and press Remember "
+         "how it faces right now.",
+         "2. Leave it facing the other way: the "
+         "turn is the thing ending turned, not "
+         "coming back.",
+         "3. Scrub the Timeline: the thing turns - "
+         "halfway round partway through - and ends "
+         "facing the other way, never leaning."],
+     "missing": "No real turn yet - an end turn of "
+                "2.8 to 3.45 on the upright axis, at "
+                "least 20 frames across, in its own "
+                "place, and no leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_turn,
+     "check": _check_turn},
+    {"title": "Watch it turn, then save it",
+     "skill": "Finishing a turn: the turning really "
+              "plays, and the file is saved with the "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn right around and end facing "
+            "the other way. Then save the file. The "
+            "facing memories are saved with it, so "
+            "the turn still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the turn is still proven from "
+            "the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing turn - it ends facing "
+         "the other way, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the turn is still "
+         "proven.",
+         "3. That is animation's thirty-eighth piece: "
+         "turning around - one thing, its facing "
+         "remembered at the start, turned right "
+         "around remembered at the end, facing the "
+         "other way, and Blender filling in the "
+         "turning between. The next piece bobs a thing "
+         "up and down - raised, settled, raised "
+         "again, settled back on the ground. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the turn still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_turn_finish,
+     "check": _check_turn_finish},
+]
+
+def _bob_measure(context):
+    """(span, peak rise, direction reversals on Z,
+    ends height gap, sideways drift) for the main
+    thing's place memories. A real bob goes up and
+    down twice and settles back on the ground in
+    its own place: the peak rise - the highest
+    evaluated height above the starting height
+    anywhere across the span - must land between
+    0.7 and 1.4, the height must change direction
+    at least three times (up, down, up, down), the
+    ends must sit within 0.3 of each other in
+    height, and the thing must stay within 0.5
+    sideways of its start place. A single bounce
+    cannot pass - it rises 2.5 and reverses only
+    once; a rise cannot pass - it ends high and
+    never reverses; a hover cannot pass - it ends
+    high too; a small bob cannot pass - it only
+    rises 0.3; a slide cannot pass - it drifts
+    sideways and never rises; and a hop cannot
+    pass - it travels sideways and rises 2.0.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_bob.py): place
+    memories at (0, 0, 1), (0, 0, 2), (0, 0, 1),
+    (0, 0, 2) and (0, 0, 1) across frames
+    1/13/25/37/48 read back and interpolate
+    identically on both versions (span 47, peak
+    1.0, reversals 3, ends 0.0, sideways 0.0); a
+    single bounce read peak 2.5 with reversals 1,
+    a rise read peak 3.0 with reversals 0 and ends
+    3.0, a hover read ends 3.0, a small bob read
+    peak 0.3, a slide read peak 0.0 with sideways
+    3.0, and a hop read peak 2.0 with sideways
+    3.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = places[0]
+    zs = [p[2] - start[2] for p in places]
+    peak = max(zs)
+    diffs = [zs[i + 1] - zs[i]
+             for i in range(len(zs) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = abs(places[-1][2] - start[2])
+    sideways = max(math.hypot(p[0] - start[0],
+                              p[1] - start[1])
+                   for p in places)
+    return (last - first, peak, reversals, ends,
+            sideways)
+
+
+def _check_bob(context):
+    span, peak, reversals, ends, sideways = \
+        _bob_measure(context)
+    return (span >= 20 and 0.7 <= peak <= 1.4
+            and reversals >= 3 and ends <= 0.3
+            and sideways <= 0.5)
+
+
+def _anim_run_bob(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_bob(context):
+        return
+    scene = context.scene
+    if not _check_anim_start(context):
+        _anim_run_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dz in ((12, 1.0), (24, 0.0), (36, 1.0),
+                    (47, 0.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0], start[1],
+                         start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_bob_finish(context):
+    return (_check_saved(context)
+            and _check_bob(context))
+
+
+def _anim_run_bob_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_BOB_STEPS = [
+    {"title": "Pick the thing that will bob",
+     "skill": "One thing, chosen: a bob starts with a "
+              "single thing that will go up and down "
+              "and settle back on the ground",
+     "how": "The bounce piece sent a thing up once "
+            "and brought it back down, and the hop "
+            "piece sent it up and across; this piece "
+            "bobs a thing up and down twice in its own "
+            "place and settles it back on the ground: "
+            "a buoy on the water, a head nodding along "
+            "in place - up, down, up again, down "
+            "again. The way is the place-memories way "
+            "again: the starting place remembered on "
+            "the ground, the raised place remembered, "
+            "the ground place remembered again, the "
+            "raised place remembered again, and the "
+            "ground place remembered last, and "
+            "Blender fills in the bobbing between. "
+            "Start by picking the thing: any shape "
+            "you already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will bob.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "bobbing comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The bob will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1",
+     "how": "A bob is read against the place the "
+            "thing starts from, so the start "
+            "remembers the thing's place at frame 1, "
+            "on the ground - Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start. The whole bob is measured from "
+            "this place, and the thing must settle "
+            "back at this same height, in this same "
+            "place, at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing bobs "
+         "yet. One remembered place cannot bob - it "
+         "takes the raised and settled places "
+         "remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_start,
+     "check": _check_anim_start},
+    {"title": "Bob it up and down and settle it back on the ground",
+     "skill": "The bob itself: raised one unit at "
+              "frame 13, back down at frame 25, raised "
+              "one unit again at frame 37, back down "
+              "at frame 48, in its own place the whole "
+              "way",
+     "how": "Raise the thing one unit and remember "
+            "its place at frame 13, put it back down "
+            "on the ground and remember at frame 25, "
+            "raise it one unit again and remember at "
+            "frame 37, and settle it back on the "
+            "ground and remember at frame 48, keeping "
+            "it in its own place sideways the whole "
+            "way. Blender fills in the bobbing "
+            "between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, "
+            "the peak rise must land between 0.7 and "
+            "1.4, the height must change direction at "
+            "least three times, the ends must sit "
+            "within 0.3 of each other in height, and "
+            "the thing must stay within 0.5 sideways "
+            "of its start place. A single bounce does "
+            "not tick it - it rises too far and "
+            "reverses only once; a rise does not tick "
+            "it - it ends high; a hover does not tick "
+            "it - it ends high too; a small bob does "
+            "not tick it - it barely rises; a slide "
+            "does not tick it - it drifts sideways "
+            "and never rises; and a hop does not tick "
+            "it either - it travels sideways. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 13. Lift the thing one unit "
+         "straight up and press Remember where it "
+         "is right now. Go to frame 25, put it back "
+         "down on the ground, and remember again.",
+         "2. Go to frame 37. Lift it one unit again "
+         "and remember. Go to frame 48, settle it "
+         "back on the ground, and remember again.",
+         "3. Scrub the Timeline: the thing bobs - "
+         "up, down, up again, down again - in its "
+         "own place the whole way."],
+     "missing": "No real bob yet - a peak rise of "
+                "0.7 to 1.4, at least three direction "
+                "changes, at least 20 frames across, "
+                "back at its starting height at the "
+                "end, and in its own place sideways.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_bob,
+     "check": _check_bob},
+    {"title": "Watch it bob, then save it",
+     "skill": "Finishing a bob: the bobbing really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing bob up and down twice and settle "
+            "back on the ground. Then save the file. "
+            "The place memories are saved with it, so "
+            "the bob still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the bob is still proven from "
+            "the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing bob - it ends on the "
+         "ground, in its own place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the bob is still "
+         "proven.",
+         "3. That is animation's thirty-ninth piece: "
+         "bobbing - one thing, its place remembered "
+         "on the ground at the start, raised "
+         "remembered, settled remembered, raised "
+         "again remembered, settled back on the "
+         "ground at the end, and Blender filling "
+         "in the bobbing between. The next piece "
+         "floats a thing up a little and keeps it "
+         "there - raised, and held floating in its "
+         "own place. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the bob still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_bob_finish,
+     "check": _check_bob_finish},
+]
+
+def _float_measure(context):
+    """(span, rise from the start height to the end
+    height, end height, lowest height held across
+    the second half of the span, sideways drift)
+    for the main thing's place memories. A real
+    float rises a little and then STAYS up, floating
+    in its own place: the rise - the start-to-end
+    height gain - must land between 1.0 and 2.0, the
+    end height must land between 1.2 and 2.3, the
+    lowest sampled height from the middle of the
+    span onward must stay within 0.35 of the end
+    height, and the thing must stay within 0.5
+    sideways of its start place, all read from the
+    real evaluated place sampled across the span.
+    A float is the small rise and the staying
+    together - so a hover, which rises three units
+    and ends too high, cannot pass, and neither can
+    a bob or a bounce that ends back on the ground,
+    a small lift that never gets up, a slide along
+    the ground, or a plain rise that is still
+    climbing at the middle and only arrives at the
+    end. Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_float.py): place
+    memories at (0, 0, 0), (0, 0, 1.5) and
+    (0, 0, 1.5) across frames 1/24/48 read back and
+    interpolate identically on both versions (span
+    47, rise 1.5, end 1.5, hold 1.5, drift 0.0,
+    reading (0, 0, 0.7011) partway up at frame 12);
+    a hover read rise 3.0 with end 3.0, a bob read
+    rise 0.0 with end 0.0 and hold 0.0, a bounce
+    read rise 0.0 with end 0.0, a small lift read
+    rise 0.4 with end 0.4, a slide read rise 0.0
+    with drift 3.0, and a plain rise read hold
+    0.7261 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    middle = first + (last - first) // 2
+    hold = min(p[2] for f, p in places if f >= middle)
+    drift = max(math.hypot(p[0] - start[0],
+                           p[1] - start[1])
+                for f, p in places)
+    return (last - first, end[2] - start[2], end[2],
+            hold, drift)
+
+
+def _check_float(context):
+    span, rise, end, hold, drift = _float_measure(context)
+    return (span >= 20 and 1.0 <= rise <= 2.0
+            and 1.2 <= end <= 2.3
+            and hold >= end - 0.35 and drift <= 0.5)
+
+
+def _check_float_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] <= 1.3
+
+
+def _anim_run_float_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_float_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 0.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_float(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_float(context):
+        return
+    scene = context.scene
+    if not _check_float_start(context):
+        _anim_run_float_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dz in ((23, 1.5), (47, 1.5)):
+        scene.frame_set(first + off)
+        main.location = (start[0], start[1],
+                         start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_float_finish(context):
+    return (_check_saved(context)
+            and _check_float(context))
+
+
+def _anim_run_float_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_FLOAT_STEPS = [
+    {"title": "Pick the thing that will float",
+     "skill": "One thing, chosen: a float starts with a "
+              "single thing that will rise a little and "
+              "stay up, floating",
+     "how": "The hover piece sent a thing up high and "
+            "kept it there, and the bob piece went up "
+            "and down twice and settled back on the "
+            "ground; this piece teaches the gentle "
+            "version - rise a little, just clear of the "
+            "ground, and stay there, floating in its own "
+            "place: a leaf held on still air, a balloon "
+            "that has found its height and rests there. "
+            "The way is the place-memories way again: "
+            "the starting place remembered on the "
+            "ground, the floating place remembered as "
+            "the thing arrives, and the same floating "
+            "place remembered again at the end - "
+            "Blender fills in the rise, and the two "
+            "floating memories are what make it a float "
+            "and not just a rise. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will float.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "floating comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The float will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, its centre no "
+              "more than 1.3 units up",
+     "how": "A float is read against the place the "
+            "thing starts from, so the start remembers "
+            "the thing's place at frame 1, on the "
+            "ground - Blender stores a place memory (a "
+            "keyframe on the thing's Location). The "
+            "tick reads the place memories themselves: "
+            "one must sit at the start, and the thing "
+            "must be low there - its centre no more "
+            "than 1.3 units up. The whole float is "
+            "measured from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing floats "
+         "yet. One remembered place cannot float - it "
+         "takes the floating place remembered, and "
+         "remembered again, too."],
+     "missing": "No ground starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_float_start,
+     "check": _check_float_start},
+    {"title": "Float it up a little and keep it there",
+     "skill": "The float itself: raised one and a half "
+              "units at frame 24, and the same floating "
+              "place remembered again at frame 48, in "
+              "its own place the whole way",
+     "how": "Raise the thing a little - one and a half "
+            "units - and remember its place at frame "
+            "24, then leave it exactly where it is and "
+            "remember the same floating place again at "
+            "frame 48, keeping it in its own place "
+            "sideways the whole way. Blender fills in "
+            "the rise between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "rise from the start height to the end "
+            "height must land between 1.0 and 2.0, the "
+            "end height must land between 1.2 and 2.3, "
+            "the lowest height from the middle of the "
+            "span onward must stay within 0.35 of the "
+            "end height, and the thing must stay "
+            "within 0.5 sideways of its start place. A "
+            "hover does not tick it - it rises too far "
+            "and ends too high; a bob does not tick it "
+            "- it ends back on the ground; a bounce "
+            "does not tick it either - it ends on the "
+            "ground too; a small lift does not tick it "
+            "- it barely rises; a slide does not tick "
+            "it - it drifts sideways and never rises; "
+            "and a plain rise does not tick it - it is "
+            "still climbing at the middle and only "
+            "arrives at the end. Probed before "
+            "building on both supported Blenders: the "
+            "place memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Lift the thing one and a "
+         "half units straight up and press Remember "
+         "where it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same floating place - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing rises a "
+         "little, arrives by the middle, and then "
+         "stays - floating, still, and in its own "
+         "place to the end."],
+     "missing": "No real float yet - a rise of 1.0 to "
+                "2.0 ending between 1.2 and 2.3 up, held "
+                "from the middle of the span onward, and "
+                "in its own place sideways.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_float,
+     "check": _check_float},
+    {"title": "Watch it float, then save it",
+     "skill": "Finishing a float: the floating really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing rise a little and then float, held "
+            "in its place, to the end. Then save the "
+            "file. The place memories are saved with "
+            "it, so the float still plays when the file "
+            "is opened again. The tick checks the save "
+            "and that the float is still proven from "
+            "the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing float - it ends up in the "
+         "air, in its own place, still floating long "
+         "after it arrived.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the float is still "
+         "proven.",
+         "3. That is animation's fortieth piece: "
+         "floating - one thing, its place remembered "
+         "on the ground at the start, its floating "
+         "place remembered as it arrives and "
+         "remembered again at the end, and Blender "
+         "filling in the rise between. The next piece "
+         "dips a thing down toward the ground and "
+         "brings it back up - lowered toward the "
+         "ground, and raised back to its high "
+         "place. It is still "
+         "not the whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the float still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_float_finish,
+     "check": _check_float_finish},
+]
+
+def _dip_measure(context):
+    """(span, start height, lowest sampled height,
+    dip depth - the start height minus the lowest
+    sampled height, end height, sideways drift)
+    for the main thing's place memories. A real
+    dip starts up in the air, goes down toward the
+    ground, and comes back up to where it started:
+    the start height must land between 1.7 and 2.3,
+    the dip depth must land between 1.0 and 1.8,
+    the lowest sampled height must land between
+    0.2 and 0.9, the end height must land within
+    0.3 of the start height, and the thing must
+    stay within 0.5 sideways of its start place,
+    all read from the real evaluated place sampled
+    across the span. A dip is the going down and
+    the coming back together - so a hover, which
+    stays high the whole way, cannot pass, and
+    neither can a land that ends low, a float that
+    rises from the ground and stays low, a bob up
+    and down from the ground, a small dip that
+    barely drops, or a slide sideways at height.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_dip.py): place
+    memories at (0, 0, 2.0), (0, 0, 0.5) and
+    (0, 0, 2.0) across frames 1/24/48 read back and
+    interpolate identically on both versions (span
+    47, start 2.0, lowest 0.5, depth 1.5, end 2.0,
+    drift 0.0, reading (0, 0, 1.2989) partway down
+    at frame 12 and (0, 0, 1.25) partway back up
+    at frame 36); a hover read depth 0.0 with
+    lowest 2.0, a land read end 0.5, a float read
+    start 0.0 with depth 0.0, a bob read start 0.0
+    with depth 0.0, a small dip read depth 0.4 with
+    lowest 1.6, and a slide read depth 0.0 with
+    drift 3.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    lowest = min(p[2] for f, p in places)
+    drift = max(math.hypot(p[0] - start[0],
+                           p[1] - start[1])
+                for f, p in places)
+    return (last - first, start[2], lowest,
+            start[2] - lowest, end[2], drift)
+
+
+def _check_dip(context):
+    span, start, lowest, depth, end, drift = _dip_measure(context)
+    return (span >= 20 and 1.7 <= start <= 2.3
+            and 1.0 <= depth <= 1.8
+            and 0.2 <= lowest <= 0.9
+            and abs(end - start) <= 0.3 and drift <= 0.5)
+
+
+def _check_dip_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] >= 1.7
+
+
+def _anim_run_dip_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_dip_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 2.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_dip(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_dip(context):
+        return
+    scene = context.scene
+    if not _check_dip_start(context):
+        _anim_run_dip_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, z in ((23, start[2] - 1.5), (47, start[2])):
+        scene.frame_set(first + off)
+        main.location = (start[0], start[1], z)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_dip_finish(context):
+    return (_check_saved(context)
+            and _check_dip(context))
+
+
+def _anim_run_dip_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_DIP_STEPS = [
+    {"title": "Pick the thing that will dip",
+     "skill": "One thing, chosen: a dip starts with a "
+              "single thing that will drop down toward "
+              "the ground and come back up",
+     "how": "The float piece sent a thing up a little "
+            "and kept it there, and the land piece "
+            "brought a thing down and left it there; "
+            "this piece teaches the dip - start up in "
+            "the air, drop down toward the ground, and "
+            "come back up to the same high place: a bird "
+            "swooping down and climbing again, a crane "
+            "lowering and lifting back. The way is the "
+            "place-memories way again: the starting "
+            "place remembered up in the air, the dipped "
+            "place remembered at the bottom, and the "
+            "starting high place remembered again at "
+            "the end - Blender fills in the way down "
+            "and the way back up. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will dip.",
+         "2. Leave it where it is for now. The starting "
+         "place, up in the air, is remembered first; "
+         "the dipping comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The dip will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, up in the air",
+     "skill": "The start, remembered up in the air: a "
+              "place memory at frame 1, its centre at "
+              "least 1.7 units up",
+     "how": "A dip is read against the place the "
+            "thing starts from, so the start remembers "
+            "the thing's place at frame 1, up in the "
+            "air - Blender stores a place memory (a "
+            "keyframe on the thing's Location). The "
+            "tick reads the place memories themselves: "
+            "one must sit at the start, and the thing "
+            "must be high there - its centre at least "
+            "1.7 units up. The whole dip is measured "
+            "from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Lift the "
+         "thing up so its centre is about 2.0 units "
+         "up, in the air.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing dips "
+         "yet. One remembered place cannot dip - it "
+         "takes the dipped place remembered, and "
+         "the high place remembered again, too."],
+     "missing": "No high starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, up in the air.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_dip_start,
+     "check": _check_dip_start},
+    {"title": "Dip it down toward the ground and bring it back up",
+     "skill": "The dip itself: dipped to about 0.5 "
+              "units up remembered at frame 24, and "
+              "back at its starting high place "
+              "remembered at frame 48, in its own "
+              "place sideways the whole way",
+     "how": "Lower the thing down toward the ground "
+            "- to about 0.5 units up - and remember "
+            "its place at frame 24, then raise it back "
+            "to exactly its starting high place and "
+            "remember that place again at frame 48, "
+            "keeping it in its own place sideways the "
+            "whole way. Blender fills in the way down "
+            "and the way back up between. The tick "
+            "reads the real evaluated place sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the start height must "
+            "land between 1.7 and 2.3, the dip depth - "
+            "the start height minus the lowest sampled "
+            "height - must land between 1.0 and 1.8, "
+            "the lowest height must land between 0.2 "
+            "and 0.9, the end height must land within "
+            "0.3 of the start height, and the thing "
+            "must stay within 0.5 sideways of its start "
+            "place. A hover does not tick it - it stays "
+            "high the whole way and never dips; a land "
+            "does not tick it - it ends low and never "
+            "comes back; a float does not tick it - it "
+            "rises from the ground and stays low; a bob "
+            "does not tick it - it goes up and down "
+            "from the ground; a small dip does not "
+            "tick it - it barely drops; and a slide "
+            "does not tick it - it drifts sideways at "
+            "height and never dips. Probed before "
+            "building on both supported Blenders: the "
+            "place memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Lower the thing down to "
+         "about 0.5 units up and press Remember "
+         "where it is right now.",
+         "2. Go to frame 48. Raise the thing back to "
+         "exactly its starting high place and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing drops down "
+         "toward the ground, reaches the bottom by "
+         "the middle, and then climbs back up to "
+         "where it started."],
+     "missing": "No real dip yet - a start between 1.7 "
+                "and 2.3 up, a dip of 1.0 to 1.8 down "
+                "to between 0.2 and 0.9 up, back within "
+                "0.3 of the start height, and in its "
+                "own place sideways.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_dip,
+     "check": _check_dip},
+    {"title": "Watch it dip, then save",
+     "skill": "Finishing a dip: the dipping really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing dip down toward the ground and "
+            "climb back up to its high place. Then save "
+            "the file. The place memories are saved with "
+            "it, so the dip still plays when the file "
+            "is opened again. The tick checks the save "
+            "and that the dip is still proven from "
+            "the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing dip - it starts up in the "
+         "air, drops toward the ground, and ends "
+         "back up at its starting place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the dip is still "
+         "proven.",
+         "3. That is animation's forty-first piece: "
+         "dipping - one thing, its place remembered "
+         "up in the air at the start, its dipped "
+         "place remembered at the bottom, its "
+         "starting high place remembered again at "
+         "the end, and Blender filling in the way "
+         "down and the way back up between. The next piece "
+         "sidesteps a thing sideways and keeps it "
+         "there - stepped sideways along the ground, "
+         "and held in its new place on the ground. It is "
+         "still not the whole craft: performances "
+         "are built from pieces like this, one "
+         "change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the dip still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_dip_finish,
+     "check": _check_dip_finish},
+]
+
+def _sidestep_measure(context):
+    """(span, sideways displacement - the absolute
+    change along the Y axis from the start place to
+    the end place, forward drift - the largest
+    change along the X axis from the start place
+    across all sampled places, start height, end
+    height, height range - the highest sampled
+    height minus the lowest sampled height) for
+    the main thing's place memories. A real
+    sidestep steps sideways and STAYS there, on
+    the ground, never travelling forward and never
+    leaving the ground: the sideways displacement
+    must land between 1.7 and 2.3, the forward
+    drift must stay within 0.5, the end height must
+    land within 0.3 of the start height, and the
+    total sampled height range must stay within
+    0.35, all read from the real evaluated place
+    sampled across the span. A sidestep is the
+    sideways step and the staying together - so a
+    slide, which travels forward along X and never
+    steps sideways, cannot pass, and neither can a
+    pace that steps out and comes back home, a
+    small sidestep that barely moves, a diagonal
+    move that drifts forward as it steps, a hop
+    that leaves the ground on the way, or a rise
+    that only goes up. Probed on Blender 5.3.0 and
+    4.2.5 before building (probe
+    scratch/probe_sidestep.py): place memories at
+    (0, 0, 0), (0, 2, 0) and (0, 2, 0) across
+    frames 1/24/48 read back and interpolate
+    identically on both versions (span 47,
+    sideways 2.0, forward drift 0.0, start 0.0,
+    end 0.0, height range 0.0, reading
+    (0, 0.9348, 0) partway across at frame 12); a
+    slide read sideways 0.0 with forward drift
+    3.0, a pace read sideways 0.0 ending home, a
+    small sidestep read sideways 0.5, a diagonal
+    move read sideways 2.0 with forward drift 2.0,
+    a hop read height range 1.5, and a rise read
+    sideways 0.0 with end height 2.0 and height
+    range 2.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    sideways = abs(end[1] - start[1])
+    fwd = max(abs(p[0] - start[0]) for f, p in places)
+    heights = [p[2] for f, p in places]
+    hrange = max(heights) - min(heights)
+    return (last - first, sideways, fwd,
+            start[2], end[2], hrange)
+
+
+def _check_sidestep(context):
+    span, sideways, fwd, start, end, hrange = _sidestep_measure(context)
+    return (span >= 20 and 1.7 <= sideways <= 2.3
+            and fwd <= 0.5
+            and abs(end - start) <= 0.3 and hrange <= 0.35)
+
+
+def _check_sidestep_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] <= 1.3
+
+
+def _anim_run_sidestep_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_sidestep_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 0.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_sidestep(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_sidestep(context):
+        return
+    scene = context.scene
+    if not _check_sidestep_start(context):
+        _anim_run_sidestep_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dy in ((23, 2.0), (47, 2.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0], start[1] + dy, start[2])
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_sidestep_finish(context):
+    return (_check_saved(context)
+            and _check_sidestep(context))
+
+
+def _anim_run_sidestep_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SIDESTEP_STEPS = [
+    {"title": "Pick the thing that will sidestep",
+     "skill": "One thing, chosen: a sidestep starts "
+              "with a single thing that will step "
+              "sideways and stay there",
+     "how": "The slide piece sent a thing travelling "
+            "forward along the ground, and the pace "
+            "piece stepped a thing out sideways and "
+            "brought it back home; this piece teaches "
+            "the sidestep - step sideways, along the "
+            "sideways Y axis, and stay in the new "
+            "place, on the ground the whole way: a "
+            "dancer stepping to the side and holding "
+            "the new spot, a crab settling where it "
+            "scuttled to. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "sidestepped place remembered as the thing "
+            "arrives, and the same sidestepped place "
+            "remembered again at the end - Blender "
+            "fills in the step across, and the two "
+            "sidestepped memories are what make it a "
+            "sidestep and not just a drift. Start by "
+            "picking the thing: any shape you already "
+            "have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will sidestep.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "sidestepping comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The sidestep will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, its centre no "
+              "more than 1.3 units up",
+     "how": "A sidestep is read against the place the "
+            "thing starts from, so the start remembers "
+            "the thing's place at frame 1, on the "
+            "ground - Blender stores a place memory (a "
+            "keyframe on the thing's Location). The "
+            "tick reads the place memories themselves: "
+            "one must sit at the start, and the thing "
+            "must be low there - its centre no more "
+            "than 1.3 units up. The whole sidestep is "
+            "measured from this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing sidesteps "
+         "yet. One remembered place cannot sidestep "
+         "- it takes the sidestepped place "
+         "remembered, and remembered again, too."],
+     "missing": "No ground starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_sidestep_start,
+     "check": _check_sidestep_start},
+    {"title": "Sidestep it sideways and keep it there",
+     "skill": "The sidestep itself: moved sideways "
+              "2.0 units along Y remembered at frame "
+              "24, and the same sidestepped place "
+              "remembered again at frame 48, at the "
+              "same ground height the whole way",
+     "how": "Move the thing sideways - 2.0 units "
+            "along the sideways Y axis, staying on the "
+            "ground and never travelling forward along "
+            "X - and remember its place at frame 24, "
+            "then leave it exactly where it is and "
+            "remember the same sidestepped place again "
+            "at frame 48. Blender fills in the step "
+            "across between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "sideways displacement from the start place "
+            "to the end place must land between 1.7 "
+            "and 2.3, the forward drift along X must "
+            "stay within 0.5 across all samples, the "
+            "end height must land within 0.3 of the "
+            "start height, and the total sampled "
+            "height range must stay within 0.35. A "
+            "slide does not tick it - it travels "
+            "forward and never steps sideways; a pace "
+            "does not tick it - it steps out and comes "
+            "back home, ending where it started; a "
+            "small sidestep does not tick it - it "
+            "barely moves sideways; a diagonal move "
+            "does not tick it - it drifts forward as "
+            "it steps; a hop does not tick it - it "
+            "leaves the ground on the way; and a rise "
+            "does not tick it - it only goes up and "
+            "never steps sideways. Probed before "
+            "building on both supported Blenders: the "
+            "place memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing 2.0 units "
+         "sideways along Y, staying on the ground, "
+         "and press Remember where it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same sidestepped place - "
+         "and remember again.",
+         "3. Scrub the Timeline: the thing steps "
+         "sideways, arrives by the middle, and then "
+         "stays - in its new place, on the ground, "
+         "to the end."],
+     "missing": "No real sidestep yet - a sideways "
+                "move of 1.7 to 2.3 ending in the new "
+                "place, forward drift within 0.5, and "
+                "on the ground the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_sidestep,
+     "check": _check_sidestep},
+    {"title": "Watch it sidestep, then save",
+     "skill": "Finishing a sidestep: the sidestepping "
+              "really plays, and the file is saved "
+              "with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing step sideways and stay in its new "
+            "place on the ground. Then save the file. "
+            "The place memories are saved with it, so "
+            "the sidestep still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the sidestep is still proven "
+            "from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing sidestep - it steps "
+         "sideways, arrives in its new place, and "
+         "stays there on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the sidestep is still "
+         "proven.",
+         "3. That is animation's forty-second piece: "
+         "sidestepping - one thing, its place "
+         "remembered on the ground at the start, its "
+         "sidestepped place remembered as it "
+         "arrives, the same sidestepped place "
+         "remembered again at the end, and Blender "
+         "filling in the step across between. The next piece "
+         "steps a thing back and keeps it "
+         "there - stepped backward along the ground, "
+         "and held in its new place on the ground. It is "
+         "still not the whole craft: performances "
+         "are built from pieces like this, one "
+         "change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the sidestep still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_sidestep_finish,
+     "check": _check_sidestep_finish},
+]
+
+def _backstep_measure(context):
+    """(span, backward displacement - the start
+    place's X minus the end place's X, so stepping
+    back along negative X reads positive, sideways
+    drift - the largest change along the Y axis
+    from the start place across all sampled
+    places, start height, end height, height
+    range - the highest sampled height minus the
+    lowest sampled height) for the main thing's
+    place memories. A real step back steps
+    backward and STAYS there, on the ground, never
+    travelling sideways and never leaving the
+    ground: the backward displacement must land
+    between 1.7 and 2.3 (the end place's X minus
+    the start place's X between -2.3 and -1.7),
+    the sideways drift must stay within 0.5, the
+    end height must land within 0.3 of the start
+    height, and the total sampled height range
+    must stay within 0.35, all read from the real
+    evaluated place sampled across the span. A
+    step back is the backward step and the staying
+    together - so a forward slide, which travels
+    forward along X and reads backward negative,
+    cannot pass, and neither can a sidestep that
+    only steps sideways, a pace that steps back
+    and comes back home, a small step back that
+    barely moves, a diagonal step back that drifts
+    sideways as it steps, or a hop that leaves the
+    ground on the way. Probed on Blender 5.3.0 and
+    4.2.5 before building (probe
+    scratch/probe_backstep.py): place memories at
+    (0, 0, 0), (-2, 0, 0) and (-2, 0, 0) across
+    frames 1/24/48 read back and interpolate
+    identically on both versions (span 47,
+    backward 2.0, sideways drift 0.0, start 0.0,
+    end 0.0, height range 0.0, reading
+    (-0.9348, 0, 0) partway across at frame 12); a
+    forward slide read backward -3.0, a sidestep
+    read backward 0.0 with sideways drift 2.0, a
+    pace read backward 0.0 ending home, a small
+    step back read backward 0.5, a diagonal step
+    back read backward 2.0 with sideways drift
+    2.0, and a hop read height range 1.5 - none
+    can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    backward = start[0] - end[0]
+    side = max(abs(p[1] - start[1]) for f, p in places)
+    heights = [p[2] for f, p in places]
+    hrange = max(heights) - min(heights)
+    return (last - first, backward, side,
+            start[2], end[2], hrange)
+
+
+def _check_backstep(context):
+    span, backward, side, start, end, hrange = _backstep_measure(context)
+    return (span >= 20 and 1.7 <= backward <= 2.3
+            and side <= 0.5
+            and abs(end - start) <= 0.3 and hrange <= 0.35)
+
+
+def _check_backstep_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] <= 1.3
+
+
+def _anim_run_backstep_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_backstep_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 0.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_backstep(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_backstep(context):
+        return
+    scene = context.scene
+    if not _check_backstep_start(context):
+        _anim_run_backstep_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx in ((23, -2.0), (47, -2.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1], start[2])
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_backstep_finish(context):
+    return (_check_saved(context)
+            and _check_backstep(context))
+
+
+def _anim_run_backstep_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_BACKSTEP_STEPS = [
+    {"title": "Pick the thing that will step back",
+     "skill": "One thing, chosen: a step back starts "
+              "with a single thing that will step "
+              "backward and stay there",
+     "how": "The slide piece sent a thing travelling "
+            "forward along the ground, and the "
+            "sidestep piece stepped a thing sideways "
+            "and kept it there; this piece teaches "
+            "the step back - step backward, along the "
+            "backward X axis toward negative X, and "
+            "stay in the new place, on the ground the "
+            "whole way: a dancer stepping back and "
+            "holding the new spot, a boxer settling "
+            "where they retreated to. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "stepped-back place remembered as the "
+            "thing arrives, and the same stepped-back "
+            "place remembered again at the end - "
+            "Blender fills in the step back across, "
+            "and the two stepped-back memories are "
+            "what make it a step back and not just a "
+            "drift. Start by picking the thing: any "
+            "shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will step back.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "stepping back comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The step back will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, its centre no "
+              "more than 1.3 units up",
+     "how": "A step back is read against the place "
+            "the thing starts from, so the start "
+            "remembers the thing's place at frame 1, "
+            "on the ground - Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start, and the thing must be low there - "
+            "its centre no more than 1.3 units up. "
+            "The whole step back is measured from "
+            "this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing steps "
+         "back yet. One remembered place cannot step "
+         "back - it takes the stepped-back place "
+         "remembered, and remembered again, too."],
+     "missing": "No ground starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_backstep_start,
+     "check": _check_backstep_start},
+    {"title": "Step it back and keep it there",
+     "skill": "The step back itself: moved backward "
+              "2.0 units along X remembered at frame "
+              "24, and the same stepped-back place "
+              "remembered again at frame 48, at the "
+              "same ground height the whole way",
+     "how": "Move the thing backward - 2.0 units "
+            "back along the X axis, so its X goes "
+            "down by 2.0, staying on the ground and "
+            "never travelling sideways along Y - and "
+            "remember its place at frame 24, then "
+            "leave it exactly where it is and remember "
+            "the same stepped-back place again at "
+            "frame 48. Blender fills in the step back "
+            "across between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "backward displacement from the start "
+            "place to the end place must land between "
+            "1.7 and 2.3 (the end place's X minus the "
+            "start place's X between -2.3 and -1.7), "
+            "the sideways drift along Y must stay "
+            "within 0.5 across all samples, the end "
+            "height must land within 0.3 of the start "
+            "height, and the total sampled height "
+            "range must stay within 0.35. A forward "
+            "slide does not tick it - it travels "
+            "forward, the wrong way along X; a "
+            "sidestep does not tick it - it only steps "
+            "sideways and never steps back; a pace "
+            "does not tick it - it steps back and "
+            "comes back home, ending where it started; "
+            "a small step back does not tick it - it "
+            "barely moves backward; a diagonal step "
+            "back does not tick it - it drifts "
+            "sideways as it steps; and a hop does not "
+            "tick it - it leaves the ground on the "
+            "way. Probed before building on both "
+            "supported Blenders: the place memories "
+            "read back and interpolate identically on "
+            "each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing 2.0 units "
+         "backward along X, staying on the ground, "
+         "and press Remember where it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same stepped-back place - "
+         "and remember again.",
+         "3. Scrub the Timeline: the thing steps "
+         "back, arrives by the middle, and then "
+         "stays - in its new place, on the ground, "
+         "to the end."],
+     "missing": "No real step back yet - a backward "
+                "move of 1.7 to 2.3 ending in the new "
+                "place, sideways drift within 0.5, and "
+                "on the ground the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_backstep,
+     "check": _check_backstep},
+    {"title": "Watch it step back, then save",
+     "skill": "Finishing a step back: the stepping "
+              "back really plays, and the file is "
+              "saved with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing step back and stay in its new place "
+            "on the ground. Then save the file. The "
+            "place memories are saved with it, so the "
+            "step back still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the step back is still proven "
+            "from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing step back - it steps "
+         "backward, arrives in its new place, and "
+         "stays there on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the step back is still "
+         "proven.",
+         "3. That is animation's forty-third piece: "
+         "stepping back - one thing, its place "
+         "remembered on the ground at the start, its "
+         "stepped-back place remembered as it "
+         "arrives, the same stepped-back place "
+         "remembered again at the end, and Blender "
+         "filling in the step back across between. The next piece "
+         "steps a thing forward and keeps it "
+         "there - stepped forward along the ground, "
+         "and held in its new place on the ground. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the step back still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_backstep_finish,
+     "check": _check_backstep_finish},
+]
+
+def _forwardstep_measure(context):
+    """(span, forward displacement - the end
+    place's X minus the start place's X, so
+    stepping forward along positive X reads
+    positive, sideways drift - the largest change
+    along the Y axis from the start place across
+    all sampled places, start height, end height,
+    height range - the highest sampled height
+    minus the lowest sampled height) for the main
+    thing's place memories. A real step forward
+    steps forward and STAYS there, on the ground,
+    never travelling sideways and never leaving
+    the ground: the forward displacement must land
+    between 1.7 and 2.3, the sideways drift must
+    stay within 0.5, the end height must land
+    within 0.3 of the start height, and the total
+    sampled height range must stay within 0.35,
+    all read from the real evaluated place sampled
+    across the span. A step forward is the forward
+    step and the staying together - so a step
+    back, which travels backward along X and reads
+    forward negative, cannot pass, and neither can
+    a sidestep that only steps sideways, a pace
+    that steps forward and comes back home, a
+    small step forward that barely moves, a
+    diagonal step forward that drifts sideways as
+    it steps, a hop that leaves the ground on the
+    way, or a long slide forward that travels too
+    far. Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_forwardstep.py):
+    place memories at (0, 0, 0), (2, 0, 0) and
+    (2, 0, 0) across frames 1/24/48 read back and
+    interpolate identically on both versions (span
+    47, forward 2.0, sideways drift 0.0, start 0.0,
+    end 0.0, height range 0.0, reading
+    (0.9348, 0, 0) partway across at frame 12); a
+    step back read forward -2.0, a sidestep read
+    forward 0.0 with sideways drift 2.0, a pace
+    read forward 0.0 ending home, a small step
+    forward read forward 0.5, a diagonal step
+    forward read forward 2.0 with sideways drift
+    2.0, a hop read height range 1.5, and a long
+    slide forward read forward 3.0 - none can
+    pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    forward = end[0] - start[0]
+    side = max(abs(p[1] - start[1]) for f, p in places)
+    heights = [p[2] for f, p in places]
+    hrange = max(heights) - min(heights)
+    return (last - first, forward, side,
+            start[2], end[2], hrange)
+
+
+def _check_forwardstep(context):
+    span, forward, side, start, end, hrange = _forwardstep_measure(context)
+    return (span >= 20 and 1.7 <= forward <= 2.3
+            and side <= 0.5
+            and abs(end - start) <= 0.3 and hrange <= 0.35)
+
+
+def _check_forwardstep_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] <= 1.3
+
+
+def _anim_run_forwardstep_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_forwardstep_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 0.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_forwardstep(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_forwardstep(context):
+        return
+    scene = context.scene
+    if not _check_forwardstep_start(context):
+        _anim_run_forwardstep_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx in ((23, 2.0), (47, 2.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1], start[2])
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_forwardstep_finish(context):
+    return (_check_saved(context)
+            and _check_forwardstep(context))
+
+
+def _anim_run_forwardstep_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_FORWARDSTEP_STEPS = [
+    {"title": "Pick the thing that will step forward",
+     "skill": "One thing, chosen: a step forward "
+              "starts with a single thing that will "
+              "step forward and stay there",
+     "how": "The slide piece sent a thing travelling "
+            "forward along the ground, and the step "
+            "back piece stepped a thing backward and "
+            "kept it there; this piece teaches the "
+            "step forward - step forward, along the "
+            "forward X axis toward positive X, and "
+            "stay in the new place, on the ground the "
+            "whole way: a dancer stepping forward and "
+            "holding the new spot, a boxer settling "
+            "where they advanced to. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "stepped-forward place remembered as the "
+            "thing arrives, and the same "
+            "stepped-forward place remembered again "
+            "at the end - Blender fills in the step "
+            "forward across, and the two "
+            "stepped-forward memories are what make "
+            "it a step forward and not just a drift. "
+            "Start by picking the thing: any shape "
+            "you already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will step forward.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "stepping forward comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The step forward will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, its centre no "
+              "more than 1.3 units up",
+     "how": "A step forward is read against the place "
+            "the thing starts from, so the start "
+            "remembers the thing's place at frame 1, "
+            "on the ground - Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start, and the thing must be low there - "
+            "its centre no more than 1.3 units up. "
+            "The whole step forward is measured from "
+            "this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing steps "
+         "forward yet. One remembered place cannot "
+         "step forward - it takes the "
+         "stepped-forward place remembered, and "
+         "remembered again, too."],
+     "missing": "No ground starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_forwardstep_start,
+     "check": _check_forwardstep_start},
+    {"title": "Step it forward and keep it there",
+     "skill": "The step forward itself: moved "
+              "forward 2.0 units along X remembered "
+              "at frame 24, and the same "
+              "stepped-forward place remembered again "
+              "at frame 48, at the same ground height "
+              "the whole way",
+     "how": "Move the thing forward - 2.0 units "
+            "forward along the X axis, so its X goes "
+            "up by 2.0, staying on the ground and "
+            "never travelling sideways along Y - and "
+            "remember its place at frame 24, then "
+            "leave it exactly where it is and remember "
+            "the same stepped-forward place again at "
+            "frame 48. Blender fills in the step "
+            "forward across between. The tick reads "
+            "the real evaluated place sampled across "
+            "the span: the span must run at least 20 "
+            "frames, the forward displacement from "
+            "the start place to the end place must "
+            "land between 1.7 and 2.3, the sideways "
+            "drift along Y must stay within 0.5 "
+            "across all samples, the end height must "
+            "land within 0.3 of the start height, and "
+            "the total sampled height range must stay "
+            "within 0.35. A step back does not tick "
+            "it - it travels backward, the wrong way "
+            "along X; a sidestep does not tick it - it "
+            "only steps sideways and never steps "
+            "forward; a pace does not tick it - it "
+            "steps forward and comes back home, "
+            "ending where it started; a small step "
+            "forward does not tick it - it barely "
+            "moves forward; a diagonal step forward "
+            "does not tick it - it drifts sideways as "
+            "it steps; a hop does not tick it - it "
+            "leaves the ground on the way; and a long "
+            "slide forward does not tick it - it "
+            "travels too far to be one step. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing 2.0 units "
+         "forward along X, staying on the ground, "
+         "and press Remember where it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same stepped-forward "
+         "place - and remember again.",
+         "3. Scrub the Timeline: the thing steps "
+         "forward, arrives by the middle, and then "
+         "stays - in its new place, on the ground, "
+         "to the end."],
+     "missing": "No real step forward yet - a forward "
+                "move of 1.7 to 2.3 ending in the new "
+                "place, sideways drift within 0.5, and "
+                "on the ground the whole way.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_forwardstep,
+     "check": _check_forwardstep},
+    {"title": "Watch it step forward, then save",
+     "skill": "Finishing a step forward: the stepping "
+              "forward really plays, and the file is "
+              "saved with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing step forward and stay in its new "
+            "place on the ground. Then save the file. "
+            "The place memories are saved with it, so "
+            "the step forward still plays when the "
+            "file is opened again. The tick checks the "
+            "save and that the step forward is still "
+            "proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing step forward - it steps "
+         "forward, arrives in its new place, and "
+         "stays there on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the step forward is "
+         "still proven.",
+         "3. That is animation's forty-fourth piece: "
+         "stepping forward - one thing, its place "
+         "remembered on the ground at the start, its "
+         "stepped-forward place remembered as it "
+         "arrives, the same stepped-forward place "
+         "remembered again at the end, and Blender "
+         "filling in the step forward across "
+         "between. The next piece "
+         "steps a thing up and keeps it "
+         "there - stepped forward and up together, "
+         "and held in its new higher place. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the step forward still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_forwardstep_finish,
+     "check": _check_forwardstep_finish},
+]
+
+def _stepup_measure(context):
+    """(span, forward displacement - the end
+    place's X minus the start place's X, sideways
+    drift - the largest change along the Y axis
+    from the start place across all sampled
+    places, start height, end height, lowest
+    sampled height) for the main thing's place
+    memories. A real step up steps forward AND
+    up and STAYS there, on the higher place,
+    never travelling sideways and never dipping
+    below where it started: the forward
+    displacement must land between 0.7 and 1.3,
+    the rise (end height minus start height) must
+    land between 0.7 and 1.3, the end height must
+    land between 0.7 and 1.3, the sideways drift
+    must stay within 0.5, and the lowest sampled
+    height must never drop more than 0.35 below
+    the start height, all read from the real
+    evaluated place sampled across the span. A
+    step up is the forward step and the rise and
+    the staying together - so a float, which only
+    rises straight up, cannot pass, and neither
+    can a step forward or slide that stays on the
+    ground, a climb straight up that rises too
+    far without stepping forward, a hop that
+    steps up and comes back down to the ground, a
+    small step up that barely moves, a diagonal
+    sidestep-up that drifts sideways as it steps,
+    or a step down that starts high and ends on
+    the ground. Probed on Blender 5.3.0 and 4.2.5
+    before building (probe
+    scratch/probe_stepup.py): place memories at
+    (0, 0, 0), (1, 0, 1) and (1, 0, 1) across
+    frames 1/24/48 read back and interpolate
+    identically on both versions (span 47, forward
+    1.0, sideways drift 0.0, start 0.0, end 1.0,
+    lowest 0.0, reading (0.4674, 0, 0.4674)
+    partway up at frame 12); a float read forward
+    0.0 with rise 1.5 and end 1.5, a step forward
+    read forward 2.0 with rise 0.0, a climb
+    straight up read forward 0.0 with rise 3.0, a
+    hop read rise 0.0 with end 0.0, a small step
+    up read forward 0.3 with rise 0.3, a diagonal
+    sidestep-up read sideways drift 1.0, and a
+    step down read rise -1.0 with end 0.0 - none
+    can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0.0, 0.0, -99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0.0, 0.0, -99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0.0, 0.0, -99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    forward = end[0] - start[0]
+    side = max(abs(p[1] - start[1]) for f, p in places)
+    lowest = min(p[2] for f, p in places)
+    return (last - first, forward, side,
+            start[2], end[2], lowest)
+
+
+def _check_stepup(context):
+    span, forward, side, start, end, lowest = _stepup_measure(context)
+    return (span >= 20 and 0.7 <= forward <= 1.3
+            and 0.7 <= end - start <= 1.3
+            and 0.7 <= end <= 1.3
+            and side <= 0.5
+            and lowest >= start - 0.35)
+
+
+def _check_stepup_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return start[2] <= 1.3
+
+
+def _anim_run_stepup_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_stepup_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 0.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_stepup(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_stepup(context):
+        return
+    scene = context.scene
+    if not _check_stepup_start(context):
+        _anim_run_stepup_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx, dz in ((23, 1.0, 1.0), (47, 1.0, 1.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1], start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_stepup_finish(context):
+    return (_check_saved(context)
+            and _check_stepup(context))
+
+
+def _anim_run_stepup_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_STEPUP_STEPS = [
+    {"title": "Pick the thing that will step up",
+     "skill": "One thing, chosen: a step up "
+              "starts with a single thing that will "
+              "step up and stay there",
+     "how": "The step forward piece stepped a thing "
+            "forward along the ground and kept it "
+            "there, and the float piece raised a "
+            "thing straight up and kept it there; "
+            "this piece teaches the step up - step "
+            "forward AND up, one step in both "
+            "directions together, and stay in the "
+            "new higher place: a dancer stepping up "
+            "onto a step and holding the spot, a "
+            "boxer settling on higher ground where "
+            "they advanced to. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "stepped-up place remembered as the "
+            "thing arrives, and the same stepped-up "
+            "place remembered again at the end - "
+            "Blender fills in the step up across, "
+            "and the two stepped-up memories are "
+            "what make it a step up and not just a "
+            "drift. Start by picking the thing: any "
+            "shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will step up.",
+         "2. Leave it on the ground for now. The "
+         "starting place is remembered first; the "
+         "stepping up comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The step up will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, its centre no "
+              "more than 1.3 units up",
+     "how": "A step up is read against the place "
+            "the thing starts from, so the start "
+            "remembers the thing's place at frame 1, "
+            "on the ground - Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start, and the thing must be low there - "
+            "its centre no more than 1.3 units up. "
+            "The whole step up is measured from "
+            "this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing steps "
+         "up yet. One remembered place cannot "
+         "step up - it takes the "
+         "stepped-up place remembered, and "
+         "remembered again, too."],
+     "missing": "No ground starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_stepup_start,
+     "check": _check_stepup_start},
+    {"title": "Step it up and keep it there",
+     "skill": "The step up itself: moved "
+              "forward 1.0 units along X and up "
+              "1.0 units along Z remembered "
+              "at frame 24, and the same "
+              "stepped-up place remembered again "
+              "at frame 48, never travelling sideways "
+              "the whole way",
+     "how": "Move the thing forward and up - 1.0 "
+            "units forward along the X axis, so its "
+            "X goes up by 1.0, and 1.0 units up "
+            "along the Z axis, so its Z goes up by "
+            "1.0, never travelling sideways along "
+            "Y - and remember its place at frame 24, "
+            "then leave it exactly where it is and "
+            "remember the same stepped-up place "
+            "again at frame 48. Blender fills in the "
+            "step up across between. The tick reads "
+            "the real evaluated place sampled across "
+            "the span: the span must run at least 20 "
+            "frames, the forward displacement from "
+            "the start place to the end place must "
+            "land between 0.7 and 1.3, the rise from "
+            "the start height to the end height must "
+            "land between 0.7 and 1.3, the end "
+            "height must land between 0.7 and 1.3, "
+            "the sideways drift along Y must stay "
+            "within 0.5 across all samples, and the "
+            "sampled height must never drop more "
+            "than 0.35 below the start height. A "
+            "float does not tick it - it only rises "
+            "straight up and never steps forward; a "
+            "step forward or a slide does not tick "
+            "it - it stays on the ground and never "
+            "rises; a climb straight up does not "
+            "tick it - it rises too far without "
+            "stepping forward; a hop does not tick "
+            "it - it steps up and comes back down to "
+            "the ground; a small step up does not "
+            "tick it - it barely moves; a diagonal "
+            "sidestep-up does not tick it - it "
+            "drifts sideways as it steps; and a step "
+            "down does not tick it - it starts high "
+            "and ends on the ground. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing 1.0 units "
+         "forward along X and 1.0 units up along Z, "
+         "and press Remember where it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same stepped-up "
+         "place - and remember again.",
+         "3. Scrub the Timeline: the thing steps "
+         "up, arrives by the middle, and then "
+         "stays - in its new higher place, "
+         "to the end."],
+     "missing": "No real step up yet - a forward "
+                "move of 0.7 to 1.3 and a rise of "
+                "0.7 to 1.3 ending in the new higher "
+                "place, sideways drift within 0.5, and "
+                "never dipping below the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_stepup,
+     "check": _check_stepup},
+    {"title": "Watch it step up, then save",
+     "skill": "Finishing a step up: the stepping "
+              "up really plays, and the file is "
+              "saved with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing step up and stay in its new "
+            "higher place. Then save the file. "
+            "The place memories are saved with it, so "
+            "the step up still plays when the "
+            "file is opened again. The tick checks the "
+            "save and that the step up is still "
+            "proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing step up - it steps "
+         "up, arrives in its new higher place, and "
+         "stays there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the step up is "
+         "still proven.",
+         "3. That is animation's forty-fifth piece: "
+         "stepping up - one thing, its place "
+         "remembered on the ground at the start, its "
+         "stepped-up place remembered as it "
+         "arrives, the same stepped-up place "
+         "remembered again at the end, and Blender "
+         "filling in the step up across "
+         "between. The next piece "
+         "steps a thing down and keeps it "
+         "there - stepped forward and down together, "
+         "and held in its new place on the ground. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the step up still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_stepup_finish,
+     "check": _check_stepup_finish},
+]
+
+def _stepdown_measure(context):
+    """(span, forward displacement - the end
+    place's X minus the start place's X, sideways
+    drift - the largest change along the Y axis
+    from the start place across all sampled
+    places, start height, end height, highest
+    sampled height) for the main thing's place
+    memories. A real step down steps forward AND
+    down and STAYS there, on the ground, never
+    travelling sideways and never rising above
+    where it started: the forward displacement
+    must land between 0.7 and 1.3, the drop
+    (start height minus end height) must land
+    between 0.7 and 1.3, the start height must
+    land between 0.7 and 1.3, the end height must
+    land between -0.3 and 0.3, the sideways drift
+    must stay within 0.5, and the highest sampled
+    height must never rise more than 0.35 above
+    the start height, all read from the real
+    evaluated place sampled across the span. A
+    step down is the forward step and the drop
+    and the staying together - so a step up, which
+    rises instead, cannot pass, and neither can a
+    step forward that stays up high without
+    dropping, a straight drop that lands without
+    travelling forward, a hop that steps down and
+    comes back up to its starting height, a small
+    step down that barely moves, a diagonal
+    sidestep-down that drifts sideways as it
+    steps, or a climb that rises from the start.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_stepdown.py):
+    place memories at (0, 0, 1), (1, 0, 0) and
+    (1, 0, 0) across frames 1/24/48 read back and
+    interpolate identically on both versions
+    (span 47, forward 1.0, sideways drift 0.0,
+    start 1.0, end 0.0, highest 1.0, reading
+    (0.4674, 0, 0.5326) partway down at frame
+    12); a step up read forward 1.0 with drop
+    -1.0 and end 1.0, a step forward read forward
+    2.0 with drop 0.0, a straight drop read
+    forward 0.0 with drop 1.0, a hop read drop
+    0.0 with end 1.0, a small step down read
+    forward 0.3 with drop 0.3, a diagonal
+    sidestep-down read sideways drift 1.0, and a
+    climb read forward 0.0 with drop -2.0 and end
+    3.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0.0, 0.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append((frame, _anim_eval(context, main,
+                                         frame,
+                                         "location")))
+        frame += step
+    if places[-1][0] != last:
+        places.append((last, end))
+    forward = end[0] - start[0]
+    side = max(abs(p[1] - start[1]) for f, p in places)
+    highest = max(p[2] for f, p in places)
+    return (last - first, forward, side,
+            start[2], end[2], highest)
+
+
+def _check_stepdown(context):
+    span, forward, side, start, end, highest = _stepdown_measure(context)
+    return (span >= 20 and 0.7 <= forward <= 1.3
+            and 0.7 <= start - end <= 1.3
+            and 0.7 <= start <= 1.3
+            and -0.3 <= end <= 0.3
+            and side <= 0.5
+            and highest <= start + 0.35)
+
+
+def _check_stepdown_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_stepdown_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_stepdown_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _anim_run_stepdown(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_stepdown(context):
+        return
+    scene = context.scene
+    if not _check_stepdown_start(context):
+        _anim_run_stepdown_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    for off, dx, dz in ((23, 1.0, -1.0), (47, 1.0, -1.0)):
+        scene.frame_set(first + off)
+        main.location = (start[0] + dx, start[1], start[2] + dz)
+        main.keyframe_insert(data_path="location",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_stepdown_finish(context):
+    return (_check_saved(context)
+            and _check_stepdown(context))
+
+
+def _anim_run_stepdown_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_STEPDOWN_STEPS = [
+    {"title": "Pick the thing that will step down",
+     "skill": "One thing, chosen: a step down "
+              "starts with a single thing that will "
+              "step down and stay there",
+     "how": "The step up piece stepped a thing "
+            "forward and up together and kept it "
+            "there in its new higher place; this "
+            "piece teaches the step down - step "
+            "forward AND down, one step in both "
+            "directions together, and stay in the "
+            "new lower place on the ground: a dancer "
+            "stepping down off a step and holding "
+            "the spot, a boxer settling back on the "
+            "ground where they advanced to. The way "
+            "is the place-memories way again: the "
+            "starting place remembered up high, the "
+            "stepped-down place remembered as the "
+            "thing arrives, and the same "
+            "stepped-down place remembered again at "
+            "the end - Blender fills in the step "
+            "down across, and the two stepped-down "
+            "memories are what make it a step down "
+            "and not just a drift. Start by picking "
+            "the thing: any shape you already have, "
+            "or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will step down.",
+         "2. Leave it up high for now. The "
+         "starting place is remembered first; the "
+         "stepping down comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The step down will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, up high",
+     "skill": "The start, remembered up high: a "
+              "place memory at frame 1, its centre "
+              "1.0 units up",
+     "how": "A step down is read against the place "
+            "the thing starts from, so the start "
+            "remembers the thing's place at frame 1, "
+            "up high - Blender stores a place "
+            "memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start, and the thing must be high there - "
+            "its centre between 0.7 and 1.3 units up. "
+            "The whole step down is measured from "
+            "this place.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting up high, its centre "
+         "1.0 units up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there.",
+         "3. Scrub forward and back: nothing steps "
+         "down yet. One remembered place cannot "
+         "step down - it takes the "
+         "stepped-down place remembered, and "
+         "remembered again, too."],
+     "missing": "No high starting place remembered "
+                "yet - remember the thing's place at "
+                "frame 1, up high.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_stepdown_start,
+     "check": _check_stepdown_start},
+    {"title": "Step it down and keep it there",
+     "skill": "The step down itself: moved "
+              "forward 1.0 units along X and down "
+              "1.0 units along Z remembered "
+              "at frame 24, and the same "
+              "stepped-down place remembered again "
+              "at frame 48, never travelling sideways "
+              "the whole way",
+     "how": "Move the thing forward and down - 1.0 "
+            "units forward along the X axis, so its "
+            "X goes up by 1.0, and 1.0 units down "
+            "along the Z axis, so its Z goes down by "
+            "1.0, never travelling sideways along "
+            "Y - and remember its place at frame 24, "
+            "then leave it exactly where it is and "
+            "remember the same stepped-down place "
+            "again at frame 48. Blender fills in the "
+            "step down across between. The tick reads "
+            "the real evaluated place sampled across "
+            "the span: the span must run at least 20 "
+            "frames, the forward displacement from "
+            "the start place to the end place must "
+            "land between 0.7 and 1.3, the drop from "
+            "the start height to the end height must "
+            "land between 0.7 and 1.3, the start "
+            "height must land between 0.7 and 1.3, "
+            "the end height must land between -0.3 "
+            "and 0.3, on the ground, the sideways "
+            "drift along Y must stay within 0.5 "
+            "across all samples, and the sampled "
+            "height must never rise more than 0.35 "
+            "above the start height. A step up does "
+            "not tick it - it rises instead of "
+            "dropping; a step forward does not tick "
+            "it - it stays up high and never drops; "
+            "a straight drop does not tick it - it "
+            "lands without travelling forward; a hop "
+            "does not tick it - it steps down and "
+            "comes back up to its starting height; a "
+            "small step down does not tick it - it "
+            "barely moves; a diagonal sidestep-down "
+            "does not tick it - it drifts sideways "
+            "as it steps; and a climb does not tick "
+            "it - it rises from the start. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing 1.0 units "
+         "forward along X and 1.0 units down along Z, "
+         "and press Remember where it is right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "where it is - the same stepped-down "
+         "place - and remember again.",
+         "3. Scrub the Timeline: the thing steps "
+         "down, arrives by the middle, and then "
+         "stays - in its new place on the ground, "
+         "to the end."],
+     "missing": "No real step down yet - a forward "
+                "move of 0.7 to 1.3 and a drop of "
+                "0.7 to 1.3 ending in the new place "
+                "on the ground, sideways drift within 0.5, and "
+                "never rising above the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_stepdown,
+     "check": _check_stepdown},
+    {"title": "Watch it step down, then save",
+     "skill": "Finishing a step down: the stepping "
+              "down really plays, and the file is "
+              "saved with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing step down and stay in its new "
+            "place on the ground. Then save the file. "
+            "The place memories are saved with it, so "
+            "the step down still plays when the "
+            "file is opened again. The tick checks the "
+            "save and that the step down is still "
+            "proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing step down - it steps "
+         "down, arrives in its new place on the "
+         "ground, and stays there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the step down is "
+         "still proven.",
+         "3. That is animation's forty-sixth piece: "
+         "stepping down - one thing, its place "
+         "remembered up high at the start, its "
+         "stepped-down place remembered as it "
+         "arrives, the same stepped-down place "
+         "remembered again at the end, and Blender "
+         "filling in the step down across "
+         "between. The next piece "
+         "crouches a thing down and keeps it "
+         "crouched - lowered to half height, "
+         "its sides staying at their own size. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the step down still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_stepdown_finish,
+     "check": _check_stepdown_finish},
+]
+
+def _crouch_measure(context):
+    """(span, end height ratio, end X ratio, end Y
+    ratio, highest sampled height ratio) for the
+    main thing's size memories. A real crouch lowers
+    a thing's height and KEEPS it lowered, with its
+    sides staying at their starting size the whole
+    way: the end ratios are the evaluated size at
+    the last memory against the size at the first,
+    and the highest ratio is the tallest evaluated
+    height anywhere across the span against the
+    start. A crouch is the lowering and the staying
+    and the unchanged sides together - so a squash,
+    which flattens and bulges its sides out and
+    then settles back to full height, cannot pass,
+    and neither can a shrink, which lowers every
+    side together, a stretch that grows taller, a
+    small crouch that barely lowers, or a crouch
+    that recovers back to full height. Probed on
+    Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_crouch.py): size memories
+    at (1, 1, 1), (1, 1, 0.5) and (1, 1, 0.5)
+    across frames 1/24/48 read back and interpolate
+    identically on both versions (span 47, end
+    height 0.5, end sides 1.0 and 1.0, highest 1.0,
+    reading (1, 1, 0.5) at frames 24/36/48); a
+    squash read end height 1.0, a shrink read end
+    sides 0.4 and 0.4, a stretch read end height
+    2.0 with highest 2.0, a small crouch read end
+    height 0.85, and a crouch that recovered read
+    end height 1.0 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 1.0, 1.0, 1.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 1.0, 1.0, 1.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 1.0, 1.0, 1.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 1.0, 1.0, 1.0, 99.0
+    end = sizes[-1]
+    highest = max(s[2] / start[2] for s in sizes)
+    return (last - first, end[2] / start[2],
+            end[0] / start[0], end[1] / start[1],
+            highest)
+
+
+def _check_crouch(context):
+    span, end_h, end_x, end_y, highest = _crouch_measure(context)
+    return (span >= 20 and 0.35 <= end_h <= 0.65
+            and 0.8 <= end_x <= 1.2
+            and 0.8 <= end_y <= 1.2
+            and highest <= 1.15)
+
+
+def _check_crouch_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_crouch_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_crouch_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_crouch(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_crouch(context):
+        return
+    scene = context.scene
+    if not _check_crouch_start(context):
+        _anim_run_crouch_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0], start[1], start[2] * 0.5)
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_crouch_finish(context):
+    return (_check_saved(context)
+            and _check_crouch(context))
+
+
+def _anim_run_crouch_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_CROUCH_STEPS = [
+    {"title": "Pick the thing that will crouch",
+     "skill": "One thing, chosen: a crouch starts with "
+              "a single thing that will lower down",
+     "how": "The squash piece flattened a thing down "
+            "while its sides bulged out and then let it "
+            "settle back, and the shrink piece made it "
+            "smaller on every side; this piece does "
+            "neither - it lowers a thing's height and "
+            "keeps it lowered, its sides staying at "
+            "their own size the whole way: a character "
+            "crouching down and staying crouched, a "
+            "cat settling low before it pounces. The "
+            "way is the size-memories way again: the "
+            "starting size remembered at the start, the "
+            "crouched size remembered as the thing "
+            "arrives, the same crouched size remembered "
+            "again at the end, and Blender fills in the "
+            "crouching across between. Start by picking "
+            "the thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will crouch.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the crouching "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The crouch will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A crouch is read against the shape the "
+            "thing starts from, so the start remembers "
+            "the thing's size at frame 1, at its own "
+            "shape - Blender stores a size memory (a "
+            "keyframe on the thing's Scale). The tick "
+            "reads the size memories themselves: one "
+            "must sit at the start. The whole crouch is "
+            "measured from this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing crouches "
+         "yet. One remembered size cannot crouch - it "
+         "takes the crouched size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_crouch_start,
+     "check": _check_crouch_start},
+    {"title": "Crouch it down and keep it crouched",
+     "skill": "The crouch itself: height down to "
+              "0.5 remembered at frame 24, and the "
+              "same crouched size remembered again "
+              "at frame 48, sides staying at 1.0 "
+              "the whole way",
+     "how": "Lower the thing's height - its Z scale "
+            "down to 0.5 of its start, its sides (X "
+            "and Y scale) left at 1.0 - and remember "
+            "its size at frame 24, then leave it "
+            "exactly where it is and remember the "
+            "same crouched size again at frame 48. "
+            "Blender fills in the crouching across "
+            "between. The tick reads the real "
+            "evaluated size sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "end height ratio must land between 0.35 "
+            "and 0.65, the end side ratios (X and Y) "
+            "must each land between 0.8 and 1.2, and "
+            "the sampled height ratio must never rise "
+            "above 1.15. A squash does not tick it - "
+            "it bulges its sides out and settles back "
+            "to full height; a shrink does not tick "
+            "it - it lowers every side together; a "
+            "stretch does not tick it - it grows "
+            "taller instead; a small crouch does not "
+            "tick it - it barely lowers; and a crouch "
+            "that recovers does not tick it - it comes "
+            "back up to full height. Probed before "
+            "building on both supported Blenders: the "
+            "size memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Lower the thing's height "
+         "to half - set its Z scale to 0.5, leaving "
+         "its X and Y scale at 1.0 - and press "
+         "Remember how it faces right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same crouched size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing crouches "
+         "down, arrives by the middle, and then "
+         "stays - crouched, at half height, to "
+         "the end."],
+     "missing": "No real crouch yet - an end height "
+                "of 0.35 to 0.65 of the start with the "
+                "sides at 0.8 to 1.2, at least 20 "
+                "frames across, and never rising above "
+                "1.15 of the starting height.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_crouch,
+     "check": _check_crouch},
+    {"title": "Watch it crouch, then save",
+     "skill": "Finishing a crouch: the crouching "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing crouch down and stay crouched. Then "
+            "save the file. The size memories are saved "
+            "with it, so the crouch still plays when "
+            "the file is opened again. The tick checks "
+            "the save and that the crouch is still "
+            "proven from the evaluated size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing crouch - it crouches "
+         "down, arrives at half height, and stays "
+         "crouched there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the crouch is still "
+         "proven.",
+         "3. That is animation's forty-seventh piece: "
+         "crouching - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "crouched size remembered as it arrives, "
+         "the same crouched size remembered again "
+         "at the end, and Blender filling in the "
+         "crouching across between. The next piece "
+         "stands a thing up from crouched down "
+         "and keeps it standing - raised to full "
+         "height, its sides staying at their own "
+         "size. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the crouch still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_crouch_finish,
+     "check": _check_crouch_finish},
+]
+
+def _standup_measure(context):
+    """(span, start height ratio, end height ratio,
+    end X ratio, end Y ratio, lowest sampled height
+    ratio, highest sampled height ratio) for the
+    main thing's size memories. A real stand-up
+    starts crouched down and rises to full height
+    and KEEPS standing there, with its sides
+    staying at their starting size the whole way.
+    The ratios are defined precisely (probe
+    scratch/probe_standup.py): the start height
+    ratio is the evaluated Z at the first memory
+    over the evaluated Z at the last, the end
+    height ratio is the evaluated Z at the last
+    memory against a full height of 1.0 (the shape
+    every thing here stands at), the end side
+    ratios are the evaluated X and Y at the last
+    memory against the start, and the lowest and
+    highest ratios are the smallest and tallest
+    evaluated heights anywhere across the span
+    against the end height. A stand-up is the
+    rising and the staying and the unchanged sides
+    together - so a crouch, which starts at full
+    height and lowers, cannot pass, and neither
+    can a squash that flattens and recovers, a
+    shrink that lowers every side together, a
+    stretch that grows past full height, a small
+    stand that barely rises, or a stand that
+    crouches back down. Probed on Blender 5.3.0
+    and 4.2.5 before building (probe
+    scratch/probe_standup.py): size memories at
+    (1, 1, 0.5), (1, 1, 1) and (1, 1, 1) across
+    frames 1/24/48 read back and interpolate
+    identically on both versions (span 47, start
+    height 0.5, end height 1.0, end sides 1.0 and
+    1.0, lowest 0.5, highest 1.0, reading
+    (1, 1, 1) at frames 24/36/48); a crouch read
+    start height 2.0 with end height 0.5, a squash
+    read start height 1.0, a shrink read end
+    height 0.4 with end sides 0.4 and 0.4, a
+    stretch read end height 2.0 with lowest 0.25,
+    a small stand read start height 0.85, and a
+    stand that crouched back read end height
+    0.5 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 99.0, 0.0, 1.0, 1.0, 0.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 99.0, 0.0, 1.0, 1.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 99.0, 0.0, 1.0, 1.0, 0.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    end = sizes[-1]
+    if min(start) <= 0.05 or end[2] <= 0.05:
+        return 0, 99.0, 0.0, 1.0, 1.0, 0.0, 99.0
+    lowest = min(s[2] / end[2] for s in sizes)
+    highest = max(s[2] / end[2] for s in sizes)
+    return (last - first, start[2] / end[2],
+            end[2] / 1.0, end[0] / start[0],
+            end[1] / start[1], lowest, highest)
+
+
+def _check_standup(context):
+    span, start_h, end_h, end_x, end_y, lowest, highest = _standup_measure(context)
+    return (span >= 20 and 0.35 <= start_h <= 0.65
+            and 0.85 <= end_h <= 1.15
+            and 0.8 <= end_x <= 1.2
+            and 0.8 <= end_y <= 1.2
+            and lowest >= 0.35 and highest <= 1.15)
+
+
+def _check_standup_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_standup_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_standup_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 0.5)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_standup(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_standup(context):
+        return
+    scene = context.scene
+    if not _check_standup_start(context):
+        _anim_run_standup_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0], start[1], start[2] * 2.0)
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_standup_finish(context):
+    return (_check_saved(context)
+            and _check_standup(context))
+
+
+def _anim_run_standup_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_STANDUP_STEPS = [
+    {"title": "Pick the thing that will stand up",
+     "skill": "One thing, chosen: a stand-up starts "
+              "with a single thing that will rise up",
+     "how": "The crouch piece lowered a thing's "
+            "height and kept it lowered, its sides "
+            "staying at their own size; this piece "
+            "does the opposite journey - it starts a "
+            "thing crouched down and stands it up to "
+            "full height, keeping it standing, its "
+            "sides staying at their own size the "
+            "whole way: a character rising from a "
+            "crouch to stand tall, a cat uncurling "
+            "to its full height. The way is the "
+            "size-memories way again: the starting "
+            "size, crouched down, remembered at the "
+            "start, the full standing size remembered "
+            "as the thing arrives, the same standing "
+            "size remembered again at the end, and "
+            "Blender fills in the standing up across "
+            "between. Start by picking the thing: any "
+            "shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will stand up.",
+         "2. Leave its size alone for now. The starting "
+         "size, crouched down, is remembered first; "
+         "the standing up comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The stand-up will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size, crouched down",
+     "skill": "The start, remembered crouched down: "
+              "a size memory at frame 1, scale 1, 1, 0.5",
+     "how": "A stand-up is read against the crouched "
+            "shape the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "crouched down - height halved, scale "
+            "1, 1, 0.5 - Blender stores a size memory "
+            "(a keyframe on the thing's Scale). The "
+            "tick reads the size memories themselves: "
+            "one must sit at the start. The whole "
+            "stand-up is measured from this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Set the "
+         "thing crouched down - its Z scale to 0.5, "
+         "leaving its X and Y scale at 1.0.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing stands "
+         "yet. One remembered size cannot stand up - "
+         "it takes the standing size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size, crouched "
+                "down, at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_standup_start,
+     "check": _check_standup_start},
+    {"title": "Stand it up and keep it standing",
+     "skill": "The stand-up itself: full height "
+              "1.0 remembered at frame 24, and the "
+              "same full size remembered again "
+              "at frame 48, sides staying at 1.0 "
+              "the whole way",
+     "how": "Raise the thing's height - its Z scale "
+            "up to 1.0, its full height, its sides (X "
+            "and Y scale) left at 1.0 - and remember "
+            "its size at frame 24, then leave it "
+            "exactly where it is and remember the "
+            "same full size again at frame 48. "
+            "Blender fills in the standing up across "
+            "between. The tick reads the real "
+            "evaluated size sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "start height ratio (start Z over end Z) "
+            "must land between 0.35 and 0.65, the end "
+            "height ratio (end Z against a full "
+            "height of 1.0) must land between 0.85 "
+            "and 1.15, the end side ratios (X and Y) "
+            "must each land between 0.8 and 1.2, and "
+            "the sampled height ratio must never fall "
+            "below 0.35 or rise above 1.15. A crouch "
+            "does not tick it - it starts at full "
+            "height and lowers instead; a squash does "
+            "not tick it - it starts at full height, "
+            "flattens and recovers; a shrink does not "
+            "tick it - it lowers every side together; "
+            "a stretch does not tick it - it grows "
+            "past full height; a small stand does not "
+            "tick it - it barely rises; and a stand "
+            "that crouches back does not tick it - it "
+            "ends crouched down again. Probed before "
+            "building on both supported Blenders: the "
+            "size memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Raise the thing's height "
+         "to full - set its Z scale to 1.0, leaving "
+         "its X and Y scale at 1.0 - and press "
+         "Remember how it faces right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same full size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing stands "
+         "up, arrives by the middle, and then "
+         "stays - standing, at full height, to "
+         "the end."],
+     "missing": "No real stand-up yet - a start height "
+                "of 0.35 to 0.65 of the end with an end "
+                "height of 0.85 to 1.15 of full height "
+                "and the sides at 0.8 to 1.2, at least "
+                "20 frames across, and never falling "
+                "below 0.35 or rising above 1.15 of "
+                "the end height.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_standup,
+     "check": _check_standup},
+    {"title": "Watch it stand up, then save",
+     "skill": "Finishing a stand-up: the standing "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing stand up and stay standing. Then "
+            "save the file. The size memories are saved "
+            "with it, so the stand-up still plays when "
+            "the file is opened again. The tick checks "
+            "the save and that the stand-up is still "
+            "proven from the evaluated size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing stand up - it rises "
+         "from crouched, arrives at full height, "
+         "and stays standing there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the stand-up is still "
+         "proven.",
+         "3. That is animation's forty-eighth piece: "
+         "standing up - one thing, its size "
+         "remembered crouched down at the start, "
+         "its full standing size remembered as it "
+         "arrives, the same full size remembered "
+         "again at the end, and Blender filling in "
+         "the standing up across between. The next piece "
+         "spreads a thing's sides out to twice "
+         "their size and keeps it wide - its "
+         "height staying at its own height. It is "
+         "still not the whole craft: performances "
+         "are built from pieces like this, one "
+         "change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the stand-up still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_standup_finish,
+     "check": _check_standup_finish},
+]
+
+def _widen_measure(context):
+    """(span, end X ratio, end Y ratio, end Z
+    ratio, lowest sampled Z ratio, highest sampled
+    Z ratio, highest sampled side ratio) for the
+    main thing's size memories. A real widening
+    spreads a thing's sides out and KEEPS them
+    spread, with its height staying at its
+    starting height the whole way: the end ratios
+    are the evaluated size at the last memory
+    against the size at the first, the lowest and
+    highest Z ratios are the smallest and tallest
+    evaluated heights anywhere across the span
+    against the start, and the highest side ratio
+    is the widest evaluated side anywhere across
+    the span against the start. A widening is the
+    spreading and the staying and the unchanged
+    height together - so a grow, which makes a
+    thing bigger on every side including its
+    height, cannot pass, and neither can a shrink
+    that makes it smaller on every side, a squash
+    that flattens and bulges and comes back home,
+    a small widen that barely spreads, a widen
+    that returns home, or a stretch that raises
+    the height instead. Probed on Blender 5.3.0
+    and 4.2.5 before building (probe
+    scratch/probe_widen.py): size memories at
+    (1, 1, 1), (2, 2, 1) and (2, 2, 1) across
+    frames 1/24/48 read back and interpolate
+    identically on both versions (span 47, end X
+    2.0, end Y 2.0, end Z 1.0, lowest Z 1.0,
+    highest Z 1.0, highest side 2.0, reading
+    (2, 2, 1) at frames 24/36/48); a grow read end
+    X 2.5 with end Z 2.5 and highest Z 2.5, a
+    shrink read end sides 0.4 and 0.4, a squash
+    read end sides 1.0 and 1.0 with lowest Z 0.4,
+    a small widen read end sides 1.3 and 1.3, a
+    widen that returned read end sides 1.0 and
+    1.0, a stretch that raised the height read end
+    Z 2.5 with highest Z 2.5, and a stretch along
+    one side read end X 2.5 with highest side 2.5
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    end = sizes[-1]
+    lowest = min(s[2] / start[2] for s in sizes)
+    highest = max(s[2] / start[2] for s in sizes)
+    widest = max(max(s[0] / start[0], s[1] / start[1])
+                 for s in sizes)
+    return (last - first, end[0] / start[0],
+            end[1] / start[1], end[2] / start[2],
+            lowest, highest, widest)
+
+
+def _check_widen(context):
+    span, end_x, end_y, end_z, lowest, highest, widest = _widen_measure(context)
+    return (span >= 20 and 1.7 <= end_x <= 2.3
+            and 1.7 <= end_y <= 2.3
+            and 0.8 <= end_z <= 1.2
+            and lowest >= 0.65 and highest <= 1.35
+            and widest <= 2.35)
+
+
+def _check_widen_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_widen_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_widen_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_widen(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_widen(context):
+        return
+    scene = context.scene
+    if not _check_widen_start(context):
+        _anim_run_widen_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0] * 2.0, start[1] * 2.0,
+                      start[2])
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_widen_finish(context):
+    return (_check_saved(context)
+            and _check_widen(context))
+
+
+def _anim_run_widen_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_WIDEN_STEPS = [
+    {"title": "Pick the thing that will widen",
+     "skill": "One thing, chosen: a widening starts "
+              "with a single thing that will spread "
+              "out sideways",
+     "how": "The crouch and stand-up pieces changed "
+            "a thing's height only - lowered it, or "
+            "raised it back to full - its sides "
+            "staying at their own size; this piece "
+            "does the sideways journey instead: it "
+            "spreads a thing's sides out to twice "
+            "their size and keeps them spread, its "
+            "height staying at its own height the "
+            "whole way: a doorway opening wider, a "
+            "fan spreading open, a puddle spreading "
+            "across the floor. The way is the "
+            "size-memories way again: the starting "
+            "size remembered at the start, the "
+            "widened size remembered as the thing "
+            "arrives, the same widened size "
+            "remembered again at the end, and "
+            "Blender fills in the widening across "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will widen.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the widening "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The widening will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A widening is read against the shape "
+            "the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "at its own shape - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. "
+            "The whole widening is measured from "
+            "this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing widens "
+         "yet. One remembered size cannot widen - "
+         "it takes the widened size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_widen_start,
+     "check": _check_widen_start},
+    {"title": "Widen it and keep it wide",
+     "skill": "The widening itself: sides out to "
+              "2.0 remembered at frame 24, and the "
+              "same widened size remembered again "
+              "at frame 48, height staying at 1.0 "
+              "the whole way",
+     "how": "Spread the thing's sides - its X and Y "
+            "scale up to 2.0, twice their start, its "
+            "height (Z scale) left at 1.0 - and "
+            "remember its size at frame 24, then "
+            "leave it exactly where it is and "
+            "remember the same widened size again at "
+            "frame 48. Blender fills in the widening "
+            "across between. The tick reads the real "
+            "evaluated size sampled across the span: "
+            "the span must run at least 20 frames, "
+            "the end side ratios (X and Y, each "
+            "against the start) must each land "
+            "between 1.7 and 2.3, the end height "
+            "ratio must land between 0.8 and 1.2, "
+            "the sampled height ratio must never "
+            "fall below 0.65 or rise above 1.35, and "
+            "the sampled side ratios must never rise "
+            "above 2.35. A grow does not tick it - "
+            "it makes the thing bigger on every "
+            "side, height included; a shrink does "
+            "not tick it - it makes every side "
+            "smaller; a squash does not tick it - "
+            "it flattens and bulges and comes back "
+            "home; a small widen does not tick it - "
+            "it barely spreads; a widen that returns "
+            "does not tick it - it ends back at its "
+            "starting size; and a stretch does not "
+            "tick it - it raises the height instead. "
+            "Probed before building on both "
+            "supported Blenders: the size memories "
+            "read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Go to frame 24. Spread the thing's sides "
+         "to twice their size - set its X and Y "
+         "scale to 2.0, leaving its Z scale at "
+         "1.0 - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same widened size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing widens, "
+         "arrives by the middle, and then stays - "
+         "wide, at its own height, to the end."],
+     "missing": "No real widening yet - end sides "
+                "of 1.7 to 2.3 of the start with the "
+                "height at 0.8 to 1.2, at least 20 "
+                "frames across, the height never "
+                "falling below 0.65 or rising above "
+                "1.35 and the sides never rising above "
+                "2.35 of the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_widen,
+     "check": _check_widen},
+    {"title": "Watch it widen, then save",
+     "skill": "Finishing a widening: the widening "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing widen and stay wide. Then save "
+            "the file. The size memories are saved "
+            "with it, so the widening still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the widening "
+            "is still proven from the evaluated "
+            "size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing widen - it spreads out "
+         "sideways, arrives at twice its width, "
+         "and stays wide there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the widening is still "
+         "proven.",
+         "3. That is animation's forty-ninth piece: "
+         "widening - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "widened size remembered as it arrives, "
+         "the same widened size remembered again "
+         "at the end, and Blender filling in the "
+         "widening across between. The next piece "
+         "pulls a thing's sides in to half "
+         "their size and keeps it narrow - its "
+         "height staying at its own height. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the widening still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_widen_finish,
+     "check": _check_widen_finish},
+]
+
+def _narrow_measure(context):
+    """(span, end X ratio, end Y ratio, end Z
+    ratio, lowest sampled Z ratio, highest sampled
+    Z ratio, lowest sampled side ratio) for the
+    main thing's size memories. A real narrowing
+    pulls a thing's sides in and KEEPS them pulled
+    in, with its height staying at its starting
+    height the whole way: the end ratios are the
+    evaluated size at the last memory against the
+    size at the first, the lowest and highest Z
+    ratios are the smallest and tallest evaluated
+    heights anywhere across the span against the
+    start, and the lowest side ratio is the
+    narrowest evaluated side anywhere across the
+    span against the start. A narrowing is the
+    pulling in and the staying and the unchanged
+    height together - so a shrink, which makes a
+    thing smaller on every side including its
+    height, cannot pass, and neither can a grow
+    that makes it bigger on every side, a squash
+    that flattens and bulges and comes back home,
+    a small narrow that barely pulls in, a narrow
+    that returns home, or a stretch that raises
+    the height instead. Probed on Blender 5.3.0
+    and 4.2.5 before building (probe
+    scratch/probe_narrow.py): size memories at
+    (1, 1, 1), (0.5, 0.5, 1) and (0.5, 0.5, 1)
+    across frames 1/24/48 read back and
+    interpolate identically on both versions
+    (span 47, end X 0.5, end Y 0.5, end Z 1.0,
+    lowest Z 1.0, highest Z 1.0, lowest side 0.5,
+    reading (0.5, 0.5, 1) at frames 24/36/48); a
+    shrink read end sides 0.4 and 0.4 with end Z
+    0.4 and lowest Z 0.4, a grow read end X 2.5
+    with end Z 2.5 and highest Z 2.5, a squash
+    read end sides 1.0 and 1.0 with lowest Z 0.4,
+    a small narrow read end sides 0.85 and 0.85, a
+    narrow that returned read end sides 1.0 and
+    1.0, a stretch that raised the height read end
+    Z 2.5 with highest Z 2.5, and a narrow along
+    one side only read end Y 1.0 - none can
+    pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 0.0, 0.0, 99.0, 0.0, 99.0, 99.0
+    end = sizes[-1]
+    lowest = min(s[2] / start[2] for s in sizes)
+    highest = max(s[2] / start[2] for s in sizes)
+    narrowest = min(min(s[0] / start[0], s[1] / start[1])
+                    for s in sizes)
+    return (last - first, end[0] / start[0],
+            end[1] / start[1], end[2] / start[2],
+            lowest, highest, narrowest)
+
+
+def _check_narrow(context):
+    span, end_x, end_y, end_z, lowest, highest, narrowest = _narrow_measure(context)
+    return (span >= 20 and 0.35 <= end_x <= 0.65
+            and 0.35 <= end_y <= 0.65
+            and 0.8 <= end_z <= 1.2
+            and lowest >= 0.65 and highest <= 1.35
+            and narrowest >= 0.3)
+
+
+def _check_narrow_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_narrow_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_narrow_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_narrow(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_narrow(context):
+        return
+    scene = context.scene
+    if not _check_narrow_start(context):
+        _anim_run_narrow_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0] * 0.5, start[1] * 0.5,
+                      start[2])
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_narrow_finish(context):
+    return (_check_saved(context)
+            and _check_narrow(context))
+
+
+def _anim_run_narrow_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_NARROW_STEPS = [
+    {"title": "Pick the thing that will narrow",
+     "skill": "One thing, chosen: a narrowing starts "
+              "with a single thing that will pull "
+              "in sideways",
+     "how": "The crouch and stand-up pieces changed "
+            "a thing's height only - lowered it, or "
+            "raised it back to full - its sides "
+            "staying at their own size; this piece "
+            "does the sideways journey instead: the "
+            "piece before spread a thing's sides "
+            "out; this piece pulls a thing's sides "
+            "in to half their size and keeps them "
+            "pulled in, its height staying at its "
+            "own height the whole way: a doorway "
+            "closing to a gap, a fan folding shut, "
+            "a puddle shrinking back. The way is the "
+            "size-memories way again: the starting "
+            "size remembered at the start, the "
+            "narrowed size remembered as the thing "
+            "arrives, the same narrowed size "
+            "remembered again at the end, and "
+            "Blender fills in the narrowing across "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will narrow.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the narrowing "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The narrowing will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A narrowing is read against the shape "
+            "the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "at its own shape - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. "
+            "The whole narrowing is measured from "
+            "this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing narrows "
+         "yet. One remembered size cannot narrow - "
+         "it takes the narrowed size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_narrow_start,
+     "check": _check_narrow_start},
+    {"title": "Narrow it and keep it narrow",
+     "skill": "The narrowing itself: sides in to "
+              "0.5 remembered at frame 24, and the "
+              "same narrowed size remembered again "
+              "at frame 48, height staying at 1.0 "
+              "the whole way",
+     "how": "Pull the thing's sides in - its X and Y "
+            "scale down to 0.5, half their start, its "
+            "height (Z scale) left at 1.0 - and "
+            "remember its size at frame 24, then "
+            "leave it exactly where it is and "
+            "remember the same narrowed size again at "
+            "frame 48. Blender fills in the narrowing "
+            "across between. The tick reads the real "
+            "evaluated size sampled across the span: "
+            "the span must run at least 20 frames, "
+            "the end side ratios (X and Y, each "
+            "against the start) must each land "
+            "between 0.35 and 0.65, the end height "
+            "ratio must land between 0.8 and 1.2, "
+            "the sampled height ratio must never "
+            "fall below 0.65 or rise above 1.35, and "
+            "the sampled side ratios must never fall "
+            "below 0.3. A shrink does not tick it - "
+            "it makes the thing smaller on every "
+            "side, height included; a grow does "
+            "not tick it - it makes every side "
+            "bigger; a squash does not tick it - "
+            "it flattens and bulges and comes back "
+            "home; a small narrow does not tick it - "
+            "it barely pulls in; a narrow that returns "
+            "does not tick it - it ends back at its "
+            "starting size; and a stretch does not "
+            "tick it - it raises the height instead. "
+            "Probed before building on both "
+            "supported Blenders: the size memories "
+            "read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Go to frame 24. Pull the thing's sides "
+         "in to half their size - set its X and Y "
+         "scale to 0.5, leaving its Z scale at "
+         "1.0 - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same narrowed size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing narrows, "
+         "arrives by the middle, and then stays - "
+         "narrow, at its own height, to the end."],
+     "missing": "No real narrowing yet - end sides "
+                "of 0.35 to 0.65 of the start with the "
+                "height at 0.8 to 1.2, at least 20 "
+                "frames across, the height never "
+                "falling below 0.65 or rising above "
+                "1.35 and the sides never falling below "
+                "0.3 of the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_narrow,
+     "check": _check_narrow},
+    {"title": "Watch it narrow, then save",
+     "skill": "Finishing a narrowing: the narrowing "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing narrow and stay narrow. Then save "
+            "the file. The size memories are saved "
+            "with it, so the narrowing still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the narrowing "
+            "is still proven from the evaluated "
+            "size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing narrow - it pulls in "
+         "sideways, arrives at half its width, "
+         "and stays narrow there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the narrowing is still "
+         "proven.",
+         "3. That is animation's fiftieth piece: "
+         "narrowing - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "narrowed size remembered as it arrives, "
+         "the same narrowed size remembered again "
+         "at the end, and Blender filling in the "
+         "narrowing across between. The next piece "
+         "stretches a thing along its length to "
+         "twice its size and keeps it long - its "
+         "width and height staying at their own "
+         "size. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the narrowing still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_narrow_finish,
+     "check": _check_narrow_finish},
+]
+
+def _lengthen_measure(context):
+    """(span, end X ratio, end Y ratio, end Z
+    ratio, highest sampled X ratio, lowest sampled
+    Y ratio, highest sampled Y ratio, lowest
+    sampled Z ratio, highest sampled Z ratio) for
+    the main thing's size memories. A real
+    lengthening stretches a thing along its length
+    only and KEEPS it long, with its width and
+    height staying at their starting size the
+    whole way: the end ratios are the evaluated
+    size at the last memory against the size at
+    the first, and the sampled extremes are the
+    longest length and the narrowest and widest
+    widths and heights anywhere across the span
+    against the start. A lengthening is the
+    stretching along one way and the staying and
+    the unchanged width and height together - so a
+    widen, which spreads both sides out, cannot
+    pass, and neither can a grow that makes a
+    thing bigger on every side, a shrink that
+    makes it smaller on every side, a stretch that
+    raises the height instead, a small lengthen
+    that barely stretches, a lengthen that returns
+    home, or a widen along the width only. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_lengthen.py; outputs
+    byte-identical on both versions): size memories at (1, 1, 1), (2, 1, 1)
+    and (2, 1, 1) across frames 1/24/48 read back
+    (span 47, end X 2.0, end Y 1.0, end Z 1.0,
+    highest X 2.0, lowest Y 1.0, highest Y 1.0,
+    lowest Z 1.0, highest Z 1.0, reading (2, 1, 1)
+    at frames 24/36/48); a widen read end Y 2.0
+    with highest Y 2.0, a grow read end X 2.5 with
+    end Z 2.5 and highest X 2.5, a shrink read end
+    X 0.4 with lowest Y 0.4 and lowest Z 0.4, a
+    stretch in height read end Z 2.0 with highest
+    Z 2.0, a small lengthen read end X 1.3, a
+    lengthen that returned read end X 1.0, and a
+    width-only widen read end X 1.0 with end Y 2.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    end = sizes[-1]
+    high_x = max(s[0] / start[0] for s in sizes)
+    low_y = min(s[1] / start[1] for s in sizes)
+    high_y = max(s[1] / start[1] for s in sizes)
+    low_z = min(s[2] / start[2] for s in sizes)
+    high_z = max(s[2] / start[2] for s in sizes)
+    return (last - first, end[0] / start[0],
+            end[1] / start[1], end[2] / start[2],
+            high_x, low_y, high_y, low_z, high_z)
+
+
+def _check_lengthen(context):
+    span, end_x, end_y, end_z, high_x, low_y, high_y, low_z, high_z = _lengthen_measure(context)
+    return (span >= 20 and 1.7 <= end_x <= 2.3
+            and 0.8 <= end_y <= 1.2
+            and 0.8 <= end_z <= 1.2
+            and high_x <= 2.35
+            and low_y >= 0.65 and high_y <= 1.35
+            and low_z >= 0.65 and high_z <= 1.35)
+
+
+def _check_lengthen_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_lengthen_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_lengthen_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_lengthen(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_lengthen(context):
+        return
+    scene = context.scene
+    if not _check_lengthen_start(context):
+        _anim_run_lengthen_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0] * 2.0, start[1],
+                      start[2])
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_lengthen_finish(context):
+    return (_check_saved(context)
+            and _check_lengthen(context))
+
+
+def _anim_run_lengthen_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_LENGTHEN_STEPS = [
+    {"title": "Pick the thing that will lengthen",
+     "skill": "One thing, chosen: a lengthening starts "
+              "with a single thing that will stretch "
+              "out along its length",
+     "how": "The widen piece spread a thing's sides "
+            "out together, and the narrow piece "
+            "pulled them in together; this piece "
+            "takes one way only: it stretches a "
+            "thing along its length (its X side) to "
+            "twice its size and keeps it long, its "
+            "width and height staying at their own "
+            "size the whole way: a plank drawn out "
+            "long, a telescope sliding open, a road "
+            "unrolling ahead. The way is the "
+            "size-memories way again: the starting "
+            "size remembered at the start, the "
+            "lengthened size remembered as the thing "
+            "arrives, the same lengthened size "
+            "remembered again at the end, and "
+            "Blender fills in the lengthening across "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will lengthen.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the lengthening "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The lengthening will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A lengthening is read against the shape "
+            "the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "at its own shape - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. "
+            "The whole lengthening is measured from "
+            "this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing lengthens "
+         "yet. One remembered size cannot lengthen - "
+         "it takes the lengthened size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_lengthen_start,
+     "check": _check_lengthen_start},
+    {"title": "Lengthen it and keep it long",
+     "skill": "The lengthening itself: length out to "
+              "2.0 remembered at frame 24, and the "
+              "same lengthened size remembered again "
+              "at frame 48, width and height staying "
+              "at 1.0 the whole way",
+     "how": "Stretch the thing along its length - "
+            "its X scale up to 2.0, twice its start, "
+            "its width (Y scale) and height (Z scale) "
+            "left at 1.0 - and remember its size at "
+            "frame 24, then leave it exactly where it "
+            "is and remember the same lengthened size "
+            "again at frame 48. Blender fills in the "
+            "lengthening across between. The tick "
+            "reads the real evaluated size sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the end length ratio "
+            "(X, against the start) must land between "
+            "1.7 and 2.3, the end width and height "
+            "ratios must each land between 0.8 and "
+            "1.2, the sampled length ratio must never "
+            "rise above 2.35, and the sampled width "
+            "and height ratios must never rise above "
+            "1.35 or fall below 0.65. A widen does "
+            "not tick it - it spreads the width out "
+            "too; a grow does not tick it - it makes "
+            "every side bigger; a shrink does not "
+            "tick it - it makes every side smaller; "
+            "a stretch in height does not tick it - "
+            "it raises the height instead; a small "
+            "lengthen does not tick it - it barely "
+            "stretches; a lengthen that returns does "
+            "not tick it - it ends back at its "
+            "starting size; and a width-only widen "
+            "does not tick it - it stretches the "
+            "wrong way. Probed before building: the "
+            "size memories read back on the "
+            "supported Blenders - 5.3.0 and 4.2.5 read "
+            "back byte-identical probe outputs.",
+     "teach": [
+         "1. Go to frame 24. Stretch the thing along "
+         "its length to twice its size - set its X "
+         "scale to 2.0, leaving its Y and Z scale "
+         "at 1.0 - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same lengthened size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing lengthens, "
+         "arrives by the middle, and then stays - "
+         "long, at its own width and height, to "
+         "the end."],
+     "missing": "No real lengthening yet - end length "
+                "of 1.7 to 2.3 of the start with the "
+                "width and height each at 0.8 to 1.2, "
+                "at least 20 frames across, the length "
+                "never rising above 2.35 and the width "
+                "and height never rising above 1.35 or "
+                "falling below 0.65 of the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_lengthen,
+     "check": _check_lengthen},
+    {"title": "Watch it lengthen, then save",
+     "skill": "Finishing a lengthening: the lengthening "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lengthen and stay long. Then save "
+            "the file. The size memories are saved "
+            "with it, so the lengthening still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the lengthening "
+            "is still proven from the evaluated "
+            "size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing lengthen - it stretches "
+         "out along its length, arrives at twice "
+         "its length, and stays long there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the lengthening is still "
+         "proven.",
+         "3. That is animation's fifty-first piece: "
+         "lengthening - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "lengthened size remembered as it arrives, "
+         "the same lengthened size remembered again "
+         "at the end, and Blender filling in the "
+         "lengthening across between. The next piece "
+         "pulls a thing in along its length to "
+         "half its size and keeps it short - its "
+         "width and height staying at their own "
+         "size. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the lengthening still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_lengthen_finish,
+     "check": _check_lengthen_finish},
+]
+
+def _shorten_measure(context):
+    """(span, end X ratio, end Y ratio, end Z
+    ratio, lowest sampled X ratio, lowest sampled
+    Y ratio, highest sampled Y ratio, lowest
+    sampled Z ratio, highest sampled Z ratio) for
+    the main thing's size memories. A real
+    shortening pulls a thing in along its length
+    only and KEEPS it short, with its width and
+    height staying at their starting size the
+    whole way: the end ratios are the evaluated
+    size at the last memory against the size at
+    the first, and the sampled extremes are the
+    shortest length and the narrowest and widest
+    widths and heights anywhere across the span
+    against the start. A shortening is the
+    pulling in along one way and the staying and
+    the unchanged width and height together - so a
+    widen, which spreads the width out, cannot
+    pass, and neither can a grow that makes a
+    thing bigger on every side, a shrink that
+    makes it smaller on every side, a stretch that
+    raises the height instead, a lengthen that
+    stretches the length out instead, a small
+    shorten that barely pulls in, or a shorten
+    that returns home. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_shorten.py; outputs
+    byte-identical on both versions): size memories at (1, 1, 1), (0.5, 1, 1)
+    and (0.5, 1, 1) across frames 1/24/48 read back
+    (span 47, end X 0.5, end Y 1.0, end Z 1.0,
+    lowest X 0.5, lowest Y 1.0, highest Y 1.0,
+    lowest Z 1.0, highest Z 1.0, reading (0.5, 1, 1)
+    at frames 24/36/48); a widen read end Y 2.0
+    with highest Y 2.0, a grow read end X 2.5 with
+    end Z 2.5 and highest Y 2.5, a shrink read end
+    X 0.4 with lowest Y 0.4 and lowest Z 0.4, a
+    stretch in height read end Z 2.0 with highest
+    Z 2.0, a lengthen read end X 2.0, a small shorten read end X 0.85, and a
+    shorten that returned read end X 1.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    end = sizes[-1]
+    low_x = min(s[0] / start[0] for s in sizes)
+    low_y = min(s[1] / start[1] for s in sizes)
+    high_y = max(s[1] / start[1] for s in sizes)
+    low_z = min(s[2] / start[2] for s in sizes)
+    high_z = max(s[2] / start[2] for s in sizes)
+    return (last - first, end[0] / start[0],
+            end[1] / start[1], end[2] / start[2],
+            low_x, low_y, high_y, low_z, high_z)
+
+
+def _check_shorten(context):
+    span, end_x, end_y, end_z, low_x, low_y, high_y, low_z, high_z = _shorten_measure(context)
+    return (span >= 20 and 0.35 <= end_x <= 0.65
+            and 0.8 <= end_y <= 1.2
+            and 0.8 <= end_z <= 1.2
+            and low_x >= 0.3
+            and low_y >= 0.65 and high_y <= 1.35
+            and low_z >= 0.65 and high_z <= 1.35)
+
+
+def _check_shorten_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_shorten_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_shorten_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_shorten(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_shorten(context):
+        return
+    scene = context.scene
+    if not _check_shorten_start(context):
+        _anim_run_shorten_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0] * 0.5, start[1],
+                      start[2])
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_shorten_finish(context):
+    return (_check_saved(context)
+            and _check_shorten(context))
+
+
+def _anim_run_shorten_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SHORTEN_STEPS = [
+    {"title": "Pick the thing that will shorten",
+     "skill": "One thing, chosen: a shortening starts "
+              "with a single thing that will pull "
+              "in along its length",
+     "how": "The lengthen piece stretched a thing's "
+            "length out to twice its size; this piece "
+            "takes the same way back in: it pulls a "
+            "thing in along its length (its X side) to "
+            "half its size and keeps it short, its "
+            "width and height staying at their own "
+            "size the whole way: a plank drawn in "
+            "short, a telescope sliding shut, a road "
+            "folding back. The way is the "
+            "size-memories way again: the starting "
+            "size remembered at the start, the "
+            "shortened size remembered as the thing "
+            "arrives, the same shortened size "
+            "remembered again at the end, and "
+            "Blender fills in the shortening across "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will shorten.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the shortening "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The shortening will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A shortening is read against the shape "
+            "the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "at its own shape - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. "
+            "The whole shortening is measured from "
+            "this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing shortens "
+         "yet. One remembered size cannot shorten - "
+         "it takes the shortened size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_shorten_start,
+     "check": _check_shorten_start},
+    {"title": "Shorten it and keep it short",
+     "skill": "The shortening itself: length in to "
+              "0.5 remembered at frame 24, and the "
+              "same shortened size remembered again "
+              "at frame 48, width and height staying "
+              "at 1.0 the whole way",
+     "how": "Pull the thing in along its length - "
+            "its X scale down to 0.5, half its start, "
+            "its width (Y scale) and height (Z scale) "
+            "left at 1.0 - and remember its size at "
+            "frame 24, then leave it exactly where it "
+            "is and remember the same shortened size "
+            "again at frame 48. Blender fills in the "
+            "shortening across between. The tick "
+            "reads the real evaluated size sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the end length ratio "
+            "(X, against the start) must land between "
+            "0.35 and 0.65, the end width and height "
+            "ratios must each land between 0.8 and "
+            "1.2, the sampled length ratio must never "
+            "fall below 0.3, and the sampled width "
+            "and height ratios must never rise above "
+            "1.35 or fall below 0.65. A widen does "
+            "not tick it - it spreads the width out "
+            "instead; a grow does not tick it - it makes "
+            "every side bigger; a shrink does not "
+            "tick it - it makes every side smaller; "
+            "a stretch in height does not tick it - "
+            "it raises the height instead; a lengthen "
+            "does not tick it - it stretches the "
+            "length out instead; a small shorten does "
+            "not tick it - it barely "
+            "pulls in; and a shorten that returns does "
+            "not tick it - it ends back at its "
+            "starting size. Probed before building: the "
+            "size memories read back on the "
+            "supported Blenders - 5.3.0 and 4.2.5 read "
+            "back byte-identical probe outputs.",
+     "teach": [
+         "1. Go to frame 24. Pull the thing in along "
+         "its length to half its size - set its X "
+         "scale to 0.5, leaving its Y and Z scale "
+         "at 1.0 - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same shortened size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing shortens, "
+         "arrives by the middle, and then stays - "
+         "short, at its own width and height, to "
+         "the end."],
+     "missing": "No real shortening yet - end length "
+                "of 0.35 to 0.65 of the start with the "
+                "width and height each at 0.8 to 1.2, "
+                "at least 20 frames across, the length "
+                "never falling below 0.3 and the width "
+                "and height never rising above 1.35 or "
+                "falling below 0.65 of the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_shorten,
+     "check": _check_shorten},
+    {"title": "Watch it shorten, then save",
+     "skill": "Finishing a shortening: the shortening "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing shorten and stay short. Then save "
+            "the file. The size memories are saved "
+            "with it, so the shortening still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the shortening "
+            "is still proven from the evaluated "
+            "size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing shorten - it pulls "
+         "in along its length, arrives at half "
+         "its length, and stays short there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the shortening is still "
+         "proven.",
+         "3. That is animation's fifty-second piece: "
+         "shortening - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "shortened size remembered as it arrives, "
+         "the same shortened size remembered again "
+         "at the end, and Blender filling in the "
+         "shortening across between. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the shortening still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_shorten_finish,
+     "check": _check_shorten_finish},
+]
+
+def _thicken_measure(context):
+    """(span, end X ratio, end Y ratio, end Z
+    ratio, highest sampled Y ratio, lowest sampled
+    X ratio, highest sampled X ratio, lowest
+    sampled Z ratio, highest sampled Z ratio) for
+    the main thing's size memories. A real
+    thickening spreads a thing across its width
+    only and KEEPS it thick, with its length and
+    height staying at their starting size the
+    whole way: the end ratios are the evaluated
+    size at the last memory against the size at
+    the first, and the sampled extremes are the
+    widest width and the narrowest and widest
+    lengths and heights anywhere across the span
+    against the start. A thickening is the
+    spreading across one way and the staying and
+    the unchanged length and height together - so a
+    widen, which spreads the length out too, cannot
+    pass, and neither can a grow that makes a
+    thing bigger on every side, a lengthen that
+    stretches the length out instead, a stretch that
+    raises the height instead, a shrink that
+    makes it smaller on every side, a small
+    thicken that barely spreads, or a thicken
+    that returns home. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_thicken.py; outputs
+    byte-identical on both versions): size memories at (1, 1, 1), (1, 2, 1)
+    and (1, 2, 1) across frames 1/24/48 read back
+    (span 47, end X 1.0, end Y 2.0, end Z 1.0,
+    highest Y 2.0, lowest X 1.0, highest X 1.0,
+    lowest Z 1.0, highest Z 1.0, reading (1, 2, 1)
+    at frames 24/36/48); a widen read end X 2.0
+    with highest X 2.0, a grow read end X 2.5 with
+    end Y 2.5 and end Z 2.5 and highest Y 2.5, a lengthen read end X 2.0 with
+    highest X 2.0, a stretch in height read end Z 2.0 with highest
+    Z 2.0, a shrink read end Y 0.4 with lowest X 0.4 and lowest Z 0.4, a small thicken read end Y 1.3, and a
+    thicken that returned read end Y 1.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    end = sizes[-1]
+    high_y = max(s[1] / start[1] for s in sizes)
+    low_x = min(s[0] / start[0] for s in sizes)
+    high_x = max(s[0] / start[0] for s in sizes)
+    low_z = min(s[2] / start[2] for s in sizes)
+    high_z = max(s[2] / start[2] for s in sizes)
+    return (last - first, end[0] / start[0],
+            end[1] / start[1], end[2] / start[2],
+            high_y, low_x, high_x, low_z, high_z)
+
+
+def _check_thicken(context):
+    span, end_x, end_y, end_z, high_y, low_x, high_x, low_z, high_z = _thicken_measure(context)
+    return (span >= 20 and 1.7 <= end_y <= 2.3
+            and 0.8 <= end_x <= 1.2
+            and 0.8 <= end_z <= 1.2
+            and high_y <= 2.35
+            and low_x >= 0.65 and high_x <= 1.35
+            and low_z >= 0.65 and high_z <= 1.35)
+
+
+def _check_thicken_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_thicken_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_thicken_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_thicken(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_thicken(context):
+        return
+    scene = context.scene
+    if not _check_thicken_start(context):
+        _anim_run_thicken_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0], start[1] * 2.0,
+                      start[2])
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_thicken_finish(context):
+    return (_check_saved(context)
+            and _check_thicken(context))
+
+
+def _anim_run_thicken_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_THICKEN_STEPS = [
+    {"title": "Pick the thing that will thicken",
+     "skill": "One thing, chosen: a thickening starts "
+              "with a single thing that will spread "
+              "out across its width",
+     "how": "The lengthen piece stretched a thing's "
+            "length out to twice its size, and the "
+            "shorten piece pulled its length back in; "
+            "this piece takes the other way across: it "
+            "spreads a thing across its width (its Y "
+            "side) to twice its size and keeps it "
+            "thick, its length and height staying at "
+            "their own size the whole way: a ribbon "
+            "growing fat, a book swelling thick, a "
+            "wall filling out. The way is the "
+            "size-memories way again: the starting "
+            "size remembered at the start, the "
+            "thickened size remembered as the thing "
+            "arrives, the same thickened size "
+            "remembered again at the end, and "
+            "Blender fills in the thickening across "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will thicken.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the thickening "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The thickening will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A thickening is read against the shape "
+            "the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "at its own shape - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. "
+            "The whole thickening is measured from "
+            "this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing thickens "
+         "yet. One remembered size cannot thicken - "
+         "it takes the thickened size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_thicken_start,
+     "check": _check_thicken_start},
+    {"title": "Thicken it and keep it thick",
+     "skill": "The thickening itself: width out to "
+              "2.0 remembered at frame 24, and the "
+              "same thickened size remembered again "
+              "at frame 48, length and height staying "
+              "at 1.0 the whole way",
+     "how": "Spread the thing across its width - "
+            "its Y scale up to 2.0, twice its start, "
+            "its length (X scale) and height (Z scale) "
+            "left at 1.0 - and remember its size at "
+            "frame 24, then leave it exactly where it "
+            "is and remember the same thickened size "
+            "again at frame 48. Blender fills in the "
+            "thickening across between. The tick "
+            "reads the real evaluated size sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the end width ratio "
+            "(Y, against the start) must land between "
+            "1.7 and 2.3, the end length and height "
+            "ratios must each land between 0.8 and "
+            "1.2, the sampled width ratio must never "
+            "rise above 2.35, and the sampled length "
+            "and height ratios must never rise above "
+            "1.35 or fall below 0.65. A widen does "
+            "not tick it - it spreads the length out "
+            "too; a grow does not tick it - it makes "
+            "every side bigger; a lengthen does not "
+            "tick it - it stretches the length instead; "
+            "a stretch in height does not tick it - "
+            "it raises the height instead; a shrink does not "
+            "tick it - it makes every side smaller; "
+            "a small thicken does not tick it - it barely "
+            "spreads; and a thicken that returns does "
+            "not tick it - it ends back at its "
+            "starting size. Probed before building: the "
+            "size memories read back on the "
+            "supported Blenders - 5.3.0 and 4.2.5 read "
+            "back byte-identical probe outputs.",
+     "teach": [
+         "1. Go to frame 24. Spread the thing across "
+         "its width to twice its size - set its Y "
+         "scale to 2.0, leaving its X and Z scale "
+         "at 1.0 - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same thickened size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing thickens, "
+         "arrives by the middle, and then stays - "
+         "thick, at its own length and height, to "
+         "the end."],
+     "missing": "No real thickening yet - end width "
+                "of 1.7 to 2.3 of the start with the "
+                "length and height each at 0.8 to 1.2, "
+                "at least 20 frames across, the width "
+                "never rising above 2.35 and the length "
+                "and height never rising above 1.35 or "
+                "falling below 0.65 of the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_thicken,
+     "check": _check_thicken},
+    {"title": "Watch it thicken, then save",
+     "skill": "Finishing a thickening: the thickening "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing thicken and stay thick. Then save "
+            "the file. The size memories are saved "
+            "with it, so the thickening still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the thickening "
+            "is still proven from the evaluated "
+            "size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing thicken - it spreads "
+         "out across its width, arrives at twice "
+         "its width, and stays thick there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the thickening is still "
+         "proven.",
+         "3. That is animation's fifty-third piece: "
+         "thickening - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "thickened size remembered as it arrives, "
+         "the same thickened size remembered again "
+         "at the end, and Blender filling in the "
+         "thickening across between. The next piece "
+         "pulls a thing in across its width to "
+         "half its size and keeps it thin - its "
+         "length and height staying at their own "
+         "size. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the thickening still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_thicken_finish,
+     "check": _check_thicken_finish},
+]
+
+def _thin_measure(context):
+    """(span, end X ratio, end Y ratio, end Z
+    ratio, lowest sampled Y ratio, lowest sampled
+    X ratio, highest sampled X ratio, lowest
+    sampled Z ratio, highest sampled Z ratio) for
+    the main thing's size memories. A real
+    thinning pulls a thing in across its width
+    only and KEEPS it thin, with its length and
+    height staying at their starting size the
+    whole way: the end ratios are the evaluated
+    size at the last memory against the size at
+    the first, and the sampled extremes are the
+    thinnest width and the narrowest and widest
+    lengths and heights anywhere across the span
+    against the start. A thinning is the
+    pulling in across one way and the staying and
+    the unchanged length and height together - so a
+    widen, which spreads the sides out, cannot
+    pass, and neither can a thicken that spreads
+    the width out instead, a grow that makes a
+    thing bigger on every side, a shrink that
+    makes it smaller on every side, a lengthen that
+    stretches the length out instead, a stretch that
+    raises the height instead, a small
+    thin that barely pulls in, or a thin
+    that returns home. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_thin.py; outputs
+    byte-identical on both versions): size memories at (1, 1, 1), (1, 0.5, 1)
+    and (1, 0.5, 1) across frames 1/24/48 read back
+    (span 47, end X 1.0, end Y 0.5, end Z 1.0,
+    lowest Y 0.5, lowest X 1.0, highest X 1.0,
+    lowest Z 1.0, highest Z 1.0, reading (1, 0.5, 1)
+    at frames 24/36/48); a widen read end X 2.0
+    with end Y 2.0 and highest X 2.0, a thicken read end Y 2.0, a grow read end X 2.5 with
+    end Z 2.5 and highest X 2.5, a shrink read end
+    X 0.4 with lowest Y 0.4 and lowest Z 0.4, a
+    lengthen read end X 2.0 with highest
+    X 2.0, a stretch in height read end Z 2.0 with highest
+    Z 2.0, a small thin read end Y 0.85, and a
+    thin that returned read end Y 1.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    end = sizes[-1]
+    low_y = min(s[1] / start[1] for s in sizes)
+    low_x = min(s[0] / start[0] for s in sizes)
+    high_x = max(s[0] / start[0] for s in sizes)
+    low_z = min(s[2] / start[2] for s in sizes)
+    high_z = max(s[2] / start[2] for s in sizes)
+    return (last - first, end[0] / start[0],
+            end[1] / start[1], end[2] / start[2],
+            low_y, low_x, high_x, low_z, high_z)
+
+
+def _check_thin(context):
+    span, end_x, end_y, end_z, low_y, low_x, high_x, low_z, high_z = _thin_measure(context)
+    return (span >= 20 and 0.35 <= end_y <= 0.65
+            and 0.8 <= end_x <= 1.2
+            and 0.8 <= end_z <= 1.2
+            and low_y >= 0.3
+            and low_x >= 0.65 and high_x <= 1.35
+            and low_z >= 0.65 and high_z <= 1.35)
+
+
+def _check_thin_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_thin_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_thin_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_thin(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_thin(context):
+        return
+    scene = context.scene
+    if not _check_thin_start(context):
+        _anim_run_thin_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0], start[1] * 0.5,
+                      start[2])
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_thin_finish(context):
+    return (_check_saved(context)
+            and _check_thin(context))
+
+
+def _anim_run_thin_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_THIN_STEPS = [
+    {"title": "Pick the thing that will get thin",
+     "skill": "One thing, chosen: a thinning starts "
+              "with a single thing that will pull "
+              "in across its width",
+     "how": "The thicken piece spread a thing's "
+            "width out to twice its size; this piece "
+            "takes the same way back in: it pulls a "
+            "thing in across its width (its Y side) to "
+            "half its size and keeps it thin, its "
+            "length and height staying at their own "
+            "size the whole way: a book pressed thin, "
+            "a wall slimming down, a ribbon drawn "
+            "narrow. The way is the "
+            "size-memories way again: the starting "
+            "size remembered at the start, the "
+            "thinned size remembered as the thing "
+            "arrives, the same thinned size "
+            "remembered again at the end, and "
+            "Blender fills in the thinning across "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will get thin.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the thinning "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The thinning will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A thinning is read against the shape "
+            "the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "at its own shape - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. "
+            "The whole thinning is measured from "
+            "this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing gets thin "
+         "yet. One remembered size cannot thin - "
+         "it takes the thinned size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_thin_start,
+     "check": _check_thin_start},
+    {"title": "Thin it and keep it thin",
+     "skill": "The thinning itself: width in to "
+              "0.5 remembered at frame 24, and the "
+              "same thinned size remembered again "
+              "at frame 48, length and height staying "
+              "at 1.0 the whole way",
+     "how": "Pull the thing in across its width - "
+            "its Y scale down to 0.5, half its start, "
+            "its length (X scale) and height (Z scale) "
+            "left at 1.0 - and remember its size at "
+            "frame 24, then leave it exactly where it "
+            "is and remember the same thinned size "
+            "again at frame 48. Blender fills in the "
+            "thinning across between. The tick "
+            "reads the real evaluated size sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the end width ratio "
+            "(Y, against the start) must land between "
+            "0.35 and 0.65, the end length and height "
+            "ratios must each land between 0.8 and "
+            "1.2, the sampled width ratio must never "
+            "fall below 0.3, and the sampled length "
+            "and height ratios must never rise above "
+            "1.35 or fall below 0.65. A widen does "
+            "not tick it - it spreads the sides out "
+            "instead; a thicken does not tick it - it spreads "
+            "the width out instead; a grow does not tick it - it makes "
+            "every side bigger; a shrink does not "
+            "tick it - it makes every side smaller; "
+            "a lengthen does not tick it - "
+            "it stretches the length out instead; a stretch in height does not tick it - "
+            "it raises the height instead; a small thin does "
+            "not tick it - it barely "
+            "pulls in; and a thin that returns does "
+            "not tick it - it ends back at its "
+            "starting size. Probed before building: the "
+            "size memories read back on the "
+            "supported Blenders - 5.3.0 and 4.2.5 read "
+            "back byte-identical probe outputs.",
+     "teach": [
+         "1. Go to frame 24. Pull the thing in across "
+         "its width to half its size - set its Y "
+         "scale to 0.5, leaving its X and Z scale "
+         "at 1.0 - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same thinned size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing gets thin, "
+         "arrives by the middle, and then stays - "
+         "thin, at its own length and height, to "
+         "the end."],
+     "missing": "No real thinning yet - end width "
+                "of 0.35 to 0.65 of the start with the "
+                "length and height each at 0.8 to 1.2, "
+                "at least 20 frames across, the width "
+                "never falling below 0.3 and the length "
+                "and height never rising above 1.35 or "
+                "falling below 0.65 of the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_thin,
+     "check": _check_thin},
+    {"title": "Watch it thin, then save",
+     "skill": "Finishing a thinning: the thinning "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing get thin and stay thin. Then save "
+            "the file. The size memories are saved "
+            "with it, so the thinning still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the thinning "
+            "is still proven from the evaluated "
+            "size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing thin - it pulls "
+         "in across its width, arrives at half "
+         "its width, and stays thin there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the thinning is still "
+         "proven.",
+         "3. That is animation's fifty-fourth piece: "
+         "thinning - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "thinned size remembered as it arrives, "
+         "the same thinned size remembered again "
+         "at the end, and Blender filling in the "
+         "thinning across between. The next piece "
+         "raises a thing up through its height to "
+         "twice its size and keeps it tall - its "
+         "length and width staying at their own "
+         "size. It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the thinning still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_thin_finish,
+     "check": _check_thin_finish},
+]
+
+def _taller_measure(context):
+    """(span, end X ratio, end Y ratio, end Z
+    ratio, highest sampled Z ratio, lowest sampled
+    X ratio, highest sampled X ratio, lowest
+    sampled Y ratio, highest sampled Y ratio) for
+    the main thing's size memories. A real
+    growing taller raises a thing up through its
+    height only and KEEPS it tall, with its length
+    and width staying at their starting size the
+    whole way: the end ratios are the evaluated
+    size at the last memory against the size at
+    the first, and the sampled extremes are the
+    tallest height and the narrowest and widest
+    lengths and widths anywhere across the span
+    against the start. A growing taller is the
+    raising up through one way and the staying and
+    the unchanged length and width together - so a
+    widen, which spreads the sides out, cannot
+    pass, and neither can a thicken that spreads
+    the width out instead, a lengthen that
+    stretches the length out instead, a grow that makes a
+    thing bigger on every side, a shrink that
+    makes it smaller on every side, a crouch that
+    lowers the height instead, a small
+    taller that barely raises, or a taller
+    that returns home. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_taller.py; outputs
+    byte-identical on both versions): size memories at (1, 1, 1), (1, 1, 2)
+    and (1, 1, 2) across frames 1/24/48 read back
+    (span 47, end X 1.0, end Y 1.0, end Z 2.0,
+    highest Z 2.0, lowest X 1.0, highest X 1.0,
+    lowest Y 1.0, highest Y 1.0, reading (1, 1, 2)
+    at frames 24/36/48); a widen read end X 2.0
+    with end Y 2.0 and highest X 2.0, a thicken read end Y 2.0 with highest Y 2.0, a lengthen read end X 2.0 with highest
+    X 2.0, a grow read end X 2.5 with
+    end Z 2.5 and highest Z 2.5, a shrink read end
+    X 0.4 with lowest X 0.4 and lowest Y 0.4, a
+    crouch read end Z 0.5, a small taller read end Z 1.3, and a
+    taller that returned read end Z 1.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    keys = _anim_keys(main, "scale")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    step = max(1, (last - first) // 24)
+    sizes = []
+    frame = first
+    while frame <= last:
+        sizes.append(_anim_eval(context, main, frame,
+                                "scale"))
+        frame += step
+    if sizes and (last - first) % step:
+        sizes.append(_anim_eval(context, main, last,
+                                "scale"))
+    start = sizes[0]
+    if min(start) <= 0.05:
+        return 0, 0.0, 0.0, 99.0, 99.0, 0.0, 99.0, 0.0, 99.0
+    end = sizes[-1]
+    high_z = max(s[2] / start[2] for s in sizes)
+    low_x = min(s[0] / start[0] for s in sizes)
+    high_x = max(s[0] / start[0] for s in sizes)
+    low_y = min(s[1] / start[1] for s in sizes)
+    high_y = max(s[1] / start[1] for s in sizes)
+    return (last - first, end[0] / start[0],
+            end[1] / start[1], end[2] / start[2],
+            high_z, low_x, high_x, low_y, high_y)
+
+
+def _check_taller(context):
+    span, end_x, end_y, end_z, high_z, low_x, high_x, low_y, high_y = _taller_measure(context)
+    return (span >= 20 and 1.7 <= end_z <= 2.3
+            and 0.8 <= end_x <= 1.2
+            and 0.8 <= end_y <= 1.2
+            and high_z <= 2.35
+            and low_x >= 0.65 and high_x <= 1.35
+            and low_y >= 0.65 and high_y <= 1.35)
+
+
+def _check_taller_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "scale")
+    return bool(keys) and min(k[0] for k in keys) <= 2
+
+
+def _anim_run_taller_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_taller_start(context):
+        return
+    context.scene.frame_set(1)
+    main.scale = (1.0, 1.0, 1.0)
+    main.keyframe_insert(data_path="scale", frame=1)
+
+
+def _anim_run_taller(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_taller(context):
+        return
+    scene = context.scene
+    if not _check_taller_start(context):
+        _anim_run_taller_start(context)
+    keys = _anim_keys(main, "scale")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "scale")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.scale = (start[0], start[1],
+                      start[2] * 2.0)
+        main.keyframe_insert(data_path="scale",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_taller_finish(context):
+    return (_check_saved(context)
+            and _check_taller(context))
+
+
+def _anim_run_taller_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_TALLER_STEPS = [
+    {"title": "Pick the thing that will get taller",
+     "skill": "One thing, chosen: a growing taller starts "
+              "with a single thing that will rise "
+              "up through its height",
+     "how": "The thin piece pulled a thing in "
+            "across its width to half its size; this piece "
+            "takes the height way up: it raises a "
+            "thing up through its height (its Z side) to "
+            "twice its size and keeps it tall, its "
+            "length and width staying at their own "
+            "size the whole way: a tower rising tall, "
+            "a post stretching up, a stack growing "
+            "high. The way is the "
+            "size-memories way again: the starting "
+            "size remembered at the start, the "
+            "taller size remembered as the thing "
+            "arrives, the same taller size "
+            "remembered again at the end, and "
+            "Blender fills in the growing taller across "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will get taller.",
+         "2. Leave its size alone for now. The starting "
+         "size is remembered first; the growing taller "
+         "comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The growing taller will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting size",
+     "skill": "The start, remembered at its own shape: "
+              "a size memory at frame 1, scale 1, 1, 1",
+     "how": "A growing taller is read against the shape "
+            "the thing starts from, so the start "
+            "remembers the thing's size at frame 1, "
+            "at its own shape - Blender stores a "
+            "size memory (a keyframe on the thing's "
+            "Scale). The tick reads the size memories "
+            "themselves: one must sit at the start. "
+            "The whole growing taller is measured from "
+            "this size.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing at its own shape, scale 1, 1, 1.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its size there too, "
+         "and this piece reads the size memory.",
+         "3. Scrub forward and back: nothing gets taller "
+         "yet. One remembered size cannot grow taller - "
+         "it takes the taller size remembered, and "
+         "remembered again, too."],
+     "missing": "No starting size remembered yet - "
+                "remember the thing's size at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_taller_start,
+     "check": _check_taller_start},
+    {"title": "Make it taller and keep it tall",
+     "skill": "The growing taller itself: height up to "
+              "2.0 remembered at frame 24, and the "
+              "same taller size remembered again "
+              "at frame 48, length and width staying "
+              "at 1.0 the whole way",
+     "how": "Raise the thing up through its height - "
+            "its Z scale up to 2.0, twice its start, "
+            "its length (X scale) and width (Y scale) "
+            "left at 1.0 - and remember its size at "
+            "frame 24, then leave it exactly where it "
+            "is and remember the same taller size "
+            "again at frame 48. Blender fills in the "
+            "growing taller across between. The tick "
+            "reads the real evaluated size sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the end height ratio "
+            "(Z, against the start) must land between "
+            "1.7 and 2.3, the end length and width "
+            "ratios must each land between 0.8 and "
+            "1.2, the sampled height ratio must never "
+            "rise above 2.35, and the sampled length "
+            "and width ratios must never rise above "
+            "1.35 or fall below 0.65. A widen does "
+            "not tick it - it spreads the sides out "
+            "instead; a thicken does not tick it - it spreads "
+            "the width out instead; a lengthen does not tick it - "
+            "it stretches the length out instead; a grow does not tick it - it makes "
+            "every side bigger; a shrink does not "
+            "tick it - it makes every side smaller; "
+            "a crouch does not tick it - "
+            "it lowers the height instead; a small taller does "
+            "not tick it - it barely "
+            "raises; and a taller that returns does "
+            "not tick it - it ends back at its "
+            "starting size. Probed before building: the "
+            "size memories read back on the "
+            "supported Blenders - 5.3.0 and 4.2.5 read "
+            "back byte-identical probe outputs.",
+     "teach": [
+         "1. Go to frame 24. Raise the thing up through "
+         "its height to twice its size - set its Z "
+         "scale to 2.0, leaving its X and Y scale "
+         "at 1.0 - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same taller size - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing grows taller, "
+         "arrives by the middle, and then stays - "
+         "tall, at its own length and width, to "
+         "the end."],
+     "missing": "No real growing taller yet - end height "
+                "of 1.7 to 2.3 of the start with the "
+                "length and width each at 0.8 to 1.2, "
+                "at least 20 frames across, the height "
+                "never rising above 2.35 and the length "
+                "and width never rising above 1.35 or "
+                "falling below 0.65 of the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_taller,
+     "check": _check_taller},
+    {"title": "Watch it grow taller, then save",
+     "skill": "Finishing a growing taller: the growing taller "
+              "really plays, and the file is saved "
+              "with the size memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing grow taller and stay tall. Then save "
+            "the file. The size memories are saved "
+            "with it, so the growing taller still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the growing taller "
+            "is still proven from the evaluated "
+            "size.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing grow taller - it rises "
+         "up through its height, arrives at twice "
+         "its height, and stays tall there.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the growing taller is still "
+         "proven.",
+         "3. That is animation's fifty-fifth piece: "
+         "growing taller - one thing, its size remembered "
+         "at its own shape at the start, its "
+         "taller size remembered as it arrives, "
+         "the same taller size remembered again "
+         "at the end, and Blender filling in the "
+         "growing taller across between. The next piece "
+         "turns a thing a quarter turn to the side "
+         "and keeps it turned - left facing "
+         "sideways, its side axes staying level. "
+         "It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the growing taller still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_taller_finish,
+     "check": _check_taller_finish},
+]
+
+def _sideturn_measure(context):
+    """(span, end turn, side-axis drift,
+    place drift) for the main thing's facing
+    memories. A real turn to the side turns a
+    thing a quarter turn on the upright (Z)
+    axis and leaves it facing sideways: the
+    end turn - read against the starting
+    facing - must land between 1.25 and 1.9,
+    the side axes (X and Y) must hold within
+    0.35, and the thing must stay within 0.5
+    of its place. A turn around cannot pass -
+    it turns the whole half circle; a spin
+    cannot pass - it turns the whole way round
+    and ends facing forward again; a wag cannot
+    pass - it ends facing forward too; a small
+    turn cannot pass - it only turns 0.4; a
+    tilt cannot pass - it leans on a side axis
+    and never turns; and a turn that returns
+    cannot pass - it ends facing forward.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_sideturn.py;
+    outputs byte-identical on both versions):
+    facing memories level at frame 1 and turned
+    1.5708 on the Z axis at frames 24 and 48
+    read back (span 47, ends 1.5708, side drift
+    0.0, place drift 0.0, reading 0 at frame 1
+    and 1.5708 at frames 24/36/48); a turn
+    around read ends 3.1416, a spin read ends
+    6.2832, a wag read ends 0.0, a small turn
+    read ends 0.4, a tilt read ends 0.0 with
+    side drift 1.0, and a turn that returned
+    read ends 0.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    ends = rots[-1][2] - start[2]
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, ends, side, drift)
+
+
+def _check_sideturn_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_sideturn_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_sideturn_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_sideturn(context):
+    span, ends, side, drift = \
+        _sideturn_measure(context)
+    return (span >= 20 and 1.25 <= ends <= 1.9
+            and side <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_sideturn(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_sideturn(context):
+        return
+    scene = context.scene
+    if not _check_sideturn_start(context):
+        _anim_run_sideturn_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0], start[1],
+                               start[2] + 1.5708)
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_sideturn_finish(context):
+    return (_check_saved(context)
+            and _check_sideturn(context))
+
+
+def _anim_run_sideturn_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_SIDETURN_STEPS = [
+    {"title": "Pick the thing that will turn to the side",
+     "skill": "One thing, chosen: a turn to the side "
+              "starts with a single thing that will "
+              "turn a quarter turn and face sideways",
+     "how": "The turn-around piece turned a thing "
+            "right around - the whole half circle - "
+            "and left it facing the other way; this "
+            "piece turns it only a quarter turn, to "
+            "the side, and leaves it facing sideways. "
+            "The way is the facing-memories way "
+            "again: the facing remembered at the "
+            "start, the turned facing remembered as "
+            "the thing arrives, the same turned "
+            "facing remembered again at the end, and "
+            "Blender fills in the turning between. "
+            "Start by picking the thing: any shape "
+            "you already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will turn to the side.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "turn comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The turn will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis, rotation Z 0",
+     "how": "A turn to the side is read against the "
+            "facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, facing forward - Blender stores "
+            "a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole turn is measured from this facing.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns "
+         "yet. One remembered facing cannot turn - "
+         "it takes the turned facing remembered, "
+         "and remembered again, too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_sideturn_start,
+     "check": _check_sideturn_start},
+    {"title": "Turn it a quarter turn to the side and keep it turned",
+     "skill": "The turn itself: turned a quarter turn "
+              "on the upright axis remembered at "
+              "frame 24, and the same turned facing "
+              "remembered again at frame 48, never "
+              "leaning, in its own place the whole way",
+     "how": "Turn the thing a quarter turn to the "
+            "side and remember its facing at frame "
+            "24, then leave it exactly where it is "
+            "and remember the same turned facing "
+            "again at frame 48, keeping it in its "
+            "place and never leaning it: turned "
+            "1.5708 of a turn unit (radians) - a "
+            "quarter turn - on the upright axis. "
+            "Blender fills in the turning between. "
+            "The tick reads the real evaluated facing "
+            "sampled across the span: the span must "
+            "run at least 20 frames, the end turn on "
+            "the upright axis must land between 1.25 "
+            "and 1.9, the side axes must hold within "
+            "0.35, and the thing must stay within 0.5 "
+            "of its place. A turn around does not "
+            "tick it - it turns the whole half "
+            "circle; a spin does not tick it - it "
+            "turns the whole way round and ends "
+            "facing forward again; a wag does not "
+            "tick it - it ends facing forward too; a "
+            "small turn does not tick it - it barely "
+            "turns; a tilt does not tick it - it "
+            "leans and never turns; and a turn that "
+            "returns does not tick it - it ends "
+            "facing forward. Probed before building "
+            "on both supported Blenders: the facing "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Turn the thing a quarter "
+         "turn to the side - so it faces sideways - "
+         "and press Remember how it faces right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same turned facing - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing turns - "
+         "a quarter turn by the middle - and ends "
+         "facing sideways, never leaning."],
+     "missing": "No real turn to the side yet - an end "
+                "turn of 1.25 to 1.9 on the upright "
+                "axis, at least 20 frames across, in "
+                "its own place, and no leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_sideturn,
+     "check": _check_sideturn},
+    {"title": "Watch it turn to the side, then save",
+     "skill": "Finishing a turn to the side: the "
+              "turning really plays, and the file is "
+              "saved with the facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn a quarter turn and end facing "
+            "sideways. Then save the file. The facing "
+            "memories are saved with it, so the turn "
+            "still plays when the file is opened "
+            "again. The tick checks the save and that "
+            "the turn is still proven from the "
+            "evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing turn - it ends facing "
+         "sideways, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the turn is still "
+         "proven.",
+         "3. That is animation's fifty-sixth piece: "
+         "turning to the side - one thing, its facing "
+         "remembered at the start, turned a quarter "
+         "turn remembered as it arrives, the same "
+         "turned facing remembered again at the "
+         "end, facing sideways, and Blender filling "
+         "in the turning between. The next piece "
+         "leaps a thing up and forward through the "
+         "air and lands it far ahead on the ground. "
+         "It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the turn still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_sideturn_finish,
+     "check": _check_sideturn_finish},
+]
+
+def _leap_measure(context):
+    """(span, forward displacement - the end
+    place's X minus the start place's X, peak
+    height above the start height, ends height
+    gap - how far apart the two ends sit in
+    height, sideways drift - the largest change
+    along the Y axis from the start place across
+    all sampled places) for the main thing's
+    place memories. A real leap leaves the
+    ground, travels far forward, and lands back
+    on the ground far ahead: the forward
+    displacement must land between 2.2 and 3.8,
+    the peak height must clear at least 1.2
+    above the start height somewhere across the
+    span, the two ends must sit within 0.35 of
+    each other in height, and the sideways drift
+    must stay within 0.5, all read from the real
+    evaluated place sampled across the span. A
+    slide cannot pass - it travels along the
+    ground and never leaves it, so its peak is
+    0.0; a bounce in place cannot pass - it arcs
+    but lands where it started, so its forward
+    is 0.0; a glide-like travel cannot pass - it
+    starts up in the air and ends still up, so
+    its ends gap is 1.0; a small leap cannot
+    pass - it only travels 1.0 forward and peaks
+    0.4 up; a leap that returns cannot pass - it
+    ends back where it started, so its forward
+    is 0.0; and a diagonal leap cannot pass - it
+    drifts 1.5 sideways. Probed on Blender 5.3.0
+    and 4.2.5 before building (probe
+    scratch/probe_leap.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 1), (1.5, 0, 3) and
+    (3, 0, 1) across frames 1/24/48 read back
+    (span 47, forward 3.0, peak 2.0, ends gap
+    0.0, sideways 0.0, reading (2.5375, 0, 2.0)
+    partway down at frame 36); a slide read peak
+    0.0, a bounce read forward 0.0 with peak
+    2.5, a glide-like travel read ends gap 1.0,
+    a small leap read forward 1.0 with peak 0.4,
+    a leap that returned read forward 0.0, and a
+    diagonal leap read sideways 1.5 - none can
+    pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    forward = end[0] - start[0]
+    peak = max(p[2] for p in places) - start[2]
+    side = max(abs(p[1] - start[1]) for p in places)
+    return (last - first, forward, peak,
+            abs(end[2] - start[2]), side)
+
+
+def _check_leap_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_leap_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_leap_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_leap(context):
+    span, forward, peak, ends, side = \
+        _leap_measure(context)
+    return (span >= 20 and 2.2 <= forward <= 3.8
+            and peak >= 1.2 and ends <= 0.35
+            and side <= 0.5)
+
+
+def _anim_run_leap(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_leap(context):
+        return
+    scene = context.scene
+    if not _check_leap_start(context):
+        _anim_run_leap_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] + 1.5, start[1],
+                     start[2] + 2.0)
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0] + 3.0, start[1], start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_leap_finish(context):
+    return (_check_saved(context)
+            and _check_leap(context))
+
+
+def _anim_run_leap_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_LEAP_STEPS = [
+    {"title": "Pick the thing that will leap",
+     "skill": "One thing, chosen: a leap starts with a "
+              "single thing that will leave the ground, "
+              "travel far forward in the air, and land "
+              "far ahead",
+     "how": "The hop piece sent a thing up in the air "
+            "and across, and the slide piece sent it "
+            "far across the ground without ever leaving "
+            "it; this piece is the bigger, committed "
+            "jump - a leap: up off the ground, far "
+            "forward through the air, and landed far "
+            "ahead back on the ground: a frog's leap, a "
+            "character clearing a wide gap. The way is "
+            "the place-memories way again: the starting "
+            "place remembered down on the ground, the "
+            "mid-leap place remembered up in the air "
+            "halfway across, the landing place "
+            "remembered far ahead on the ground at the "
+            "end, and Blender fills in the leap between. "
+            "Start by picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will leap.",
+         "2. Leave it down on the ground for now. The "
+         "starting place is remembered first; the "
+         "leap comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The leap will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, down on the ground",
+     "skill": "The start, remembered down on the ground: "
+              "a place memory at frame 1, location "
+              "(0, 0, 1) - its centre 1.0 up, resting "
+              "on the ground",
+     "how": "A leap is read against the place the thing "
+            "leaps from, so the start remembers the "
+            "thing's place at frame 1, down on the "
+            "ground - Blender stores a place memory (a "
+            "keyframe on the thing's Location). The tick "
+            "reads the place memories themselves: one "
+            "must sit at the start, and the thing must "
+            "be down low there - its centre between 0.7 "
+            "and 1.3 units up, resting on the ground. "
+            "The whole leap is measured from this place, "
+            "and the thing must land at this same height, "
+            "far ahead, at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting down on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing leaps "
+         "yet. One remembered place cannot leap - "
+         "it takes the mid-leap place and the "
+         "landing remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "down on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_leap_start,
+     "check": _check_leap_start},
+    {"title": "Leap it up and forward and land it far ahead",
+     "skill": "The leap itself: up in the air halfway "
+              "across - place (1.5, 0, 3) remembered at "
+              "frame 24 - and landed far ahead on the "
+              "ground - place (3, 0, 1) remembered at "
+              "frame 48 - never travelling sideways",
+     "how": "Leap the thing up and forward: lift it up "
+            "in the air and halfway across - 1.5 units "
+            "forward along X and 2.0 units up, to "
+            "(1.5, 0, 3) - and remember its place at "
+            "frame 24, then land it far ahead on the "
+            "ground - 3.0 units forward along X, back "
+            "down at its starting height, at (3, 0, 1) - "
+            "and remember its place again at frame 48, "
+            "never travelling sideways along Y. Blender "
+            "fills in the leap between. The tick reads "
+            "the real evaluated place sampled across "
+            "the span: the span must run at least 20 "
+            "frames, the forward travel from the start "
+            "place to the landing place must land "
+            "between 2.2 and 3.8, the highest place "
+            "must clear at least 1.2 above the start "
+            "height, the landing height must sit within "
+            "0.35 of the start height, and the sideways "
+            "drift along Y must stay within 0.5 across "
+            "all samples. A slide does not tick it - it "
+            "travels along the ground and never leaves "
+            "it; a bounce in place does not tick it - "
+            "it arcs but lands where it started; a "
+            "glide-like travel does not tick it - it "
+            "starts up in the air and ends still up, "
+            "never landing back at its start height; a "
+            "small leap does not tick it - it barely "
+            "travels and barely rises; a leap that "
+            "returns does not tick it - it ends back "
+            "where it started; and a diagonal leap does "
+            "not tick it - it drifts sideways as it "
+            "leaps. Probed before building on both "
+            "supported Blenders: the place memories "
+            "read back and interpolate identically on "
+            "each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "across - 1.5 units forward - and lift it "
+         "well up in the air, 2.0 units up, and press "
+         "Remember where it is right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units forward in all - back down "
+         "on the ground at its starting height, and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing leaps - up "
+         "in the air by the middle - and lands far "
+         "ahead on the ground."],
+     "missing": "No real leap yet - forward travel of "
+                "2.2 to 3.8, a peak at least 1.2 above "
+                "the start height, landed within 0.35 "
+                "of the start height, at least 20 frames "
+                "across, and sideways drift within 0.5.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_leap,
+     "check": _check_leap},
+    {"title": "Watch it leap, then save",
+     "skill": "Finishing a leap: the leaping really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing leave the ground, fly far forward "
+            "through the air, and land far ahead on the "
+            "ground. Then save the file. The place "
+            "memories are saved with it, so the leap "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the leap "
+            "is still proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing leap - it ends on the "
+         "ground, far ahead of where it started.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the leap is still "
+         "proven.",
+         "3. That is animation's fifty-seventh piece: "
+         "leaping - one thing, its place remembered "
+         "down on the ground at the start, up in the "
+         "air halfway across in the middle, landed "
+         "far ahead on the ground at the end, and "
+         "Blender filling in the leap between. The "
+         "next piece dives a thing down and forward "
+         "from up high and lands it far ahead on the "
+         "ground. It is still "
+         "not the whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the leap still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_leap_finish,
+     "check": _check_leap_finish},
+]
+
+def _dive_measure(context):
+    """(span, forward displacement - the end
+    place's X minus the start place's X, drop -
+    the start height minus the end height, peak
+    height above the start height, end height
+    deviation - how far the end height sits from
+    the ground centre 1.0 in absolute terms,
+    sideways drift - the largest change along
+    the Y axis from the start place across all
+    sampled places) for the main thing's place
+    memories. A real dive starts up high, travels
+    far forward as it falls, and lands on the
+    ground far ahead, never rising first: the
+    forward displacement must land between 2.2
+    and 3.8, the drop must land between 1.7 and
+    2.3, the highest sampled place must never
+    sit more than 0.35 above the start height,
+    the end height must sit within 0.35 of the
+    ground centre 1.0 in absolute terms (the
+    probe's formulation - the landing is read
+    against the ground itself, not against the
+    start, so a fall that ends still up in the
+    air cannot pass however far it dropped),
+    and the sideways drift must stay within 0.5,
+    all read from the real evaluated place
+    sampled across the span. A leap cannot pass
+    - it rises first and lands at its start
+    height, so its peak is 2.0 and its drop is
+    0.0; a glide cannot pass - it travels forward
+    but only drops 1.0 and ends still up at 3.0,
+    so its end deviation is 2.0; a descend in
+    place cannot pass - it drops the full 2.0
+    but never travels, so its forward is 0.0; a
+    slide cannot pass - it travels along the
+    ground and never drops, so its drop is 0.0;
+    a small dive cannot pass - it only travels
+    1.0 forward and drops 0.4; a dive that rises
+    back cannot pass - it ends up high again, so
+    its drop is 0.0 and its end deviation is 2.0;
+    and a diagonal dive cannot pass - it drifts
+    1.5 sideways. Probed on Blender 5.3.0 and
+    4.2.5 before building (probe
+    scratch/probe_dive.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 3), (1.5, 0, 2) and
+    (3, 0, 1) across frames 1/24/48 read back
+    (span 47, forward 3.0, drop 2.0, peak 0.0,
+    end deviation 0.0, sideways 0.0, reading
+    (2.5375, 0, 1.3083) partway down at frame
+    36); a leap read drop 0.0 with peak 2.0, a
+    glide read drop 1.0 with end deviation 2.0,
+    a descend in place read forward 0.0, a slide
+    read drop 0.0, a small dive read forward 1.0
+    with drop 0.4, a dive that rose back read
+    drop 0.0 with end deviation 2.0, and a
+    diagonal dive read sideways 1.5 - none can
+    pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    forward = end[0] - start[0]
+    drop = start[2] - end[2]
+    peak = max(p[2] for p in places) - start[2]
+    side = max(abs(p[1] - start[1]) for p in places)
+    return (last - first, forward, drop, peak,
+            abs(end[2] - 1.0), side)
+
+
+def _check_dive_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 2.7 <= start[2] <= 3.3
+
+
+def _anim_run_dive_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_dive_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 3.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_dive(context):
+    span, forward, drop, peak, enddev, side = \
+        _dive_measure(context)
+    return (span >= 20 and 2.2 <= forward <= 3.8
+            and 1.7 <= drop <= 2.3 and peak <= 0.35
+            and enddev <= 0.35 and side <= 0.5)
+
+
+def _anim_run_dive(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_dive(context):
+        return
+    scene = context.scene
+    if not _check_dive_start(context):
+        _anim_run_dive_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] + 1.5, start[1],
+                     start[2] - 1.0)
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0] + 3.0, start[1],
+                     start[2] - 2.0)
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_dive_finish(context):
+    return (_check_saved(context)
+            and _check_dive(context))
+
+
+def _anim_run_dive_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_DIVE_STEPS = [
+    {"title": "Pick the thing that will dive",
+     "skill": "One thing, chosen: a dive starts with a "
+              "single thing that will fall far forward "
+              "from up high and land far ahead",
+     "how": "The leap piece sent a thing up off the "
+            "ground and far forward through the air, "
+            "and the glide piece carried it forward "
+            "while it stayed up high; this piece is "
+            "the committed fall - a dive: starting up "
+            "high, down and forward all the way, and "
+            "landed far ahead on the ground: a bird "
+            "diving, a character plunging off a ledge. "
+            "The way is the place-memories way again: "
+            "the starting place remembered up high, "
+            "the mid-dive place remembered halfway "
+            "down and halfway across, the landing "
+            "place remembered far ahead on the ground "
+            "at the end, and Blender fills in the dive "
+            "between. Start by picking the thing: any "
+            "shape you already have, or a fresh cube "
+            "here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will dive.",
+         "2. Leave it where it is for now. The starting "
+         "place is remembered first, up high; the "
+         "dive comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The dive will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, up high",
+     "skill": "The start, remembered up high: a place "
+              "memory at frame 1, location (0, 0, 3) - "
+              "its centre 3.0 up, high above the ground",
+     "how": "A dive is read against the place the thing "
+            "dives from, so the start remembers the "
+            "thing's place at frame 1, up high - "
+            "Blender stores a place memory (a keyframe "
+            "on the thing's Location). The tick reads "
+            "the place memories themselves: one must "
+            "sit at the start, and the thing must be up "
+            "high there - its centre between 2.7 and "
+            "3.3 units up. The whole dive is measured "
+            "from this place, and the thing must land "
+            "on the ground, far ahead, at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing up high, 3.0 units up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing dives "
+         "yet. One remembered place cannot dive - "
+         "it takes the mid-dive place and the "
+         "landing remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "up high.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_dive_start,
+     "check": _check_dive_start},
+    {"title": "Dive it down and forward and land it far ahead",
+     "skill": "The dive itself: halfway down and halfway "
+              "across - place (1.5, 0, 2) remembered at "
+              "frame 24 - and landed far ahead on the "
+              "ground - place (3, 0, 1) remembered at "
+              "frame 48 - never travelling sideways",
+     "how": "Dive the thing down and forward: bring it "
+            "halfway down and halfway across - 1.5 "
+            "units forward along X and 1.0 unit down, "
+            "to (1.5, 0, 2) - and remember its place at "
+            "frame 24, then land it far ahead on the "
+            "ground - 3.0 units forward along X and "
+            "2.0 units down in all, its centre 1.0 up "
+            "at (3, 0, 1) - and remember its place "
+            "again at frame 48, never travelling "
+            "sideways along Y, and never rising first - "
+            "a dive only falls. Blender fills in the "
+            "dive between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "forward travel from the start place to "
+            "the landing place must land between 2.2 "
+            "and 3.8, the drop from the start height "
+            "to the landing height must land between "
+            "1.7 and 2.3, no sampled place may sit "
+            "more than 0.35 above the start height, "
+            "the landing height must sit within 0.35 "
+            "of the ground centre 1.0, and the "
+            "sideways drift along Y must stay within "
+            "0.5 across all samples. A leap does not "
+            "tick it - it rises first and lands back "
+            "at its start height; a glide does not "
+            "tick it - it travels forward but barely "
+            "drops and ends still up in the air; a "
+            "descend in place does not tick it - it "
+            "drops straight down where it started; a "
+            "slide does not tick it - it travels along "
+            "the ground and never drops; a small dive "
+            "does not tick it - it barely travels and "
+            "barely drops; a dive that rises back does "
+            "not tick it - it ends up high again; and "
+            "a diagonal dive does not tick it - it "
+            "drifts sideways as it dives. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "across - 1.5 units forward - and halfway "
+         "down, 1.0 unit down, and press Remember "
+         "where it is right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units forward in all and 2.0 "
+         "units down in all, landed on the ground - "
+         "and remember again.",
+         "3. Scrub the Timeline: the thing dives - "
+         "halfway down by the middle - and lands far "
+         "ahead on the ground."],
+     "missing": "No real dive yet - forward travel of "
+                "2.2 to 3.8, a drop of 1.7 to 2.3, "
+                "never rising more than 0.35 above the "
+                "start height, landed within 0.35 of "
+                "the ground centre 1.0, at least 20 "
+                "frames across, and sideways drift "
+                "within 0.5.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_dive,
+     "check": _check_dive},
+    {"title": "Watch it dive, then save",
+     "skill": "Finishing a dive: the diving really "
+              "plays, and the file is saved with the "
+              "place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing fall down and forward from up high "
+            "and land far ahead on the ground. Then "
+            "save the file. The place memories are "
+            "saved with it, so the dive still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the dive is "
+            "still proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing dive - it ends on the "
+         "ground, far ahead of where it started.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the dive is still "
+         "proven.",
+         "3. That is animation's fifty-eighth piece: "
+         "diving - one thing, its place remembered "
+         "up high at the start, halfway down halfway "
+         "across in the middle, landed far ahead on "
+         "the ground at the end, and Blender filling "
+         "in the dive between. The next piece turns a "
+         "thing right around to look behind and "
+         "brings it back to facing forward again. "
+         "It is still not the whole "
+         "craft: performances are built from pieces "
+         "like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the dive still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_dive_finish,
+     "check": _check_dive_finish},
+]
+
+def _lookback_measure(context):
+    """(span, peak absolute Z turn, end
+    absolute Z turn, side-axis drift, place
+    drift) for the main thing's facing
+    memories. A real look behind turns a thing
+    the whole half circle on the upright (Z)
+    axis - right around so it faces behind -
+    and then turns it back to facing forward
+    again: the peak turn - the largest absolute
+    Z turn from the starting facing sampled
+    across the span - must land between 2.8 and
+    3.5, the end turn must settle within 0.35
+    of the starting facing, the side axes (X
+    and Y) must hold within 0.35, and the thing
+    must stay within 0.5 of its place. A turn
+    around cannot pass - it turns the whole
+    half circle but stays there, so its end
+    turn is 3.1416; a spin cannot pass - it
+    turns the whole way round, so its peak and
+    end turns are 6.2832; a wag cannot pass -
+    it only turns 0.4 at its peak; a small look
+    cannot pass - it only turns 1.0; a tilt
+    cannot pass - it leans on a side axis, so
+    its side drift is 1.0 and it never turns;
+    and a look that stays cannot pass - it is
+    a turn around under another name, ending
+    at 3.1416. Probed on Blender 5.3.0 and
+    4.2.5 before building (probe
+    scratch/probe_lookback.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, turned 3.1416
+    on the Z axis at frame 24 and level again
+    at frame 48 read back (span 47, peak
+    3.1416, end 0.0, side drift 0.0, place
+    drift 0.0, reading (0, 0, 1.5708) partway
+    back at frame 36); a turn around read peak
+    3.1416 with end 3.1416, a spin read peak
+    6.2832 with end 6.2832, a wag read peak
+    0.4, a small look read peak 1.0 with end
+    1.0, a tilt read peak 0.0 with side drift
+    1.0, and a look that stayed read end
+    3.1416 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    peak = max(abs(r[2] - start[2]) for r in rots)
+    end = abs(rots[-1][2] - start[2])
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, peak, end, side, drift)
+
+
+def _check_lookback_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_lookback_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_lookback_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_lookback(context):
+    span, peak, end, side, drift = \
+        _lookback_measure(context)
+    return (span >= 20 and 2.8 <= peak <= 3.5
+            and end <= 0.35 and side <= 0.35
+            and drift <= 0.5)
+
+
+def _anim_run_lookback(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_lookback(context):
+        return
+    scene = context.scene
+    if not _check_lookback_start(context):
+        _anim_run_lookback_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 23)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] + 3.1416)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0], start[1],
+                           start[2])
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_lookback_finish(context):
+    return (_check_saved(context)
+            and _check_lookback(context))
+
+
+def _anim_run_lookback_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_LOOKBACK_STEPS = [
+    {"title": "Pick the thing that will look behind",
+     "skill": "One thing, chosen: looking behind "
+              "starts with a single thing that will "
+              "turn right around to face behind and "
+              "then come back to facing forward",
+     "how": "The turn-around piece turned a thing "
+            "right around - the whole half circle - "
+            "and left it facing the other way; this "
+            "piece turns it the whole half circle to "
+            "look behind, and then brings it back to "
+            "facing forward again. The way is the "
+            "facing-memories way again: the facing "
+            "remembered at the start, the turned "
+            "facing remembered at the middle, the "
+            "starting facing remembered again at "
+            "the end, and Blender fills in the "
+            "turning between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will look behind.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "look behind comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The look will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis, rotation (0, 0, 0)",
+     "how": "Looking behind is read against the "
+            "facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, facing forward - Blender stores "
+            "a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole look is measured from this facing: "
+            "the thing must turn the whole half "
+            "circle away from it and come back to it.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns "
+         "yet. One remembered facing cannot look "
+         "behind - it takes the turned facing "
+         "remembered, and the starting facing "
+         "remembered again, too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_lookback_start,
+     "check": _check_lookback_start},
+    {"title": "Turn it right around to look behind, then bring it back",
+     "skill": "The look itself: turned the whole half "
+              "circle on the upright axis - rotation Z "
+              "3.1416 - remembered at frame 24, and "
+              "back to facing forward remembered at "
+              "frame 48, never leaning, in its own "
+              "place the whole way",
+     "how": "Turn the thing right around - the whole "
+            "half circle, so it faces behind - and "
+            "remember its facing at frame 24, then "
+            "turn it back to facing forward and "
+            "remember the starting facing again at "
+            "frame 48, keeping it in its place and "
+            "never leaning it: turned 3.1416 of a "
+            "turn unit (radians) - a half circle - on "
+            "the upright axis at the middle. Blender "
+            "fills in the turning between. The tick "
+            "reads the real evaluated facing sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the largest turn on the "
+            "upright axis must land between 2.8 and "
+            "3.5, the end turn must settle within "
+            "0.35 of the starting facing, the side "
+            "axes must hold within 0.35, and the "
+            "thing must stay within 0.5 of its "
+            "place. A turn around does not tick it - "
+            "it turns the whole half circle but "
+            "stays there, facing behind at the end; "
+            "a spin does not tick it - it turns the "
+            "whole way round; a wag does not tick "
+            "it - it barely turns; a small look does "
+            "not tick it - it turns only part of the "
+            "way; a tilt does not tick it - it leans "
+            "and never turns; and a look that stays "
+            "does not tick it - it never comes back. "
+            "Probed before building on both "
+            "supported Blenders: the facing memories "
+            "read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Go to frame 24. Turn the thing right "
+         "around - the whole half circle, so it "
+         "faces behind - and press Remember how it "
+         "faces right now.",
+         "2. Go to frame 48. Turn it back to facing "
+         "forward, exactly as it started, and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing turns - "
+         "right around by the middle, facing "
+         "behind - and comes back to facing "
+         "forward, never leaning."],
+     "missing": "No real look behind yet - a peak "
+                "turn of 2.8 to 3.5 on the upright "
+                "axis, an end turn within 0.35 of the "
+                "start, at least 20 frames across, in "
+                "its own place, and no leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_lookback,
+     "check": _check_lookback},
+    {"title": "Watch it look behind, then save",
+     "skill": "Finishing a look behind: the turning "
+              "really plays, and the file is saved "
+              "with the facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn right around to face behind "
+            "and come back to facing forward. Then "
+            "save the file. The facing memories are "
+            "saved with it, so the look still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the look is "
+            "still proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing look behind - it faces "
+         "behind at the middle and ends facing "
+         "forward again, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the look is still "
+         "proven.",
+         "3. That is animation's fifty-ninth piece: "
+         "looking behind - one thing, its facing "
+         "remembered at the start, turned the whole "
+         "half circle remembered at the middle, "
+         "the starting facing remembered again at "
+         "the end, facing forward again, and "
+         "Blender filling in the turning between. "
+         "The next piece moves a thing diagonally - "
+         "forward and sideways together on the "
+         "ground, ending far ahead and far across. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one "
+         "change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the look still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_lookback_finish,
+     "check": _check_lookback_finish},
+]
+
+def _diagonal_measure(context):
+    """(span, forward - the end place's X minus
+    the start place's X, sideways - the end
+    place's Y minus the start place's Y, peak -
+    the highest sampled height above the start
+    height, trough - how far the lowest sampled
+    place sits below the start height, end
+    height deviation - how far the end height
+    sits from the start height in absolute terms)
+    for the main thing's place memories. A real
+    diagonal move travels far forward and far
+    sideways together, staying on the ground the
+    whole way and keeping its new place at the
+    end: the forward travel must land between
+    2.2 and 3.8, the sideways travel must land
+    between 2.2 and 3.8, no sampled place may sit
+    more than 0.35 above the start height or
+    more than 0.35 below it, and the end height
+    must sit within 0.35 of the start height,
+    all read from the real evaluated place
+    sampled across the span. A slide cannot pass
+    - it travels sideways only, so its forward is
+    0.0; a forward move cannot pass - it travels
+    forward only, so its sideways is 0.0; a leap
+    cannot pass - it rises high along the way, so
+    its peak is 2.0; a small diagonal cannot pass
+    - it only travels 1.0 forward and 1.0
+    sideways; a diagonal that returns cannot pass
+    - it ends back at its start, so its forward
+    and sideways are both 0.0; and a diagonal up
+    in the air cannot pass - it ends high, so its
+    peak and end deviation are both 2.0. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_diagonal.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 1), (1.5, 1.5, 1) and
+    (3, 3, 1) across frames 1/24/48 read back
+    (span 47, forward 3.0, sideways 3.0, peak
+    0.0, trough 0.0, end deviation 0.0, reading
+    (2.5375, 2.5375, 1) partway across at frame
+    36); a slide read forward 0.0, a forward move
+    read sideways 0.0, a leap read peak 2.0, a
+    small diagonal read forward 1.0 with sideways
+    1.0, a diagonal that returned read forward
+    0.0 with sideways 0.0, and a diagonal up in
+    the air read peak 2.0 with end deviation 2.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    forward = end[0] - start[0]
+    sideways = end[1] - start[1]
+    peak = max(p[2] for p in places) - start[2]
+    trough = start[2] - min(p[2] for p in places)
+    return (last - first, forward, sideways, peak,
+            trough, abs(end[2] - start[2]))
+
+
+def _check_diagonal_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_diagonal_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_diagonal_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_diagonal(context):
+    span, forward, sideways, peak, trough, enddev = \
+        _diagonal_measure(context)
+    return (span >= 20 and 2.2 <= forward <= 3.8
+            and 2.2 <= sideways <= 3.8
+            and peak <= 0.35 and trough <= 0.35
+            and enddev <= 0.35)
+
+
+def _anim_run_diagonal(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_diagonal(context):
+        return
+    scene = context.scene
+    if not _check_diagonal_start(context):
+        _anim_run_diagonal_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] + 1.5, start[1] + 1.5,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0] + 3.0, start[1] + 3.0,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_diagonal_finish(context):
+    return (_check_saved(context)
+            and _check_diagonal(context))
+
+
+def _anim_run_diagonal_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_DIAGONAL_STEPS = [
+    {"title": "Pick the thing that will move diagonally",
+     "skill": "One thing, chosen: a diagonal move "
+              "starts with a single thing that will "
+              "travel forward and sideways together",
+     "how": "The slide piece carried a thing sideways "
+            "across the ground and the move pieces "
+            "carried one forward; this piece travels "
+            "both ways at once - a diagonal: forward "
+            "and sideways together, on the ground the "
+            "whole way, ending far ahead and far "
+            "across at once. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "mid-diagonal place remembered halfway "
+            "forward and halfway across, the end "
+            "place remembered far ahead and far "
+            "across at the end, and Blender fills in "
+            "the diagonal between. Start by picking "
+            "the thing: any shape you already have, "
+            "or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will move diagonally.",
+         "2. Leave it where it is for now. The starting "
+         "place is remembered first, on the ground; "
+         "the diagonal comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The diagonal will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, location "
+              "(0, 0, 1) - its centre 1.0 up, resting "
+              "on the ground",
+     "how": "A diagonal is read against the place the "
+            "thing starts from, so the start remembers "
+            "the thing's place at frame 1, on the "
+            "ground - Blender stores a place memory (a "
+            "keyframe on the thing's Location). The "
+            "tick reads the place memories themselves: "
+            "one must sit at the start, and the thing "
+            "must be on the ground there - its centre "
+            "between 0.7 and 1.3 units up. The whole "
+            "diagonal is measured from this place, and "
+            "the thing must end far ahead and far "
+            "across, still on the ground.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing on the ground, its centre 1.0 up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing moves "
+         "yet. One remembered place cannot move "
+         "diagonally - it takes the mid-diagonal "
+         "place and the end place remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_diagonal_start,
+     "check": _check_diagonal_start},
+    {"title": "Move it diagonally forward and sideways and keep it there",
+     "skill": "The diagonal itself: halfway forward "
+              "and halfway across - place (1.5, 1.5, 1) "
+              "remembered at frame 24 - and far ahead "
+              "and far across - place (3, 3, 1) "
+              "remembered at frame 48 - on the ground "
+              "the whole way",
+     "how": "Move the thing diagonally: bring it "
+            "halfway forward and halfway across - 1.5 "
+            "units forward along X and 1.5 units "
+            "sideways along Y, to (1.5, 1.5, 1) - and "
+            "remember its place at frame 24, then move "
+            "it the rest of the way - 3.0 units forward "
+            "and 3.0 units sideways in all, to "
+            "(3, 3, 1) - and remember its place again "
+            "at frame 48, staying on the ground the "
+            "whole way and keeping its new place at "
+            "the end. Blender fills in the diagonal "
+            "between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "forward travel from the start place to "
+            "the end place must land between 2.2 and "
+            "3.8, the sideways travel must land "
+            "between 2.2 and 3.8, no sampled place may "
+            "sit more than 0.35 above or below the "
+            "start height, and the end height must "
+            "sit within 0.35 of the start height. A "
+            "slide does not tick it - it travels "
+            "sideways only and never goes forward; a "
+            "forward move does not tick it - it never "
+            "travels sideways; a leap does not tick "
+            "it - it leaves the ground along the way; "
+            "a small diagonal does not tick it - it "
+            "barely travels either way; a diagonal "
+            "that returns does not tick it - it ends "
+            "back where it started; and a diagonal up "
+            "in the air does not tick it - it ends "
+            "high above the ground. Probed before "
+            "building on both supported Blenders: the "
+            "place memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "forward - 1.5 units - and halfway across - "
+         "1.5 units sideways - and press Remember "
+         "where it is right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units forward and 3.0 units "
+         "sideways in all, still on the ground - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing moves "
+         "diagonally - halfway across by the middle "
+         "- and ends far ahead and far across, on "
+         "the ground."],
+     "missing": "No real diagonal yet - forward "
+                "travel of 2.2 to 3.8 and sideways "
+                "travel of 2.2 to 3.8, on the ground "
+                "the whole way, at least 20 frames "
+                "across, and ending where it arrived.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_diagonal,
+     "check": _check_diagonal},
+    {"title": "Watch it move diagonally, then save",
+     "skill": "Finishing a diagonal: the moving "
+              "really plays, and the file is saved "
+              "with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing travel forward and sideways "
+            "together, on the ground, and end far "
+            "ahead and far across. Then save the file. "
+            "The place memories are saved with it, so "
+            "the diagonal still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the diagonal is still proven "
+            "from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing move diagonally - it ends "
+         "far ahead and far across from where it "
+         "started, still on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the diagonal is still "
+         "proven.",
+         "3. That is animation's sixtieth piece: "
+         "moving diagonally - one thing, its place "
+         "remembered on the ground at the start, "
+         "halfway forward and halfway across in the "
+         "middle, far ahead and far across at the "
+         "end, and Blender filling in the diagonal "
+         "between. The next piece moves a thing back "
+         "diagonally - backward and sideways together "
+         "on the ground, ending far behind and far "
+         "across. It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the diagonal still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_diagonal_finish,
+     "check": _check_diagonal_finish},
+]
+
+def _backdiagonal_measure(context):
+    """(span, backward - the start place's X minus
+    the end place's X, sideways - the end
+    place's Y minus the start place's Y, peak -
+    the highest sampled height above the start
+    height, trough - how far the lowest sampled
+    place sits below the start height, end
+    height deviation - how far the end height
+    sits from the start height in absolute terms)
+    for the main thing's place memories. A real
+    back-diagonal move travels far backward and
+    far sideways together, staying on the ground
+    the whole way and keeping its new place at
+    the end: the backward travel must land
+    between 2.2 and 3.8, the sideways travel must
+    land between 2.2 and 3.8, no sampled place
+    may sit more than 0.35 above the start height
+    or more than 0.35 below it, and the end
+    height must sit within 0.35 of the start
+    height, all read from the real evaluated
+    place sampled across the span. A slide cannot
+    pass - it travels sideways only, so its
+    backward is 0.0; a backward move cannot pass
+    - it travels backward only, so its sideways
+    is 0.0; a leap cannot pass - it rises high
+    along the way, so its peak is 2.0; a small
+    back-diagonal cannot pass - it only travels
+    1.0 backward and 1.0 sideways; a
+    back-diagonal that returns cannot pass - it
+    ends back at its start, so its backward and
+    sideways are both 0.0; and a back-diagonal
+    up in the air cannot pass - it ends high, so
+    its peak and end deviation are both 2.0.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe
+    scratch/probe_backdiagonal.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 1), (-1.5, 1.5, 1) and
+    (-3, 3, 1) across frames 1/24/48 read back
+    (span 47, backward 3.0, sideways 3.0, peak
+    0.0, trough 0.0, end deviation 0.0, reading
+    (-2.5375, 2.5375, 1) partway across at frame
+    36); a slide read backward 0.0, a backward
+    move read sideways 0.0, a leap read peak 2.0,
+    a small back-diagonal read backward 1.0 with
+    sideways 1.0, a back-diagonal that returned
+    read backward 0.0 with sideways 0.0, and a
+    back-diagonal up in the air read peak 2.0
+    with end deviation 2.0 - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    backward = start[0] - end[0]
+    sideways = end[1] - start[1]
+    peak = max(p[2] for p in places) - start[2]
+    trough = start[2] - min(p[2] for p in places)
+    return (last - first, backward, sideways, peak,
+            trough, abs(end[2] - start[2]))
+
+
+def _check_backdiagonal_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_backdiagonal_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_backdiagonal_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_backdiagonal(context):
+    span, backward, sideways, peak, trough, enddev = \
+        _backdiagonal_measure(context)
+    return (span >= 20 and 2.2 <= backward <= 3.8
+            and 2.2 <= sideways <= 3.8
+            and peak <= 0.35 and trough <= 0.35
+            and enddev <= 0.35)
+
+
+def _anim_run_backdiagonal(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_backdiagonal(context):
+        return
+    scene = context.scene
+    if not _check_backdiagonal_start(context):
+        _anim_run_backdiagonal_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] - 1.5, start[1] + 1.5,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0] - 3.0, start[1] + 3.0,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_backdiagonal_finish(context):
+    return (_check_saved(context)
+            and _check_backdiagonal(context))
+
+
+def _anim_run_backdiagonal_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_BACKDIAGONAL_STEPS = [
+    {"title": "Pick the thing that will move back diagonally",
+     "skill": "One thing, chosen: a back-diagonal "
+              "move starts with a single thing that "
+              "will travel backward and sideways "
+              "together",
+     "how": "The diagonal piece carried a thing "
+            "forward and sideways together; this "
+            "piece travels backward and sideways at "
+            "once - a back diagonal: backward and "
+            "sideways together, on the ground the "
+            "whole way, ending far behind and far "
+            "across at once. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "mid-back-diagonal place remembered "
+            "halfway back and halfway across, the "
+            "end place remembered far behind and "
+            "far across at the end, and Blender "
+            "fills in the back diagonal between. "
+            "Start by picking the thing: any shape "
+            "you already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will move back diagonally.",
+         "2. Leave it where it is for now. The starting "
+         "place is remembered first, on the ground; "
+         "the back diagonal comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The back diagonal will be told "
+         "in frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, location "
+              "(0, 0, 1) - its centre 1.0 up, resting "
+              "on the ground",
+     "how": "A back diagonal is read against the "
+            "place the thing starts from, so the "
+            "start remembers the thing's place at "
+            "frame 1, on the ground - Blender stores "
+            "a place memory (a keyframe on the "
+            "thing's Location). The tick reads the "
+            "place memories themselves: one must sit "
+            "at the start, and the thing must be on "
+            "the ground there - its centre between "
+            "0.7 and 1.3 units up. The whole back "
+            "diagonal is measured from this place, "
+            "and the thing must end far behind and "
+            "far across, still on the ground.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing on the ground, its centre 1.0 up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing moves "
+         "yet. One remembered place cannot move "
+         "back diagonally - it takes the "
+         "mid-back-diagonal place and the end "
+         "place remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_backdiagonal_start,
+     "check": _check_backdiagonal_start},
+    {"title": "Move it back diagonally (backward and sideways) and keep it there",
+     "skill": "The back diagonal itself: halfway back "
+              "and halfway across - place "
+              "(-1.5, 1.5, 1) remembered at frame 24 "
+              "- and far behind and far across - "
+              "place (-3, 3, 1) remembered at frame "
+              "48 - on the ground the whole way",
+     "how": "Move the thing back diagonally: bring "
+            "it halfway back and halfway across - "
+            "1.5 units backward along X and 1.5 "
+            "units sideways along Y, to "
+            "(-1.5, 1.5, 1) - and remember its place "
+            "at frame 24, then move it the rest of "
+            "the way - 3.0 units backward and 3.0 "
+            "units sideways in all, to (-3, 3, 1) - "
+            "and remember its place again at frame "
+            "48, staying on the ground the whole way "
+            "and keeping its new place at the end. "
+            "Blender fills in the back diagonal "
+            "between. The tick reads the real "
+            "evaluated place sampled across the "
+            "span: the span must run at least 20 "
+            "frames, the backward travel from the "
+            "start place to the end place must land "
+            "between 2.2 and 3.8, the sideways "
+            "travel must land between 2.2 and 3.8, "
+            "no sampled place may sit more than "
+            "0.35 above or below the start height, "
+            "and the end height must sit within 0.35 "
+            "of the start height. A slide does not "
+            "tick it - it travels sideways only and "
+            "never goes backward; a backward move "
+            "does not tick it - it never travels "
+            "sideways; a leap does not tick it - it "
+            "leaves the ground along the way; a "
+            "small back-diagonal does not tick it - "
+            "it barely travels either way; a "
+            "back-diagonal that returns does not "
+            "tick it - it ends back where it "
+            "started; and a back-diagonal up in the "
+            "air does not tick it - it ends high "
+            "above the ground. Probed before "
+            "building on both supported Blenders: "
+            "the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "back - 1.5 units - and halfway across - "
+         "1.5 units sideways - and press Remember "
+         "where it is right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units backward and 3.0 units "
+         "sideways in all, still on the ground - "
+         "and remember again.",
+         "3. Scrub the Timeline: the thing moves "
+         "back diagonally - halfway across by the "
+         "middle - and ends far behind and far "
+         "across, on the ground."],
+     "missing": "No real back diagonal yet - "
+                "backward travel of 2.2 to 3.8 and "
+                "sideways travel of 2.2 to 3.8, on "
+                "the ground the whole way, at least "
+                "20 frames across, and ending where "
+                "it arrived.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_backdiagonal,
+     "check": _check_backdiagonal},
+    {"title": "Watch it move back diagonally, then save",
+     "skill": "Finishing a back diagonal: the moving "
+              "really plays, and the file is saved "
+              "with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing travel backward and sideways "
+            "together, on the ground, and end far "
+            "behind and far across. Then save the "
+            "file. The place memories are saved with "
+            "it, so the back diagonal still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the back "
+            "diagonal is still proven from the "
+            "evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing move back diagonally - "
+         "it ends far behind and far across from "
+         "where it started, still on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the back diagonal is "
+         "still proven.",
+         "3. That is animation's sixty-first piece: "
+         "moving back diagonally - one thing, its "
+         "place remembered on the ground at the "
+         "start, halfway back and halfway across "
+         "in the middle, far behind and far across "
+         "at the end, and Blender filling in the "
+         "back diagonal between. The next piece "
+         "moves a thing diagonally the other way - "
+         "forward and sideways the other way together "
+         "on the ground, ending far ahead and far "
+         "across the other way. It is still not the "
+         "whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the back diagonal still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_backdiagonal_finish,
+     "check": _check_backdiagonal_finish},
+]
+
+def _otherdiagonal_measure(context):
+    """(span, forward - the end place's X minus
+    the start place's X, sideways_other - the start
+    place's Y minus the end place's Y, peak -
+    the highest sampled height above the start
+    height, trough - how far the lowest sampled
+    place sits below the start height, end
+    height deviation - how far the end height
+    sits from the start height in absolute terms)
+    for the main thing's place memories. A real
+    other-diagonal move travels far forward and far
+    sideways the other way together, staying on the ground the
+    whole way and keeping its new place at the
+    end: the forward travel must land between
+    2.2 and 3.8, the sideways travel must land
+    between 2.2 and 3.8, no sampled place may sit
+    more than 0.35 above the start height or
+    more than 0.35 below it, and the end height
+    must sit within 0.35 of the start height,
+    all read from the real evaluated place
+    sampled across the span. A slide the other way cannot pass
+    - it travels sideways the other way only, so its forward is
+    0.0; a forward move cannot pass - it travels
+    forward only, so its sideways_other is 0.0; a leap
+    cannot pass - it rises high along the way, so
+    its peak is 2.0; a small other-diagonal cannot pass
+    - it only travels 1.0 forward and 1.0
+    sideways; an other-diagonal that returns cannot pass
+    - it ends back at its start, so its forward
+    and sideways_other are both 0.0; and an other-diagonal up
+    in the air cannot pass - it ends high, so its
+    peak and end deviation are both 2.0. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_otherdiagonal.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 1), (1.5, -1.5, 1) and
+    (3, -3, 1) across frames 1/24/48 read back
+    (span 47, forward 3.0, sideways_other 3.0, peak
+    0.0, trough 0.0, end deviation 0.0, reading
+    (2.5375, -2.5375, 1) partway across at frame
+    36); a slide the other way read forward 0.0, a forward move
+    read sideways_other 0.0, a leap read peak 2.0, a
+    small other-diagonal read forward 1.0 with sideways_other
+    1.0, an other-diagonal that returned read forward
+    0.0 with sideways_other 0.0, and an other-diagonal up in
+    the air read peak 2.0 with end deviation 2.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    forward = end[0] - start[0]
+    sideways = start[1] - end[1]
+    peak = max(p[2] for p in places) - start[2]
+    trough = start[2] - min(p[2] for p in places)
+    return (last - first, forward, sideways, peak,
+            trough, abs(end[2] - start[2]))
+
+
+def _check_otherdiagonal_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_otherdiagonal_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherdiagonal_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_otherdiagonal(context):
+    span, forward, sideways, peak, trough, enddev = \
+        _otherdiagonal_measure(context)
+    return (span >= 20 and 2.2 <= forward <= 3.8
+            and 2.2 <= sideways <= 3.8
+            and peak <= 0.35 and trough <= 0.35
+            and enddev <= 0.35)
+
+
+def _anim_run_otherdiagonal(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherdiagonal(context):
+        return
+    scene = context.scene
+    if not _check_otherdiagonal_start(context):
+        _anim_run_otherdiagonal_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] + 1.5, start[1] - 1.5,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0] + 3.0, start[1] - 3.0,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherdiagonal_finish(context):
+    return (_check_saved(context)
+            and _check_otherdiagonal(context))
+
+
+def _anim_run_otherdiagonal_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERDIAGONAL_STEPS = [
+    {"title": "Pick the thing that will move diagonally the other way",
+     "skill": "One thing, chosen: an other-diagonal "
+              "move starts with a single thing that "
+              "will travel forward and sideways the "
+              "other way together",
+     "how": "The diagonal piece carried a thing "
+            "forward and sideways together; this "
+            "piece travels forward and sideways the "
+            "other way at once - an other diagonal: "
+            "forward and sideways the other way "
+            "together, on the ground the whole way, "
+            "ending far ahead and far across the "
+            "other way at once. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "mid-other-diagonal place remembered "
+            "halfway forward and halfway across the "
+            "other way, the end place remembered far "
+            "ahead and far across the other way at "
+            "the end, and Blender fills in the other "
+            "diagonal between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will move diagonally the other way.",
+         "2. Leave it where it is for now. The starting "
+         "place is remembered first, on the ground; "
+         "the other diagonal comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The other diagonal will be told "
+         "in frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, location "
+              "(0, 0, 1) - its centre 1.0 up, resting "
+              "on the ground",
+     "how": "An other diagonal is read against the "
+            "place the thing starts from, so the "
+            "start remembers the thing's place at "
+            "frame 1, on the ground - Blender stores "
+            "a place memory (a keyframe on the "
+            "thing's Location). The tick reads the "
+            "place memories themselves: one must sit "
+            "at the start, and the thing must be on "
+            "the ground there - its centre between "
+            "0.7 and 1.3 units up. The whole other "
+            "diagonal is measured from this place, "
+            "and the thing must end far ahead and far "
+            "across the other way, still on the ground.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing on the ground, its centre 1.0 up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing moves "
+         "yet. One remembered place cannot move "
+         "diagonally the other way - it takes the "
+         "mid-other-diagonal place and the end "
+         "place remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherdiagonal_start,
+     "check": _check_otherdiagonal_start},
+    {"title": "Move it diagonally forward and sideways the other way and keep it there",
+     "skill": "The other diagonal itself: halfway forward "
+              "and halfway across the other way - place "
+              "(1.5, -1.5, 1) remembered at frame 24 "
+              "- and far ahead and far across the other "
+              "way - place (3, -3, 1) remembered at frame "
+              "48 - on the ground the whole way",
+     "how": "Move the thing diagonally the other way: "
+            "bring it halfway forward and halfway "
+            "across the other way - 1.5 units forward "
+            "along X and 1.5 units sideways the other "
+            "way along Y, to (1.5, -1.5, 1) - and "
+            "remember its place at frame 24, then move "
+            "it the rest of the way - 3.0 units forward "
+            "and 3.0 units sideways the other way in "
+            "all, to (3, -3, 1) - and remember its "
+            "place again at frame 48, staying on the "
+            "ground the whole way and keeping its new "
+            "place at the end. Blender fills in the "
+            "other diagonal between. The tick reads "
+            "the real evaluated place sampled across "
+            "the span: the span must run at least 20 "
+            "frames, the forward travel from the "
+            "start place to the end place must land "
+            "between 2.2 and 3.8, the sideways-other "
+            "travel must land between 2.2 and 3.8, "
+            "no sampled place may sit more than "
+            "0.35 above or below the start height, "
+            "and the end height must sit within 0.35 "
+            "of the start height. A slide the other "
+            "way does not tick it - it travels "
+            "sideways the other way only and never "
+            "goes forward; a forward move does not "
+            "tick it - it never travels sideways the "
+            "other way; a leap does not tick it - it "
+            "leaves the ground along the way; a "
+            "small other-diagonal does not tick it - "
+            "it barely travels either way; an "
+            "other-diagonal that returns does not "
+            "tick it - it ends back where it "
+            "started; and an other-diagonal up in the "
+            "air does not tick it - it ends high "
+            "above the ground. Probed before "
+            "building on both supported Blenders: "
+            "the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "forward - 1.5 units - and halfway across "
+         "the other way - 1.5 units sideways the "
+         "other way - and press Remember where it "
+         "is right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units forward and 3.0 units "
+         "sideways the other way in all, still on "
+         "the ground - and remember again.",
+         "3. Scrub the Timeline: the thing moves "
+         "diagonally the other way - halfway across "
+         "the other way by the middle - and ends "
+         "far ahead and far across the other way, "
+         "on the ground."],
+     "missing": "No real other diagonal yet - "
+                "forward travel of 2.2 to 3.8 and "
+                "sideways-other travel of 2.2 to 3.8, on "
+                "the ground the whole way, at least "
+                "20 frames across, and ending where "
+                "it arrived.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherdiagonal,
+     "check": _check_otherdiagonal},
+    {"title": "Watch it move diagonally the other way, then save",
+     "skill": "Finishing an other diagonal: the moving "
+              "really plays, and the file is saved "
+              "with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing travel forward and sideways the "
+            "other way together, on the ground, and "
+            "end far ahead and far across the other "
+            "way. Then save the file. The place "
+            "memories are saved with it, so the other "
+            "diagonal still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the other diagonal is still "
+            "proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing move diagonally the other "
+         "way - it ends far ahead and far across "
+         "the other way from where it started, "
+         "still on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the other diagonal is "
+         "still proven.",
+         "3. That is animation's sixty-second piece: "
+         "moving diagonally the other way - one "
+         "thing, its place remembered on the ground "
+         "at the start, halfway forward and halfway "
+         "across the other way in the middle, far "
+         "ahead and far across the other way at the "
+         "end, and Blender filling in the other "
+         "diagonal between. The next piece "
+         "moves a thing back diagonally the other way - "
+         "backward and sideways the other way together "
+         "on the ground, ending far behind and far "
+         "across the other way. It is still not the "
+         "whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the other diagonal still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherdiagonal_finish,
+     "check": _check_otherdiagonal_finish},
+]
+
+def _backotherdiagonal_measure(context):
+    """(span, backward - the start place's X minus
+    the end place's X, sideways_other - the start
+    place's Y minus the end place's Y, peak -
+    the highest sampled height above the start
+    height, trough - how far the lowest sampled
+    place sits below the start height, end
+    height deviation - how far the end height
+    sits from the start height in absolute terms)
+    for the main thing's place memories. A real
+    back-other-diagonal move travels far backward and far
+    sideways the other way together, staying on the ground the
+    whole way and keeping its new place at the
+    end: the backward travel must land between
+    2.2 and 3.8, the sideways travel must land
+    between 2.2 and 3.8, no sampled place may sit
+    more than 0.35 above the start height or
+    more than 0.35 below it, and the end height
+    must sit within 0.35 of the start height,
+    all read from the real evaluated place
+    sampled across the span. A slide the other way cannot pass
+    - it travels sideways the other way only, so its backward is
+    0.0; a backward move cannot pass - it travels
+    backward only, so its sideways_other is 0.0; a leap
+    cannot pass - it rises high along the way, so
+    its peak is 2.0; a small back-other-diagonal cannot pass
+    - it only travels 1.0 backward and 1.0
+    sideways; a back-other-diagonal that returns cannot pass
+    - it ends back at its start, so its backward
+    and sideways_other are both 0.0; and a back-other-diagonal up
+    in the air cannot pass - it ends high, so its
+    peak and end deviation are both 2.0. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_backotherdiagonal.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 1), (-1.5, -1.5, 1) and
+    (-3, -3, 1) across frames 1/24/48 read back
+    (span 47, backward 3.0, sideways_other 3.0, peak
+    0.0, trough 0.0, end deviation 0.0, reading
+    (-2.5375, -2.5375, 1) partway across at frame
+    36); a slide the other way read backward 0.0, a backward move
+    read sideways_other 0.0, a leap read peak 2.0, a
+    small back-other-diagonal read backward 1.0 with sideways_other
+    1.0, a back-other-diagonal that returned read backward
+    0.0 with sideways_other 0.0, and a back-other-diagonal up in
+    the air read peak 2.0 with end deviation 2.0
+    - none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    backward = start[0] - end[0]
+    sideways = start[1] - end[1]
+    peak = max(p[2] for p in places) - start[2]
+    trough = start[2] - min(p[2] for p in places)
+    return (last - first, backward, sideways, peak,
+            trough, abs(end[2] - start[2]))
+
+
+def _check_backotherdiagonal_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_backotherdiagonal_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_backotherdiagonal_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_backotherdiagonal(context):
+    span, backward, sideways, peak, trough, enddev = \
+        _backotherdiagonal_measure(context)
+    return (span >= 20 and 2.2 <= backward <= 3.8
+            and 2.2 <= sideways <= 3.8
+            and peak <= 0.35 and trough <= 0.35
+            and enddev <= 0.35)
+
+
+def _anim_run_backotherdiagonal(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_backotherdiagonal(context):
+        return
+    scene = context.scene
+    if not _check_backotherdiagonal_start(context):
+        _anim_run_backotherdiagonal_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] - 1.5, start[1] - 1.5,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0] - 3.0, start[1] - 3.0,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_backotherdiagonal_finish(context):
+    return (_check_saved(context)
+            and _check_backotherdiagonal(context))
+
+
+def _anim_run_backotherdiagonal_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_BACKOTHERDIAGONAL_STEPS = [
+    {"title": "Pick the thing that will move back diagonally the other way",
+     "skill": "One thing, chosen: a back-other-diagonal "
+              "move starts with a single thing that "
+              "will travel backward and sideways the "
+              "other way together",
+     "how": "The diagonal piece carried a thing "
+            "forward and sideways together; this "
+            "piece travels backward and sideways the "
+            "other way at once - a back-other diagonal: "
+            "backward and sideways the other way "
+            "together, on the ground the whole way, "
+            "ending far behind and far across the "
+            "other way at once. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "mid-back-other-diagonal place remembered "
+            "halfway backward and halfway across the "
+            "other way, the end place remembered far "
+            "behind and far across the other way at "
+            "the end, and Blender fills in the other "
+            "back-other diagonal between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will move back diagonally the other way.",
+         "2. Leave it where it is for now. The starting "
+         "place is remembered first, on the ground; "
+         "the back-other diagonal comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The back-other diagonal will be told "
+         "in frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, location "
+              "(0, 0, 1) - its centre 1.0 up, resting "
+              "on the ground",
+     "how": "A back-other diagonal is read against the "
+            "place the thing starts from, so the "
+            "start remembers the thing's place at "
+            "frame 1, on the ground - Blender stores "
+            "a place memory (a keyframe on the "
+            "thing's Location). The tick reads the "
+            "place memories themselves: one must sit "
+            "at the start, and the thing must be on "
+            "the ground there - its centre between "
+            "0.7 and 1.3 units up. The whole other "
+            "back-other diagonal is measured from this place, "
+            "and the thing must end far behind and far "
+            "across the other way, still on the ground.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing on the ground, its centre 1.0 up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing moves "
+         "yet. One remembered place cannot move back "
+         "diagonally the other way - it takes the "
+         "mid-back-other-diagonal place and the end "
+         "place remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_backotherdiagonal_start,
+     "check": _check_backotherdiagonal_start},
+    {"title": "Move it back diagonally the other way (backward and sideways the other way) and keep it there",
+     "skill": "The back-other diagonal itself: halfway backward "
+              "and halfway across the other way - place "
+              "(-1.5, -1.5, 1) remembered at frame 24 "
+              "- and far behind and far across the other "
+              "way - place (-3, -3, 1) remembered at frame "
+              "48 - on the ground the whole way",
+     "how": "Move the thing back diagonally the other way: "
+            "bring it halfway backward and halfway "
+            "across the other way - 1.5 units backward "
+            "along X and 1.5 units sideways the other "
+            "way along Y, to (-1.5, -1.5, 1) - and "
+            "remember its place at frame 24, then move "
+            "it the rest of the way - 3.0 units backward "
+            "and 3.0 units sideways the other way in "
+            "all, to (-3, -3, 1) - and remember its "
+            "place again at frame 48, staying on the "
+            "ground the whole way and keeping its new "
+            "place at the end. Blender fills in the "
+            "back-other diagonal between. The tick reads "
+            "the real evaluated place sampled across "
+            "the span: the span must run at least 20 "
+            "frames, the backward travel from the "
+            "start place to the end place must land "
+            "between 2.2 and 3.8, the sideways-other "
+            "travel must land between 2.2 and 3.8, "
+            "no sampled place may sit more than "
+            "0.35 above or below the start height, "
+            "and the end height must sit within 0.35 "
+            "of the start height. A slide the other "
+            "way does not tick it - it travels "
+            "sideways the other way only and never "
+            "goes backward; a backward move does not "
+            "tick it - it never travels sideways the "
+            "other way; a leap does not tick it - it "
+            "leaves the ground along the way; a "
+            "small back-other-diagonal does not tick it - "
+            "it barely travels either way; an "
+            "back-other-diagonal that returns does not "
+            "tick it - it ends back where it "
+            "started; and a back-other-diagonal up in the "
+            "air does not tick it - it ends high "
+            "above the ground. Probed before "
+            "building on both supported Blenders: "
+            "the place memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "backward - 1.5 units - and halfway across "
+         "the other way - 1.5 units sideways the "
+         "other way - and press Remember where it "
+         "is right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units backward and 3.0 units "
+         "sideways the other way in all, still on "
+         "the ground - and remember again.",
+         "3. Scrub the Timeline: the thing moves back "
+         "diagonally the other way - halfway across "
+         "the other way by the middle - and ends "
+         "far behind and far across the other way, "
+         "on the ground."],
+     "missing": "No real back-other diagonal yet - "
+                "backward travel of 2.2 to 3.8 and "
+                "sideways-other travel of 2.2 to 3.8, on "
+                "the ground the whole way, at least "
+                "20 frames across, and ending where "
+                "it arrived.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_backotherdiagonal,
+     "check": _check_backotherdiagonal},
+    {"title": "Watch it move back diagonally the other way, then save",
+     "skill": "Finishing a back-other diagonal: the moving "
+              "really plays, and the file is saved "
+              "with the place memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing travel backward and sideways the "
+            "other way together, on the ground, and "
+            "end far behind and far across the other "
+            "way. Then save the file. The place "
+            "memories are saved with it, so the back-other "
+            "diagonal still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the back-other diagonal is still "
+            "proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing move back diagonally the other "
+         "way - it ends far behind and far across "
+         "the other way from where it started, "
+         "still on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the back-other diagonal is "
+         "still proven.",
+         "3. That is animation's sixty-third piece: "
+         "moving back diagonally the other way - one "
+         "thing, its place remembered on the ground "
+         "at the start, halfway backward and halfway "
+         "across the other way in the middle, far "
+         "behind and far across the other way at the "
+         "end, and Blender filling in the back-other "
+         "diagonal between. The next piece "
+         "turns a thing a quarter turn to the other side "
+         "and keeps it turned - left facing "
+         "sideways the other way, its side axes staying level. "
+         "It is still not the "
+         "whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the back-other diagonal still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_backotherdiagonal_finish,
+     "check": _check_backotherdiagonal_finish},
+]
+
+def _othersideturn_measure(context):
+    """(span, end turn, side-axis drift,
+    place drift) for the main thing's facing
+    memories. A real turn to the other side
+    turns a thing a quarter turn the other
+    way on the upright (Z) axis and leaves it
+    facing sideways the other way: the end
+    turn - read against the starting facing -
+    must land between -1.9 and -1.25, the side
+    axes (X and Y) must hold within 0.35, and
+    the thing must stay within 0.5 of its
+    place. A turn to the first side cannot
+    pass - it turns the other way; a turn
+    around cannot pass - it turns the whole
+    half circle (probed both ways: +3.1416 and
+    -3.1416, neither wraps into the bar); a
+    spin cannot pass - it turns the whole way
+    round; a wag cannot pass - it ends facing
+    forward; a small turn cannot pass - it
+    only turns -0.4; a tilt cannot pass - it
+    leans on a side axis and never turns; and
+    a turn that returns cannot pass - it ends
+    facing forward. Probed on Blender 5.3.0
+    and 4.2.5 before building (probe
+    scratch/probe_othersideturn.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1 and turned
+    -1.5708 on the Z axis at frames 24 and 48
+    read back (span 47, ends -1.5708, side
+    drift 0.0, place drift 0.0, reading 0 at
+    frame 1 and -1.5708 at frames 24/36/48);
+    a turn to the first side read ends 1.5708,
+    a turn around read ends 3.1416 and
+    -3.1416, a spin read ends -6.2832, a wag
+    read ends 0.0, a small turn read ends
+    -0.4, a tilt read ends 0.0 with side drift
+    1.0, and a turn that returned read ends
+    0.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    ends = rots[-1][2] - start[2]
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, ends, side, drift)
+
+
+def _check_othersideturn_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_othersideturn_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othersideturn_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_othersideturn(context):
+    span, ends, side, drift = \
+        _othersideturn_measure(context)
+    return (span >= 20 and -1.9 <= ends <= -1.25
+            and side <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_othersideturn(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othersideturn(context):
+        return
+    scene = context.scene
+    if not _check_othersideturn_start(context):
+        _anim_run_othersideturn_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off in (23, 47):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0], start[1],
+                               start[2] - 1.5708)
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_othersideturn_finish(context):
+    return (_check_saved(context)
+            and _check_othersideturn(context))
+
+
+def _anim_run_othersideturn_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERSIDETURN_STEPS = [
+    {"title": "Pick the thing that will turn to the other side",
+     "skill": "One thing, chosen: a turn to the other "
+              "side starts with a single thing that will "
+              "turn a quarter turn the other way and face "
+              "sideways the other way",
+     "how": "The turn-to-the-side piece turned a thing "
+            "a quarter turn one way and left it facing "
+            "sideways; this piece turns it a quarter "
+            "turn the other way, to the other side, and "
+            "leaves it facing sideways the other way. "
+            "The way is the facing-memories way "
+            "again: the facing remembered at the "
+            "start, the turned facing remembered as "
+            "the thing arrives, the same turned "
+            "facing remembered again at the end, and "
+            "Blender fills in the turning between. "
+            "Start by picking the thing: any shape "
+            "you already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will turn to the other side.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "turn comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The turn will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis, rotation Z 0",
+     "how": "A turn to the other side is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, facing forward - Blender stores "
+            "a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole turn is measured from this facing.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns "
+         "yet. One remembered facing cannot turn - "
+         "it takes the turned facing remembered, "
+         "and remembered again, too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_othersideturn_start,
+     "check": _check_othersideturn_start},
+    {"title": "Turn it a quarter turn to the other side and keep it turned",
+     "skill": "The turn itself: turned a quarter turn "
+              "the other way on the upright axis "
+              "remembered at frame 24, and the same "
+              "turned facing remembered again at "
+              "frame 48, never leaning, in its own "
+              "place the whole way",
+     "how": "Turn the thing a quarter turn to the "
+            "other side and remember its facing at "
+            "frame 24, then leave it exactly where "
+            "it is and remember the same turned "
+            "facing again at frame 48, keeping it in "
+            "its place and never leaning it: turned "
+            "-1.5708 of a turn unit (radians) - a "
+            "quarter turn the other way - on the "
+            "upright axis. Blender fills in the "
+            "turning between. The tick reads the "
+            "real evaluated facing sampled across "
+            "the span: the span must run at least 20 "
+            "frames, the end turn on the upright "
+            "axis must land between -1.9 and -1.25, "
+            "the side axes must hold within 0.35, "
+            "and the thing must stay within 0.5 of "
+            "its place. A turn to the first side "
+            "does not tick it - it turns the other "
+            "way; a turn around does not tick it - "
+            "it turns the whole half circle; a spin "
+            "does not tick it - it turns the whole "
+            "way round; a wag does not tick it - it "
+            "ends facing forward; a small turn does "
+            "not tick it - it barely turns; a tilt "
+            "does not tick it - it leans and never "
+            "turns; and a turn that returns does not "
+            "tick it - it ends facing forward. "
+            "Probed before building on both "
+            "supported Blenders: the facing memories "
+            "read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Go to frame 24. Turn the thing a quarter "
+         "turn to the other side - so it faces "
+         "sideways the other way - and press "
+         "Remember how it faces right now.",
+         "2. Go to frame 48. Leave the thing exactly "
+         "as it is - the same turned facing - and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing turns - "
+         "a quarter turn the other way by the "
+         "middle - and ends facing sideways the "
+         "other way, never leaning."],
+     "missing": "No real turn to the other side yet - "
+                "an end turn of -1.9 to -1.25 on the "
+                "upright axis, at least 20 frames "
+                "across, in its own place, and no "
+                "leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_othersideturn,
+     "check": _check_othersideturn},
+    {"title": "Watch it turn to the other side, then save",
+     "skill": "Finishing a turn to the other side: "
+              "the turning really plays, and the file "
+              "is saved with the facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn a quarter turn the other way "
+            "and end facing sideways the other way. "
+            "Then save the file. The facing memories "
+            "are saved with it, so the turn still "
+            "plays when the file is opened again. "
+            "The tick checks the save and that the "
+            "turn is still proven from the evaluated "
+            "facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing turn - it ends facing "
+         "sideways the other way, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the turn is still "
+         "proven.",
+         "3. That is animation's sixty-fourth piece: "
+         "turning to the other side - one thing, its "
+         "facing remembered at the start, turned a "
+         "quarter turn the other way remembered as "
+         "it arrives, the same turned facing "
+         "remembered again at the end, facing "
+         "sideways the other way, and Blender "
+         "filling in the turning between. The next "
+         "piece sidesteps a thing sideways the other "
+         "way and keeps it there - on the ground the "
+         "whole way, ending far across the other way. "
+         "It is still not "
+         "the whole craft: performances are built "
+         "from pieces like this, one change at a "
+         "time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the turn still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_othersideturn_finish,
+     "check": _check_othersideturn_finish},
+]
+
+def _othersidestep_measure(context):
+    """(span, sideways_other - the start place's Y
+    minus the end place's Y, drift - the largest
+    change along the X axis from the start place
+    across all sampled places, peak - the highest
+    sampled height above the start height, trough -
+    how far the lowest sampled place sits below
+    the start height, end height deviation - how
+    far the end height sits from the start height
+    in absolute terms) for the main thing's place
+    memories. A real sidestep the other way steps
+    sideways the other way and STAYS there, on the
+    ground the whole way, never travelling forward
+    or backward: the sideways-other travel must
+    land between 2.2 and 3.8, the
+    forward/backward drift must stay within 0.5
+    across all sampled places (so the end place's
+    X also sits within 0.5 of the start place's
+    X), no sampled place may sit more than 0.35
+    above the start height or more than 0.35
+    below it, and the end height must sit within
+    0.35 of the start height, all read from the
+    real evaluated place sampled across the span.
+    A sidestep the first way cannot pass - it
+    steps the other way, so its sideways_other is
+    -3.0; a forward slide cannot pass - it
+    travels forward only, so its sideways_other
+    is 0.0 and its drift is 3.0; a pace that
+    returns cannot pass - it ends back at its
+    start, so its sideways_other is 0.0; a small
+    sidestep the other way cannot pass - it only
+    travels 1.0 sideways the other way; a diagonal
+    cannot pass - it drifts forward as it steps,
+    so its drift is 3.0; a hop or leap cannot
+    pass - it rises high along the way, so its
+    peak is 2.0; and a sidestep the other way that
+    returns cannot pass - it ends back at its
+    start, so its sideways_other is 0.0. Probed
+    on Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_othersidestep.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 1), (0, -1.5, 1) and
+    (0, -3, 1) across frames 1/24/48 read back
+    (span 47, sideways_other 3.0, drift 0.0, peak
+    0.0, trough 0.0, end deviation 0.0, reading
+    (0, -2.5375, 1) partway across at frame 36);
+    a sidestep the first way read sideways_other
+    -3.0, a forward slide read sideways_other 0.0
+    with drift 3.0, a pace that returned read
+    sideways_other 0.0, a small sidestep the
+    other way read sideways_other 1.0, a diagonal
+    read sideways_other 3.0 with drift 3.0, a hop
+    read peak 2.0, and a sidestep the other way
+    that returned read sideways_other 0.0 - none
+    can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    sideways = start[1] - end[1]
+    drift = max(abs(p[0] - start[0]) for p in places)
+    peak = max(p[2] for p in places) - start[2]
+    trough = start[2] - min(p[2] for p in places)
+    return (last - first, sideways, drift, peak,
+            trough, abs(end[2] - start[2]))
+
+
+def _check_othersidestep_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_othersidestep_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othersidestep_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_othersidestep(context):
+    span, sideways, drift, peak, trough, enddev = \
+        _othersidestep_measure(context)
+    return (span >= 20 and 2.2 <= sideways <= 3.8
+            and drift <= 0.5
+            and peak <= 0.35 and trough <= 0.35
+            and enddev <= 0.35)
+
+
+def _anim_run_othersidestep(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othersidestep(context):
+        return
+    scene = context.scene
+    if not _check_othersidestep_start(context):
+        _anim_run_othersidestep_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0], start[1] - 1.5,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0], start[1] - 3.0,
+                     start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_othersidestep_finish(context):
+    return (_check_saved(context)
+            and _check_othersidestep(context))
+
+
+def _anim_run_othersidestep_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERSIDESTEP_STEPS = [
+    {"title": "Pick the thing that will sidestep the other way",
+     "skill": "One thing, chosen: a sidestep the "
+              "other way starts with a single thing "
+              "that will step sideways the other way "
+              "and stay there",
+     "how": "The sidestep piece stepped a thing "
+            "sideways one way and kept it there; this "
+            "piece steps it sideways the other way - "
+            "along the ground, never travelling "
+            "forward or backward, ending far across "
+            "the other way. The way is the "
+            "place-memories way again: the starting "
+            "place remembered on the ground, the "
+            "mid-sidestep place remembered halfway "
+            "across the other way, the end place "
+            "remembered far across the other way at "
+            "the end, and Blender fills in the "
+            "sidestep between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will sidestep the other way.",
+         "2. Leave it where it is for now. The starting "
+         "place is remembered first, on the ground; "
+         "the sidestep the other way comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The sidestep will be told in "
+         "frames, like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, on the ground",
+     "skill": "The start, remembered on the ground: a "
+              "place memory at frame 1, location "
+              "(0, 0, 1) - its centre 1.0 up, resting "
+              "on the ground",
+     "how": "A sidestep the other way is read against "
+            "the place the thing starts from, so the "
+            "start remembers the thing's place at "
+            "frame 1, on the ground - Blender stores "
+            "a place memory (a keyframe on the "
+            "thing's Location). The tick reads the "
+            "place memories themselves: one must sit "
+            "at the start, and the thing must be on "
+            "the ground there - its centre between "
+            "0.7 and 1.3 units up. The whole sidestep "
+            "is measured from this place, and the "
+            "thing must end far across the other way, "
+            "still on the ground.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing on the ground, its centre 1.0 up.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing moves "
+         "yet. One remembered place cannot sidestep "
+         "- it takes the mid-sidestep place and "
+         "the end place remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_othersidestep_start,
+     "check": _check_othersidestep_start},
+    {"title": "Sidestep it the other way and keep it there",
+     "skill": "The sidestep itself: halfway across the "
+              "other way - place (0, -1.5, 1) "
+              "remembered at frame 24 - and far across "
+              "the other way - place (0, -3, 1) "
+              "remembered at frame 48 - on the ground "
+              "the whole way",
+     "how": "Sidestep the thing the other way: bring "
+            "it halfway across the other way - 1.5 "
+            "units sideways the other way along Y, to "
+            "(0, -1.5, 1) - and remember its place at "
+            "frame 24, then move it the rest of the "
+            "way - 3.0 units sideways the other way "
+            "in all, to (0, -3, 1) - and remember its "
+            "place again at frame 48, staying on the "
+            "ground the whole way, never travelling "
+            "forward or backward, and keeping its new "
+            "place at the end. Blender fills in the "
+            "sidestep between. The tick reads the "
+            "real evaluated place sampled across the "
+            "span: the span must run at least 20 "
+            "frames, the sideways-other travel from "
+            "the start place to the end place must "
+            "land between 2.2 and 3.8, the "
+            "forward/backward drift along X must stay "
+            "within 0.5 across all sampled places, no "
+            "sampled place may sit more than 0.35 "
+            "above or below the start height, and the "
+            "end height must sit within 0.35 of the "
+            "start height. A sidestep the first way "
+            "does not tick it - it steps the other "
+            "way; a forward slide does not tick it - "
+            "it travels forward and never steps "
+            "sideways the other way; a pace that "
+            "returns does not tick it - it ends back "
+            "where it started; a small sidestep the "
+            "other way does not tick it - it barely "
+            "travels; a diagonal does not tick it - "
+            "it drifts forward as it steps; a hop "
+            "does not tick it - it leaves the ground "
+            "along the way; and a sidestep the other "
+            "way that returns does not tick it - it "
+            "ends back where it started. Probed "
+            "before building on both supported "
+            "Blenders: the place memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "across the other way - 1.5 units sideways "
+         "the other way - and press Remember where "
+         "it is right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units sideways the other way in "
+         "all, still on the ground - and remember "
+         "again.",
+         "3. Scrub the Timeline: the thing sidesteps "
+         "the other way - halfway across by the "
+         "middle - and ends far across the other "
+         "way, on the ground."],
+     "missing": "No real sidestep the other way yet - "
+                "sideways-other travel of 2.2 to 3.8, "
+                "forward/backward drift within 0.5, on "
+                "the ground the whole way, at least "
+                "20 frames across, and ending where "
+                "it arrived.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_othersidestep,
+     "check": _check_othersidestep},
+    {"title": "Watch it sidestep the other way, then save",
+     "skill": "Finishing a sidestep the other way: "
+              "the stepping really plays, and the "
+              "file is saved with the place memories "
+              "in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing step sideways the other way, on "
+            "the ground, and end far across the other "
+            "way. Then save the file. The place "
+            "memories are saved with it, so the "
+            "sidestep still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the sidestep is still proven "
+            "from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing sidestep the other way - "
+         "it ends far across the other way from "
+         "where it started, still on the ground.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the sidestep is still "
+         "proven.",
+         "3. That is animation's sixty-fifth piece: "
+         "sidestepping the other way - one thing, "
+         "its place remembered on the ground at the "
+         "start, halfway across the other way in "
+         "the middle, far across the other way at "
+         "the end, and Blender filling in the "
+         "sidestep between. The next "
+         "piece spins a thing a full turn the other "
+         "way and keeps the facing it lands on - one "
+         "full turn the other way, ending facing the "
+         "way it started, in its own place. It is "
+         "still not the whole "
+         "craft: performances are built from pieces "
+         "like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the sidestep still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_othersidestep_finish,
+     "check": _check_othersidestep_finish},
+]
+
+def _otherspin_measure(context):
+    """(span, end turn, side-axis drift,
+    place drift) for the main thing's facing
+    memories. A real spin the other way turns
+    a thing one full turn the other way on
+    the upright (Z) axis and leaves it facing
+    the way it started, one full turn on: the
+    end turn - read against the starting
+    facing - must land between -6.6 and -5.9,
+    the side axes (X and Y) must hold within
+    0.35, and the thing must stay within 0.5
+    of its place. A spin the first way cannot
+    pass - it turns the other way, so its end
+    turn is 6.2832; a turn around the other
+    way cannot pass - it turns only the half
+    circle, so its end turn is -3.1416; a turn
+    to the other side cannot pass - it turns
+    only a quarter turn, so its end turn is
+    -1.5708; a wag cannot pass - it ends
+    facing forward; a small turn cannot pass
+    - it only turns -0.4; a tilt cannot pass
+    - it leans on a side axis and never turns;
+    and a spin that returns cannot pass - it
+    ends facing forward. Probed on Blender
+    5.3.0 and 4.2.5 before building (probe
+    scratch/probe_otherspin.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, turned -3.1416
+    on the Z axis at frame 24 and -6.2832 at
+    frame 48 read back (span 47, ends -6.2832,
+    side drift 0.0, place drift 0.0, reading
+    -5.3145 at frame 36); a spin the first way
+    read ends 6.2832, a turn around the other
+    way read ends -3.1416, a turn to the other
+    side read ends -1.5708, a wag read ends
+    0.0, a small turn read ends -0.4, a tilt
+    read ends 0.0 with side drift 1.0, and a
+    spin that returned read ends 0.0 - none
+    can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    ends = rots[-1][2] - start[2]
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, ends, side, drift)
+
+
+def _check_otherspin_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_otherspin_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherspin_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_otherspin(context):
+    span, ends, side, drift = \
+        _otherspin_measure(context)
+    return (span >= 20 and -6.6 <= ends <= -5.9
+            and side <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_otherspin(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherspin(context):
+        return
+    scene = context.scene
+    if not _check_otherspin_start(context):
+        _anim_run_otherspin_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 23)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] - 3.1416)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] - 6.2832)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherspin_finish(context):
+    return (_check_saved(context)
+            and _check_otherspin(context))
+
+
+def _anim_run_otherspin_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERSPIN_STEPS = [
+    {"title": "Pick the thing that will spin the other way",
+     "skill": "One thing, chosen: a spin the other "
+              "way starts with a single thing that will "
+              "turn one full turn the other way and face "
+              "the way it started again",
+     "how": "The spin piece spun a thing all the way "
+            "around one way and brought it home facing "
+            "the way it started; this piece spins it "
+            "all the way around the other way - one "
+            "full turn the other way, staying upright "
+            "and in its place, and ending facing the "
+            "way it started, one full turn on. The way "
+            "is the facing-memories way again: the "
+            "facing remembered at the start, the "
+            "halfway facing remembered halfway around "
+            "the other way, the facing it lands on "
+            "remembered at the end, and Blender fills "
+            "in the spinning between. Start by picking "
+            "the thing: any shape you already have, or "
+            "a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will spin the other way.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "spin comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The spin will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis, rotation (0, 0, 0)",
+     "how": "A spin the other way is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, facing forward - Blender stores "
+            "a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole spin is measured from this facing.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing spins "
+         "yet. One remembered facing cannot spin - "
+         "it takes the halfway facing and the "
+         "facing it lands on remembered too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherspin_start,
+     "check": _check_otherspin_start},
+    {"title": "Spin it a full turn the other way and keep the facing it lands on",
+     "skill": "The spin itself: halfway around the "
+              "other way - rotation Z to -3.1416 "
+              "remembered at frame 24 - and one full "
+              "turn the other way - rotation Z to "
+              "-6.2832 remembered at frame 48 - the "
+              "side axes staying level and the place "
+              "held the whole way",
+     "how": "Spin the thing a full turn the other "
+            "way: turn it halfway around the other "
+            "way - rotation Z to -3.1416, half a turn "
+            "the other way - and remember its facing "
+            "at frame 24, then turn it the rest of "
+            "the way - rotation Z to -6.2832, one "
+            "full turn the other way in all - and "
+            "remember the facing it lands on again "
+            "at frame 48, keeping the side axes level "
+            "and holding its place the whole way. It "
+            "ends facing the way it started, one full "
+            "turn on. Blender fills in the spinning "
+            "between. The tick reads the real "
+            "evaluated facing sampled across the "
+            "span: the span must run at least 20 "
+            "frames, the end turn on the upright "
+            "axis must land between -6.6 and -5.9, "
+            "the side axes must hold within 0.35, "
+            "and the thing must stay within 0.5 of "
+            "its place. A spin the first way does "
+            "not tick it - it turns the other way; a "
+            "turn around the other way does not tick "
+            "it - it turns only the half circle; a "
+            "turn to the other side does not tick "
+            "it - it turns only a quarter turn; a "
+            "wag does not tick it - it ends facing "
+            "forward without ever spinning; a small "
+            "turn does not tick it - it barely "
+            "turns; a tilt does not tick it - it "
+            "leans and never turns; and a spin that "
+            "returns does not tick it - it ends "
+            "facing forward, its full turn undone. "
+            "Probed before building on both "
+            "supported Blenders: the facing memories "
+            "read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Go to frame 24. Turn the thing half a "
+         "turn the other way around the upright "
+         "axis - press R, then Z, and type -180 - "
+         "and press Remember how it faces right now.",
+         "2. Go to frame 48. Turn it the other half "
+         "the same way (R, Z, -180 again), so it "
+         "faces the way it started, one full turn "
+         "on, and remember again.",
+         "3. Scrub the Timeline: the thing spins - "
+         "a full turn the other way - and ends "
+         "facing the way it started, never leaning."],
+     "missing": "No real spin the other way yet - "
+                "an end turn of -6.6 to -5.9 on the "
+                "upright axis, at least 20 frames "
+                "across, in its own place, and no "
+                "leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherspin,
+     "check": _check_otherspin},
+    {"title": "Watch it spin the other way, then save",
+     "skill": "Finishing a spin the other way: "
+              "the spinning really plays, and the file "
+              "is saved with the facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing spin a full turn the other way and "
+            "end facing the way it started. Then save "
+            "the file. The facing memories are saved "
+            "with it, so the spin still plays when "
+            "the file is opened again. The tick checks "
+            "the save and that the spin is still "
+            "proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing spin - it ends facing the "
+         "way it started, one full turn the other "
+         "way on, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the spin is still "
+         "proven.",
+         "3. That is animation's sixty-sixth piece: "
+         "spinning the other way - one thing, its "
+         "facing remembered at the start, halfway "
+         "around the other way in the middle, one "
+         "full turn the other way at the end, and "
+         "Blender filling in the spinning between. "
+         "The next piece turns a thing "
+         "around the other way and keeps it turned - "
+         "a half turn the other way, ending facing "
+         "behind it, in its own place. It is "
+         "still not the whole craft: performances "
+         "are built from pieces like this, one "
+         "change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the spin still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherspin_finish,
+     "check": _check_otherspin_finish},
+]
+
+def _otherturn_measure(context):
+    """(span, end turn, side-axis drift,
+    place drift) for the main thing's facing
+    memories. A real turn around the other way
+    turns a thing a half turn the other way on
+    the upright (Z) axis and leaves it facing
+    behind it: the end turn - read against the
+    starting facing - must land between -3.45
+    and -2.8, the side axes (X and Y) must hold
+    within 0.35, and the thing must stay within
+    0.5 of its place. A turn around the first
+    way cannot pass - it turns the other way,
+    so its end turn is 3.1416; a spin the other
+    way cannot pass - it turns the full circle,
+    so its end turn is -6.2832; a spin the first
+    way cannot pass - its end turn is 6.2832;
+    a wag cannot pass - it ends facing forward;
+    a small turn cannot pass - it only turns
+    -0.4; a tilt cannot pass - it leans on a
+    side axis and never turns; and a turn that
+    returns cannot pass - it ends facing
+    forward. Probed on Blender 5.3.0 and 4.2.5
+    before building (probe
+    scratch/probe_otherturn.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, turned -3.1416
+    on the Z axis at frame 24 and -3.1416 again
+    at frame 48 read back (span 47, ends
+    -3.1416, side drift 0.0, place drift 0.0,
+    reading -3.1416 at frame 36); a turn around
+    the first way read ends 3.1416, a spin the
+    other way read ends -6.2832, a spin the
+    first way read ends 6.2832, a wag read ends
+    0.0, a small turn read ends -0.4, a tilt
+    read ends 0.0 with side drift 1.0, and a
+    turn that returned read ends 0.0 - none
+    can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    ends = rots[-1][2] - start[2]
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, ends, side, drift)
+
+
+def _check_otherturn_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_otherturn_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherturn_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_otherturn(context):
+    span, ends, side, drift = \
+        _otherturn_measure(context)
+    return (span >= 20 and -3.45 <= ends <= -2.8
+            and side <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_otherturn(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherturn(context):
+        return
+    scene = context.scene
+    if not _check_otherturn_start(context):
+        _anim_run_otherturn_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 23)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] - 3.1416)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] - 3.1416)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherturn_finish(context):
+    return (_check_saved(context)
+            and _check_otherturn(context))
+
+
+def _anim_run_otherturn_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERTURN_STEPS = [
+    {"title": "Pick the thing that will turn around the other way",
+     "skill": "One thing, chosen: a turn around the "
+              "other way starts with a single thing that will "
+              "turn a half turn the other way and stay "
+              "facing behind it",
+     "how": "The turn-around piece turned a thing "
+            "half a turn one way and left it facing "
+            "behind it; this piece turns it half a "
+            "turn the other way - one half turn the "
+            "other way, staying upright and in its "
+            "place, and ending facing behind it. The way "
+            "is the facing-memories way again: the "
+            "facing remembered at the start, the "
+            "turned facing remembered as it arrives "
+            "the other way, the same turned facing "
+            "remembered again at the end, and Blender fills "
+            "in the turning between. Start by picking "
+            "the thing: any shape you already have, or "
+            "a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will turn around the other way.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "turn comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The turn will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis, rotation (0, 0, 0)",
+     "how": "A turn around the other way is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, facing forward - Blender stores "
+            "a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole turn is measured from this facing.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns "
+         "yet. One remembered facing cannot turn - "
+         "it takes the turned facing remembered too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherturn_start,
+     "check": _check_otherturn_start},
+    {"title": "Turn it a half turn the other way and keep it turned",
+     "skill": "The turn itself: a half turn the "
+              "other way - rotation Z to -3.1416 "
+              "remembered at frame 24 - and the "
+              "same turned facing - rotation Z to "
+              "-3.1416 remembered again at frame 48 - the "
+              "side axes staying level and the place "
+              "held the whole way",
+     "how": "Turn the thing a half turn the other "
+            "way: turn it halfway around the other "
+            "way - rotation Z to -3.1416, half a turn "
+            "the other way - and remember its facing "
+            "at frame 24, then remember the same "
+            "turned facing again at frame 48, keeping "
+            "the side axes level and holding its "
+            "place the whole way. It ends facing "
+            "behind it. Blender fills in the turning "
+            "between. The tick reads the real "
+            "evaluated facing sampled across the "
+            "span: the span must run at least 20 "
+            "frames, the end turn on the upright "
+            "axis must land between -3.45 and -2.8, "
+            "the side axes must hold within 0.35, "
+            "and the thing must stay within 0.5 of "
+            "its place. A turn around the first way "
+            "does not tick it - it turns the other "
+            "way; a spin the other way does not tick "
+            "it - it turns the full circle; a spin "
+            "the first way does not tick it either; a "
+            "wag does not tick it - it ends facing "
+            "forward without ever turning around; a small "
+            "turn does not tick it - it barely "
+            "turns; a tilt does not tick it - it "
+            "leans and never turns; and a turn that "
+            "returns does not tick it - it ends "
+            "facing forward, its half turn undone. "
+            "Probed before building on both "
+            "supported Blenders: the facing memories "
+            "read back and interpolate identically "
+            "on each.",
+     "teach": [
+         "1. Go to frame 24. Turn the thing half a "
+         "turn the other way around the upright "
+         "axis - press R, then Z, and type -180 - "
+         "and press Remember how it faces right now.",
+         "2. Go to frame 48. Leave the facing as it "
+         "is - turned around the other way - and "
+         "remember it again, so it stays turned.",
+         "3. Scrub the Timeline: the thing turns - "
+         "a half turn the other way - and ends "
+         "facing behind it, never leaning."],
+     "missing": "No real turn around the other way yet - "
+                "an end turn of -3.45 to -2.8 on the "
+                "upright axis, at least 20 frames "
+                "across, in its own place, and no "
+                "leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherturn,
+     "check": _check_otherturn},
+    {"title": "Watch it turn around the other way, then save",
+     "skill": "Finishing a turn around the other way: "
+              "the turning really plays, and the file "
+              "is saved with the facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn a half turn the other way and "
+            "end facing behind it. Then save "
+            "the file. The facing memories are saved "
+            "with it, so the turn still plays when "
+            "the file is opened again. The tick checks "
+            "the save and that the turn is still "
+            "proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing turn - it ends facing "
+         "behind it, a half turn the other "
+         "way on, still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the turn is still "
+         "proven.",
+         "3. That is animation's sixty-seventh piece: "
+         "turning around the other way - one thing, its "
+         "facing remembered at the start, turned "
+         "around the other way in the middle, the "
+         "same turned facing remembered again at the end, and "
+         "Blender filling in the turning between. "
+         "The next piece looks a thing behind "
+         "the other way - the whole half circle "
+         "the other way to face behind, then back "
+         "to facing forward again. It is "
+         "still not the whole craft: performances "
+         "are built from pieces like this, one "
+         "change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the turn still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherturn_finish,
+     "check": _check_otherturn_finish},
+]
+
+def _otherlookback_measure(context):
+    """(span, peak Z turn - the most negative Z
+    turn from the starting facing, end Z turn,
+    side-axis drift, place drift) for the main
+    thing's facing memories. A real look behind
+    the other way turns a thing the whole half
+    circle the other way on the upright (Z)
+    axis - right around so it faces behind -
+    and then turns it back to facing forward
+    again: the peak turn - the most negative Z
+    turn from the starting facing sampled
+    across the span - must land between -3.5
+    and -2.8, the end turn must settle within
+    0.35 of the starting facing, the side axes
+    (X and Y) must hold within 0.35, and the
+    thing must stay within 0.5 of its place. A
+    look behind the first way cannot pass - it
+    turns the other way, so its most negative
+    turn is 0.0; a turn around the other way
+    cannot pass - it turns the whole half
+    circle the other way but stays there, so
+    its end turn is -3.1416; a spin the other
+    way cannot pass - it turns the whole way
+    round the other way, so its peak and end
+    turns are -6.2832; a wag cannot pass - it
+    only turns -0.4 at its peak; a small look
+    the other way cannot pass - it only turns
+    -1.0 and stays there; a tilt cannot pass -
+    it leans on a side axis, so its side drift
+    is 1.0 and it never turns; and a look
+    behind the other way that stays cannot
+    pass - it is a turn around the other way
+    under another name, ending at -3.1416.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe
+    scratch/probe_otherlookback.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, turned -3.1416
+    on the Z axis at frame 24 and level again
+    at frame 48 read back (span 47, peak
+    -3.1416, end 0.0, side drift 0.0, place
+    drift 0.0, reading (0, 0, -1.5708) partway
+    back at frame 36); a look behind the first
+    way read peak 0.0, a turn around the other
+    way read peak -3.1416 with end -3.1416, a
+    spin the other way read peak -6.2832 with
+    end -6.2832, a wag read peak -0.4, a small
+    look the other way read peak -1.0 with end
+    -1.0, a tilt read peak 0.0 with side drift
+    1.0, and a look behind the other way that
+    stayed read end -3.1416 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    peak = min(r[2] - start[2] for r in rots)
+    end = rots[-1][2] - start[2]
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, peak, end, side, drift)
+
+
+def _check_otherlookback_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first,
+                     "rotation_euler")
+    return max(abs(v) for v in rot) <= 0.3
+
+
+def _anim_run_otherlookback_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherlookback_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_otherlookback(context):
+    span, peak, end, side, drift = \
+        _otherlookback_measure(context)
+    return (span >= 20 and -3.5 <= peak <= -2.8
+            and abs(end) <= 0.35 and side <= 0.35
+            and drift <= 0.5)
+
+
+def _anim_run_otherlookback(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherlookback(context):
+        return
+    scene = context.scene
+    if not _check_otherlookback_start(context):
+        _anim_run_otherlookback_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 23)
+    main.rotation_euler = (start[0], start[1],
+                           start[2] - 3.1416)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0], start[1],
+                           start[2])
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherlookback_finish(context):
+    return (_check_saved(context)
+            and _check_otherlookback(context))
+
+
+def _anim_run_otherlookback_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERLOOKBACK_STEPS = [
+    {"title": "Pick the thing that will look behind the other way",
+     "skill": "One thing, chosen: looking behind "
+              "the other way starts with a single "
+              "thing that will turn right around "
+              "the other way to face behind and "
+              "then come back to facing forward",
+     "how": "The look-behind piece turned a thing "
+            "right around - the whole half circle - "
+            "to look behind, and then brought it back "
+            "to facing forward; this piece turns it "
+            "the whole half circle the other way to "
+            "look behind, and then brings it back to "
+            "facing forward again. The way is the "
+            "facing-memories way again: the facing "
+            "remembered at the start, the turned "
+            "facing remembered at the middle, the "
+            "starting facing remembered again at "
+            "the end, and Blender fills in the "
+            "turning between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will look behind the other way.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "look behind the other way comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The look will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis, rotation (0, 0, 0)",
+     "how": "Looking behind the other way is read "
+            "against the facing the thing starts "
+            "from, so the start remembers the "
+            "thing's facing at frame 1, facing "
+            "forward - Blender stores a facing memory "
+            "(a keyframe on the thing's Rotation). "
+            "The tick reads the facing memories "
+            "themselves: one must sit at the start, "
+            "level on every axis. The whole look is "
+            "measured from this facing: the thing "
+            "must turn the whole half circle the "
+            "other way away from it and come back "
+            "to it.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns "
+         "yet. One remembered facing cannot look "
+         "behind - it takes the turned facing "
+         "remembered, and the starting facing "
+         "remembered again, too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherlookback_start,
+     "check": _check_otherlookback_start},
+    {"title": "Look behind the other way and come back",
+     "skill": "The look itself: turned the whole half "
+              "circle the other way on the upright "
+              "axis - rotation Z to -3.1416 - "
+              "remembered at frame 24, and back to "
+              "facing forward - rotation (0, 0, 0) - "
+              "remembered at frame 48, never leaning, "
+              "in its own place the whole way",
+     "how": "Turn the thing right around the other "
+            "way - the whole half circle the other "
+            "way, so it faces behind - and remember "
+            "its facing at frame 24, then turn it "
+            "back to facing forward and remember the "
+            "starting facing again at frame 48, "
+            "keeping it in its place and never "
+            "leaning it: turned -3.1416 of a turn "
+            "unit (radians) - a half circle the other "
+            "way - on the upright axis at the middle. "
+            "Blender fills in the turning between. "
+            "The tick reads the real evaluated facing "
+            "sampled across the span: the span must "
+            "run at least 20 frames, the most "
+            "negative turn on the upright axis must "
+            "land between -3.5 and -2.8, the end turn "
+            "must settle within 0.35 of the starting "
+            "facing, the side axes must hold within "
+            "0.35, and the thing must stay within 0.5 "
+            "of its place. A look behind the first "
+            "way does not tick it - it turns the "
+            "other way, so it never turns this way "
+            "at all; a turn around the other way does "
+            "not tick it - it turns the whole half "
+            "circle the other way but stays there, "
+            "facing behind at the end; a spin the "
+            "other way does not tick it - it turns "
+            "the whole way round the other way; a wag "
+            "does not tick it - it barely turns; a "
+            "small look the other way does not tick "
+            "it - it turns only part of the way and "
+            "stays there; a tilt does not tick it - "
+            "it leans and never turns; and a look "
+            "behind the other way that stays does not "
+            "tick it - it never comes back. Probed "
+            "before building on both supported "
+            "Blenders: the facing memories read back "
+            "and interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 24. Turn the thing right "
+         "around the other way - the whole half "
+         "circle the other way, so it faces behind "
+         "- press R, then Z, and type -180 - and "
+         "press Remember how it faces right now.",
+         "2. Go to frame 48. Turn it back to facing "
+         "forward, exactly as it started, and "
+         "remember again.",
+         "3. Scrub the Timeline: the thing turns - "
+         "right around the other way by the "
+         "middle, facing behind - and comes back "
+         "to facing forward, never leaning."],
+     "missing": "No real look behind the other way yet - "
+                "a peak turn of -3.5 to -2.8 on the "
+                "upright axis, an end turn within 0.35 "
+                "of the start, at least 20 frames "
+                "across, in its own place, and no "
+                "leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherlookback,
+     "check": _check_otherlookback},
+    {"title": "Watch it look behind the other way, then save",
+     "skill": "Finishing a look behind the other way: "
+              "the turning really plays, and the file "
+              "is saved with the facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn right around the other way to "
+            "face behind and come back to facing "
+            "forward. Then save the file. The facing "
+            "memories are saved with it, so the look "
+            "still plays when the file is opened "
+            "again. The tick checks the save and that "
+            "the look is still proven from the "
+            "evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing look behind the other "
+         "way - it faces behind at the middle and "
+         "ends facing forward again, still in its "
+         "place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the look is still "
+         "proven.",
+         "3. That is animation's sixty-eighth piece: "
+         "looking behind the other way - one thing, "
+         "its facing remembered at the start, turned "
+         "the whole half circle the other way "
+         "remembered at the middle, the starting "
+         "facing remembered again at the end, "
+         "facing forward again, and Blender filling "
+         "in the turning between. The next piece "
+         "orbits a thing the other way - all the "
+         "way round one centre the other way and "
+         "home. It is still not the "
+         "whole craft: performances are built from "
+         "pieces like this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the look still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherlookback_finish,
+     "check": _check_otherlookback_finish},
+]
+
+def _otherorbit_sweep(context):
+    """(span, signed sweep, mean radius, radius
+    variation, ends gap) for the main thing's place
+    memories. A real orbit the other way travels
+    ALL the way around one centre the other way:
+    the evaluated place is sampled across the
+    span, the centre is the samples' own middle,
+    the sweep is the SIGNED total angle travelled
+    around that centre - the wrapped angle deltas
+    summed without the absolute value the orbit
+    piece's sweep used, so the direction of
+    travel is what is measured - and the radius
+    variation is how far the distance from the
+    centre strays. A first-way orbit reads about
+    +6.2832 and cannot pass; the other-way orbit
+    reads about -6.2832. A straight move or an
+    out-and-back journey strays wildly in
+    distance (variation about 1.5); a true circle
+    holds it (about 0.25). A small other-way
+    circle cannot pass - its signed sweep is
+    -6.2832 but its mean radius is only 0.9558;
+    an ellipse-ish other-way path cannot pass -
+    its radius variation is 1.0027. Probed on
+    Blender 5.3.0 and 4.2.5 before building
+    (probe scratch/probe_otherorbit.py; outputs
+    byte-identical on both versions): place
+    memories at the four quarter points of a
+    radius-3 circle travelled the other way
+    across frames 1/13/25/37/48 read back (span
+    47, signed sweep -6.2832, mean radius 2.8673,
+    variation 0.2480, ends gap 0.0); a first-way
+    orbit read signed sweep +6.2832, a quarter
+    arc the other way read span 12 with signed
+    sweep -3.1416 and ends gap 4.2426, a straight
+    move read variation 1.5586 with ends gap
+    6.0, an out-and-back read signed sweep 0.0
+    with variation 1.5247, a small other-way
+    circle read mean radius 0.9558, and an
+    ellipse-ish other-way path read variation
+    1.0027 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    sample_frames = list(range(first, last + 1, 2))
+    if sample_frames[-1] != last:
+        sample_frames.append(last)
+    samples = [_anim_eval(context, main, f, "location")
+               for f in sample_frames]
+    cx = sum(s[0] for s in samples) / len(samples)
+    cy = sum(s[1] for s in samples) / len(samples)
+    radii = [math.hypot(s[0] - cx, s[1] - cy) for s in samples]
+    mean_r = sum(radii) / len(radii)
+    if mean_r <= 0.05:
+        return last - first, 0.0, mean_r, 99.0, 99.0
+    var = (max(radii) - min(radii)) / mean_r
+    sweep = 0.0
+    prev = None
+    for s in samples:
+        ang = math.atan2(s[1] - cy, s[0] - cx)
+        if prev is not None:
+            d = ang - prev
+            while d > math.pi:
+                d -= 2 * math.pi
+            while d < -math.pi:
+                d += 2 * math.pi
+            sweep += d
+        prev = ang
+    a = samples[0]
+    b = samples[-1]
+    ends = math.sqrt(sum((b[i] - a[i]) ** 2 for i in range(3)))
+    return last - first, sweep, mean_r, var, ends
+
+
+def _check_otherorbit_start(context):
+    return _check_anim_start(context)
+
+
+def _anim_run_otherorbit_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherorbit_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (3, 0, 1)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_otherorbit(context):
+    span, sweep, mean_r, var, ends = _otherorbit_sweep(context)
+    return (span >= 20 and -6.6 <= sweep <= -5.0
+            and mean_r >= 1.5 and var <= 0.5
+            and ends <= 0.3)
+
+
+def _anim_run_otherorbit(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherorbit(context):
+        return
+    scene = context.scene
+    for f, place in ((1, (3, 0, 1)), (13, (0, -3, 1)),
+                     (25, (-3, 0, 1)), (37, (0, 3, 1)),
+                     (48, (3, 0, 1))):
+        scene.frame_set(f)
+        main.location = place
+        main.keyframe_insert(data_path="location", frame=f)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_otherorbit_finish(context):
+    return (_check_saved(context)
+            and _check_otherorbit(context))
+
+
+def _anim_run_otherorbit_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERORBIT_STEPS = [
+    {"title": "Pick the thing that will orbit the other way",
+     "skill": "One thing, chosen: an orbit the other "
+              "way starts with a single thing that "
+              "will circle a centre the other way",
+     "how": "The orbit piece travelled a thing all "
+            "the way round one centre and home; this "
+            "piece travels the same ring the other "
+            "way - out at the edge of the ring, around "
+            "through every side of one centre the "
+            "other way, and home to the start. The way "
+            "is the place-memories way again: the "
+            "quarter points of the circle remembered, "
+            "in the other order, and Blender fills in "
+            "the ring between them. Start by picking "
+            "the thing: any shape you already have, or "
+            "a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will orbit the other way.",
+         "2. Leave its place alone for now. The "
+         "starting place is remembered first; the "
+         "circle comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The orbit will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting place",
+     "skill": "The starting place, remembered: a place "
+              "memory at frame 1, out at the edge of "
+              "the circle it will travel, at (3, 0, 1)",
+     "how": "An orbit is measured around its centre, "
+            "so the thing starts out at the edge of "
+            "its circle - three units to one side of "
+            "the middle, at (3, 0, 1) - and that place "
+            "is remembered first, at frame 1. Blender "
+            "stores a place memory (a keyframe on the "
+            "thing's Location). The tick reads the "
+            "place memories themselves: one must sit "
+            "at the start. The whole orbit is measured "
+            "from this place: the thing must travel "
+            "the whole ring the other way and come "
+            "home to it.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy puts the thing out at the "
+         "edge of its circle, at (3, 0, 1), and "
+         "remembers its place there.",
+         "3. Scrub forward and back: nothing orbits "
+         "yet. One memory alone cannot make a circle "
+         "- it takes the quarter points."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherorbit_start,
+     "check": _check_otherorbit_start},
+    {"title": "Orbit the other way",
+     "skill": "The orbit itself: the four quarter "
+              "points of one circle remembered in the "
+              "other order - (0, -3, 1) at frame 13, "
+              "(-3, 0, 1) at frame 25, (0, 3, 1) at "
+              "frame 37 - home to the start, (3, 0, 1), "
+              "at frame 48",
+     "how": "Remember the thing's place at each "
+            "quarter of the circle, in the other "
+            "order: underneath at frame 13, the far "
+            "side at frame 25, back across the top at "
+            "frame 37, and home to the starting place "
+            "at frame 48 - the same distance from the "
+            "middle every time. Blender fills in the "
+            "ring between the quarter points. The tick "
+            "reads the real evaluated place sampled "
+            "across the whole span: the span must run "
+            "at least 20 frames, the signed angle "
+            "travelled around the samples' own middle "
+            "must land between -6.6 and -5.0 - signed, "
+            "so the direction is what is measured - "
+            "the circle must be a clear size (average "
+            "radius at least 1.5), the distance from "
+            "the middle must hold (variation at most "
+            "0.5), and the ends must meet back at the "
+            "start (gap at most 0.3). A first-way orbit "
+            "does not tick it - it travels the same "
+            "ring the first way, so its signed sweep "
+            "is +6.2832; a quarter arc the other way "
+            "does not tick it - it goes only a quarter "
+            "of the way round; a straight move does "
+            "not tick it - it strays wildly in distance "
+            "and never comes home; an out-and-back does "
+            "not tick it - it never goes round at all; "
+            "a small circle the other way does not "
+            "tick it - it goes the whole way round but "
+            "its circle is too small; and an "
+            "ellipse-ish path the other way does not "
+            "tick it - its distance from the middle "
+            "strays too far. Probed before building on "
+            "both supported Blenders: the quarter-point "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 13 and put the thing the "
+         "same distance from the middle, a quarter of "
+         "the way round the other way - underneath, "
+         "at (0, -3, 1). Remember its place there.",
+         "2. Do the same at frame 25 (halfway round "
+         "the other way, the far side, at (-3, 0, 1)) "
+         "and frame 37 (three quarters round, back "
+         "across the top, at (0, 3, 1)).",
+         "3. At frame 48 put it back exactly where it "
+         "started, at (3, 0, 1), and remember it "
+         "there. Scrub the Timeline: the thing "
+         "travels a ring the other way, the same "
+         "distance from the middle the whole way."],
+     "missing": "No real orbit the other way yet - all "
+                "the way around one centre the other "
+                "way, the same distance out, at least "
+                "20 frames, and home to the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherorbit,
+     "check": _check_otherorbit},
+    {"title": "Watch it orbit the other way, then save",
+     "skill": "Finishing an orbit the other way: the "
+              "ring really plays the other way, and "
+              "the file is saved with the place "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing circle its centre the other way and "
+            "come home. Then save the file. The place "
+            "memories are saved with it, so the orbit "
+            "still plays when the file is opened again. "
+            "The tick checks the save and that the "
+            "orbit is still proven from the sampled "
+            "places.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing orbit the other way - it "
+         "passes underneath first, and ends back "
+         "where it started.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the orbit is still "
+         "proven.",
+         "3. That is animation's sixty-ninth piece: "
+         "orbiting the other way - one thing, its "
+         "starting place remembered at frame 1, the "
+         "quarter points of its circle remembered in "
+         "the other order, home to the start at the "
+         "end, and Blender filling in the ring "
+         "between. The next piece rolls a thing "
+         "the other way - back across the ground, "
+         "tipping over the other way as it goes. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the orbit still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherorbit_finish,
+     "check": _check_otherorbit_finish},
+]
+
+def _otherroll_measure(context):
+    """(span, signed travel across, signed turn on
+    Y, travel-per-turn) for the main thing's place
+    and facing memories together. A real roll the
+    other way couples the two the other way round:
+    the thing travels back across the ground AND
+    turns over the other way as it goes, at a pace
+    matching its size - a thing resting one unit
+    above the ground travels about one unit for
+    every radian it turns. The roll piece's
+    measure used the biggest ABSOLUTE turn, so it
+    cannot tell the two directions apart; this
+    measure reads the SIGNED travel across (end X
+    minus start X) and the SIGNED turn on the Y
+    axis (end facing Y minus start facing Y), so
+    the direction is what is measured: the
+    other-way roll reads travel -4.0 and turn
+    +4.0, the first-way roll reads travel +4.0 and
+    turn -4.0 and cannot pass. A slide the other
+    way travels without turning (turn 0), and a
+    spin the other way turns without travelling
+    (travel 0); neither is a roll the other way.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_otherroll.py;
+    outputs byte-identical on both versions):
+    place and facing memories at (2, 0, 1) / level
+    and (-2, 0, 1) / turned +4 radians on Y across
+    frames 1/48 read back (span 47, signed travel
+    -4.0, signed turn +4.0, ratio 1.0, reading
+    (0.0638, 0, 1) turned +1.9362 on Y at frame
+    24); a first-way roll read signed travel +4.0
+    with signed turn -4.0, a slide the other way
+    read signed turn 0.0 with ratio 99.0, a spin
+    the other way read signed travel 0.0, a small
+    roll the other way read signed travel -1.0
+    with signed turn +1.0, an out-of-pace roll the
+    other way read signed turn +0.5 with ratio
+    8.0, and a roll the other way that came back
+    read signed travel 0.0 with signed turn 0.0 -
+    none can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0
+    loc_keys = _anim_keys(main, "location")
+    rot_keys = _anim_keys(main, "rotation_euler")
+    if not loc_keys or not rot_keys:
+        return 0, 0.0, 0.0, 99.0
+    frames = [k[0] for k in loc_keys] + [k[0] for k in rot_keys]
+    first, last = int(min(frames)), int(max(frames))
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0
+    a_loc = _anim_eval(context, main, first, "location")
+    b_loc = _anim_eval(context, main, last, "location")
+    a_rot = _anim_eval(context, main, first, "rotation_euler")
+    b_rot = _anim_eval(context, main, last, "rotation_euler")
+    travel = b_loc[0] - a_loc[0]
+    turn = b_rot[1] - a_rot[1]
+    ratio = abs(travel) / abs(turn) if abs(turn) > 0.001 else 99.0
+    return last - first, travel, turn, ratio
+
+
+def _check_otherroll_start(context):
+    return _check_roll_start(context)
+
+
+def _anim_run_otherroll_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherroll_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (2, 0, 1)
+    main.rotation_euler = (0, 0, 0)
+    main.keyframe_insert(data_path="location", frame=1)
+    main.keyframe_insert(data_path="rotation_euler", frame=1)
+
+
+def _check_otherroll(context):
+    span, travel, turn, ratio = _otherroll_measure(context)
+    return (span >= 20 and -5.5 <= travel <= -2.0
+            and 2.5 <= turn <= 5.5
+            and 0.4 <= ratio <= 2.5)
+
+
+def _anim_run_otherroll(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherroll(context):
+        return
+    scene = context.scene
+    for f, place, facing in ((1, (2, 0, 1), (0, 0, 0)),
+                             (48, (-2, 0, 1), (0, 4, 0))):
+        scene.frame_set(f)
+        main.location = place
+        main.rotation_euler = facing
+        main.keyframe_insert(data_path="location", frame=f)
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=f)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_otherroll_finish(context):
+    return (_check_saved(context)
+            and _check_otherroll(context))
+
+
+def _anim_run_otherroll_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERROLL_STEPS = [
+    {"title": "Pick the thing that will roll the other way",
+     "skill": "One thing, chosen: a roll the other "
+              "way starts with a single thing that "
+              "will travel back and turn over the "
+              "other way together",
+     "how": "The roll piece travelled a thing across "
+            "the ground while turning it over one way. "
+            "This piece rolls the same journey the "
+            "other way: back across the ground, tipping "
+            "over the other way as it goes - the turning "
+            "and the travelling are still one motion, "
+            "paced to each other, only the direction is "
+            "reversed. The way is the memories way "
+            "again: place and facing remembered "
+            "together at the start and at the end, and "
+            "Blender fills in the roll between them. "
+            "Start by picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will roll the other way.",
+         "2. Leave its place and facing alone for now. "
+         "The start is remembered first; the roll comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The roll will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, and which way it faces",
+     "skill": "The start, remembered whole: a place "
+              "memory and a facing memory together at "
+              "frame 1, at (2, 0, 1), facing level",
+     "how": "A roll the other way is read from both "
+            "memories at once, so the start remembers "
+            "the thing's place AND its facing together, "
+            "at frame 1: resting on the ground two units "
+            "to the other side, at (2, 0, 1), facing "
+            "level. Blender stores a place memory and a "
+            "facing memory (keyframes on the thing's "
+            "Location and Rotation). The tick reads both "
+            "sets of memories: one of each must sit at "
+            "the start. The whole roll is measured from "
+            "this start: the thing must travel back "
+            "across and tip over the other way from it.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember where it is right now "
+         "above - Buddy puts the thing resting on the "
+         "ground at (2, 0, 1), facing level, and "
+         "remembers its place and facing there "
+         "together.",
+         "3. Scrub forward and back: nothing rolls yet. "
+         "One remembered start cannot roll - it takes "
+         "the far end remembered too."],
+     "missing": "No start remembered yet - remember the "
+                "thing's place and facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherroll_start,
+     "check": _check_otherroll_start},
+    {"title": "Roll it the other way",
+     "skill": "The roll the other way itself: the far "
+              "end remembered at (-2, 0, 1) with the "
+              "facing turned +4 radians on Y, the two "
+              "paced to each other",
+     "how": "Move the thing four units back across "
+            "the ground and turn it over the other way "
+            "as it goes - four radians of turn the other "
+            "way for four units of travel, because a "
+            "thing resting one unit above the ground "
+            "rolls about one unit per radian - and "
+            "remember place and facing together at frame "
+            "48, at (-2, 0, 1) turned +4 radians on Y. "
+            "Blender fills in the tumble between. The "
+            "tick reads the real evaluated place and "
+            "facing at the first and last memories: the "
+            "span must run at least 20 frames, the signed "
+            "travel across must land between -5.5 and "
+            "-2.0, the signed turn on Y must land between "
+            "2.5 and 5.5, and the travel per radian must "
+            "sit between 0.4 and 2.5 - signed, so the "
+            "direction is what is measured. A first-way "
+            "roll does not tick it - it travels +4.0 and "
+            "turns -4.0; a slide the other way does not "
+            "tick it - it travels without turning; a spin "
+            "the other way does not tick it - it turns "
+            "without travelling; a small roll the other "
+            "way does not tick it - it travels only -1.0 "
+            "with +1.0 of turn; a roll the other way out "
+            "of pace does not tick it - its travel per "
+            "radian is 8.0; and a roll the other way that "
+            "comes back does not tick it - it ends where "
+            "it started, so its signed travel and turn "
+            "read 0.0. Probed before building on both "
+            "supported Blenders: the place and facing "
+            "memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Jump to frame 48 and move the thing four "
+         "units back across the ground, to (-2, 0, 1).",
+         "2. Turn it over the other way as it goes - "
+         "about four radians (a bit more than half a "
+         "full turn) tipped over the other way, +4 "
+         "radians on Y.",
+         "3. Press Remember where it is right now. "
+         "Scrub the Timeline: the thing tumbles back "
+         "across, turning the other way as it travels, "
+         "never sliding."],
+     "missing": "No real roll the other way yet - travel "
+                "back at least 2 units with at least 2.5 "
+                "radians of turn the other way, paced to "
+                "each other, at least 20 frames.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherroll,
+     "check": _check_otherroll},
+    {"title": "Watch it roll the other way, then save it",
+     "skill": "Finishing a roll the other way: the "
+              "tumble back really plays, and the file "
+              "is saved with the place and facing "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing tumble back across the ground, "
+            "tipping over the other way. Then save the "
+            "file. The place and facing memories are "
+            "saved with it, so the roll still plays when "
+            "the file is opened again. The tick checks "
+            "the save and that the roll is still proven "
+            "from the evaluated place and facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the tumble, not just the travel - the "
+         "turning the other way with the travelling is "
+         "the roll.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the roll is still proven.",
+         "3. That is animation's seventieth piece: "
+         "rolling the other way - one thing, its place "
+         "and facing remembered at both ends of a "
+         "journey back across, and Blender filling in "
+         "the tumble between. The next piece flips a "
+         "thing all the way over the other way - "
+         "upright, upside down the other way, and "
+         "upright again. "
+         "It is still not the whole craft: "
+         "performances are built from pieces like "
+         "this, one change at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the roll still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherroll_finish,
+     "check": _check_otherroll_finish},
+]
+
+def _otherflip_measure(context):
+    """(span, signed end turn on X, side-axis
+    drift, place drift) for the main thing's
+    facing memories. A real flip the other way
+    turns a thing one full turn the other way
+    on the flip (X) axis - the axis the flip
+    piece turns on - and lands upright again in
+    its own place: the SIGNED end turn - read
+    against the starting facing - must land
+    between -6.6 and -5.9, the side axes (Y and
+    Z) must hold within 0.35, and the thing must
+    stay within 0.5 of its place. The flip
+    piece's measure totalled the ABSOLUTE turn,
+    so it cannot tell the two directions apart;
+    this measure reads the signed end turn, so
+    the direction is what is measured: the
+    other-way flip reads -6.2832, the first-way
+    flip reads +6.2832 and cannot pass. A half
+    flip the other way cannot pass - it ends
+    upside down at -3.1416; a small turn the
+    other way cannot pass - it only turns -0.4;
+    a flip on another axis cannot pass - it
+    turns on Y and never on X; a tilt cannot
+    pass - it leans on a side axis and never
+    flips; a flip the other way that returns
+    cannot pass - it ends facing forward; and a
+    flip the other way that travels cannot pass
+    - it leaves its place. Probed on Blender
+    5.3.0 and 4.2.5 before building (probe
+    scratch/probe_otherflip.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, turned -3.1416
+    on the X axis at frame 24 and -6.2832 at
+    frame 48 read back (span 47, ends -6.2832,
+    side drift 0.0, place drift 0.0, reading
+    -5.3145 at frame 36); a first-way flip read
+    ends +6.2832, a half flip the other way
+    read ends -3.1416, a small turn the other
+    way read ends -0.4, a flip on another axis
+    read ends 0.0 with side drift 6.2832, a
+    tilt read ends 0.0 with side drift 1.0, a
+    flip the other way that returned read ends
+    0.0, and a flip the other way that moved
+    read ends -6.2832 with place drift 3.0 -
+    none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    ends = rots[-1][0] - start[0]
+    side = max(max(abs(r[1] - start[1]),
+                   abs(r[2] - start[2])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, ends, side, drift)
+
+
+def _check_otherflip_start(context):
+    return _check_flip_start(context)
+
+
+def _anim_run_otherflip_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherflip_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_otherflip(context):
+    span, ends, side, drift = \
+        _otherflip_measure(context)
+    return (span >= 20 and -6.6 <= ends <= -5.9
+            and side <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_otherflip(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherflip(context):
+        return
+    scene = context.scene
+    if not _check_otherflip_start(context):
+        _anim_run_otherflip_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 23)
+    main.rotation_euler = (start[0] - 3.1416,
+                           start[1], start[2])
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0] - 6.2832,
+                           start[1], start[2])
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherflip_finish(context):
+    return (_check_saved(context)
+            and _check_otherflip(context))
+
+
+def _anim_run_otherflip_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERFLIP_STEPS = [
+    {"title": "Pick the thing that will flip the other way",
+     "skill": "One thing, chosen: a flip the other "
+              "way starts with a single thing that will "
+              "go all the way over the other way",
+     "how": "The flip piece turned a thing ALL the "
+            "way over one way: upright, upside down, "
+            "and upright again. This piece flips it "
+            "all the way over the other way - the same "
+            "full turn, turned the opposite way round, "
+            "in its own place. The way is the "
+            "facing-memories way again: the upright "
+            "facing remembered, the upside-down facing "
+            "remembered in the middle - reached the "
+            "other way round - and the upright facing "
+            "remembered again at the end as one full "
+            "turn the other way, and Blender fills in "
+            "the roll between them. Start by picking "
+            "the thing: any shape you already have, or "
+            "a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will flip the other way.",
+         "2. Leave its facing alone for now. The upright "
+         "start is remembered first; the turn comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The flip will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its upright facing",
+     "skill": "The upright start, remembered: a facing "
+              "memory at frame 1, level, that the flip "
+              "the other way will land back on",
+     "how": "A flip the other way needs the same "
+            "clean start as a flip: the thing standing "
+            "upright, facing remembered at frame 1 - "
+            "Blender stores a facing memory (a keyframe "
+            "on the thing's Rotation). Nothing visibly "
+            "changes: the memory is the mark the whole "
+            "turn is measured from, and the facing the "
+            "end of the flip has to land back on. The "
+            "tick reads the facing memories themselves: "
+            "one must sit at the start, and the facing "
+            "there must really be level (within 0.3 rad "
+            "on every axis).",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. With the thing picked and standing upright, "
+         "press Remember where it is right now above - "
+         "Buddy remembers its facing along with its "
+         "place, and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing turns yet. "
+         "One memory alone cannot make a flip - it "
+         "takes three."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing, level, at "
+                "frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherflip_start,
+     "check": _check_otherflip_start},
+    {"title": "Flip it all the way over the other way, and land it",
+     "skill": "The flip the other way itself: upside "
+              "down in the middle the other way round, "
+              "one full turn the other way by the end, "
+              "upright again, in its own place",
+     "how": "Jump to frame 24 and turn the thing half "
+            "a turn the other way on the flip axis - "
+            "upside down, reached the other way round "
+            "(the facing reads -3.1416 on that axis) - "
+            "and remember its facing there. Then jump "
+            "to frame 48, keep turning the same other "
+            "way to one full turn the other way (the "
+            "facing reads -6.2832 from where it "
+            "started, which stands it upright again), "
+            "and remember again, holding its place the "
+            "whole way. Blender fills in the roll "
+            "between the three memories. The tick "
+            "samples the real evaluated facing across "
+            "the whole span: it must run at least 20 "
+            "frames, the signed end turn on the flip "
+            "axis must land between -6.6 and -5.9, the "
+            "other axes must hold within 0.35, and the "
+            "thing must stay within 0.5 of its place - "
+            "signed, so the direction is what is "
+            "measured. A first-way flip does not tick "
+            "it - it turns +6.2832 the first way; a "
+            "half flip the other way does not tick it - "
+            "it ends upside down at -3.1416; a small "
+            "turn the other way does not tick it - it "
+            "turns only -0.4; a flip on another axis "
+            "does not tick it - it never turns on the "
+            "flip axis; a tilt does not tick it - it "
+            "leans and never flips; a flip the other "
+            "way that comes back does not tick it - it "
+            "ends facing forward, its turn undone; and "
+            "a flip the other way that travels does not "
+            "tick it - it leaves its place. Probed "
+            "before building on both supported "
+            "Blenders: facing memories at upright, "
+            "upside down the other way and one full "
+            "turn the other way read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Jump to frame 24, turn the thing half a "
+         "turn (3.142 rad) the other way on one axis so "
+         "it stands upside down, and remember its facing.",
+         "2. Jump to frame 48, keep turning the same "
+         "other way to one full turn (6.283 rad), and "
+         "remember again - it stands upright again.",
+         "3. Scrub the Timeline: the thing rolls all "
+         "the way over the other way and lands back on "
+         "its feet, in its own place."],
+     "missing": "No real flip the other way yet - "
+                "upside down in the middle the other "
+                "way round and one full turn the other "
+                "way, upright again, in its own place, "
+                "at least 20 frames later.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherflip,
+     "check": _check_otherflip},
+    {"title": "Watch it flip the other way, then save it",
+     "skill": "Finishing a flip the other way: the "
+              "whole turn the other way really plays, "
+              "and the file is saved with all three "
+              "facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing go over the other way - upright, "
+            "upside down, upright again. Then save the "
+            "file. The facing memories are saved with "
+            "it, so the flip still plays when the file "
+            "is opened again. The tick checks the save "
+            "and that the flip the other way is still "
+            "proven from the memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the facing, not the place - going all "
+         "the way over the other way is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the flip is still proven.",
+         "3. That is animation's seventy-first piece: "
+         "flipping the other way - one thing, its facing remembered "
+         "upright, remembered upside down the other way, and "
+         "remembered upright again as one full turn the other way, "
+         "and Blender filling in the roll between. The next piece tilts "
+         "a thing the other way - leaned over the "
+         "opposite way and left leaning. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the flip the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherflip_finish,
+     "check": _check_otherflip_finish},
+]
+
+def _othertilt_measure(context):
+    """(span, signed end lean on X, peak absolute
+    X lean, Y-axis drift, Z-axis drift, place
+    drift) for the main thing's facing memories.
+    A real tilt the other way leans a thing over
+    the other way on the X axis - the axis the
+    tilt piece leans +1.0 on - and leaves it
+    leaning: the SIGNED end lean - read against
+    the starting facing - must land between -1.8
+    and -0.6, the peak absolute X lean anywhere
+    across the span must stay within 2.2, the Y
+    and Z axes must each hold within 0.35, and
+    the thing must stay within 0.5 of its place.
+    The tilt piece's measure took the largest
+    ABSOLUTE lean on the two side axes, so it
+    cannot tell the two lean directions apart;
+    this measure reads the signed end lean on X,
+    so the direction is what is measured: the
+    other-way tilt reads -1.0, the first-way tilt
+    reads +1.0 and cannot pass. A small lean the
+    other way cannot pass - it only leans -0.25;
+    an over-lean the other way cannot pass - it
+    leans -2.6, past the end bar and the peak
+    bar; a rock the other way that settles
+    upright cannot pass - it ends facing level;
+    a spin cannot pass - its X lean stays 0 while
+    its Z facing turns the whole way; a flip the
+    other way cannot pass - it turns -6.2832, far
+    past the peak bar; a lean on the Y axis
+    cannot pass - its X lean stays 0 while Y
+    drifts 1.0; and a tilt the other way that
+    travels cannot pass - it leaves its place.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_othertilt.py;
+    outputs byte-identical on both versions):
+    facing memories level at frame 1 and leaned
+    -1.0 on the X axis at frame 48 read back
+    (span 47, ends -1.0, peak 1.0, Y drift 0.0,
+    Z drift 0.0, place drift 0.0, reading -0.484
+    partway leaned the other way at frame 24);
+    a first-way tilt read ends +1.0, a small lean
+    the other way read ends -0.25, an over-lean
+    the other way read ends -2.6 with peak 2.6, a
+    rock the other way that settled read ends
+    0.0, a spin read ends 0.0 with Z drift
+    6.2832, a flip the other way read ends
+    -6.2832 with peak 6.2832, a lean on the Y
+    axis read ends 0.0 with Y drift 1.0, and a
+    tilt the other way that moved read ends -1.0
+    with place drift 3.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    ends = rots[-1][0] - start[0]
+    peak = max(abs(r[0] - start[0]) for r in rots)
+    ydrift = max(abs(r[1] - start[1]) for r in rots)
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, ends, peak, ydrift, zdrift,
+            drift)
+
+
+def _check_othertilt_start(context):
+    return _check_tilt_start(context)
+
+
+def _anim_run_othertilt_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othertilt_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_othertilt(context):
+    span, ends, peak, ydrift, zdrift, drift = \
+        _othertilt_measure(context)
+    return (span >= 20 and -1.8 <= ends <= -0.6
+            and peak <= 2.2 and ydrift <= 0.35
+            and zdrift <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_othertilt(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othertilt(context):
+        return
+    scene = context.scene
+    if not _check_othertilt_start(context):
+        _anim_run_othertilt_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    scene.frame_set(first + 47)
+    main.rotation_euler = (start[0] - 1.0, start[1],
+                           start[2])
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_othertilt_finish(context):
+    return (_check_saved(context)
+            and _check_othertilt(context))
+
+
+def _anim_run_othertilt_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERTILT_STEPS = [
+    {"title": "Pick the thing that will tilt the other way",
+     "skill": "One thing, chosen: a tilt the other "
+              "way starts with a single thing that "
+              "will lean the other way",
+     "how": "The tilt piece leaned a thing over to "
+            "one side and left it leaning; this piece "
+            "leans it over the other way - the same "
+            "lean, leaned the opposite way, in its "
+            "own place. The way is the facing-memories "
+            "way again: the upright facing remembered "
+            "at the start, the leaned facing remembered "
+            "at the end - leaned the other way - and "
+            "Blender fills in the leaning between. "
+            "Start by picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will tilt the other way.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "leaning comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The tilt will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A tilt the other way is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, standing upright - Blender "
+            "stores a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole lean is measured from this facing.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing tilts "
+         "yet. One remembered facing cannot lean - it "
+         "takes the leaned facing remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_othertilt_start,
+     "check": _check_othertilt_start},
+    {"title": "Lean it over the other way and remember the lean",
+     "skill": "The tilt the other way itself: leaned "
+              "over the other way - a real lean, short "
+              "of going over - and left leaning at the "
+              "last frame",
+     "how": "Lean the thing over the other way and "
+            "remember its facing at the last frame, "
+            "keeping it in its place and not turning "
+            "it around. Blender fills in the leaning "
+            "between. The tick reads the real evaluated "
+            "facing sampled across the span: the span "
+            "must run at least 20 frames, the signed "
+            "lean at the end on the tilt axis must land "
+            "between -1.8 and -0.6, the lean must never "
+            "pass 2.2 anywhere across the span, the "
+            "other axes must each hold within 0.35, "
+            "and the thing must stay within 0.5 of its "
+            "place - signed, so the direction is what "
+            "is measured. A first-way tilt does not "
+            "tick it - it leans +1.0 the first way; a "
+            "small lean the other way does not tick it "
+            "- it leans only -0.25; an over-lean the "
+            "other way does not tick it - it leans "
+            "-2.6, past going over; a rock the other "
+            "way that settles upright does not tick it "
+            "- it ends facing level; a spin does not "
+            "tick it - it turns around and never leans; "
+            "a flip the other way does not tick it - it "
+            "goes all the way over; a lean on another "
+            "axis does not tick it - it never leans on "
+            "the tilt axis; and a tilt the other way "
+            "that travels does not tick it - it leaves "
+            "its place. Probed before building on both "
+            "supported Blenders: the facing memories "
+            "read back and interpolate identically on "
+            "each.",
+     "teach": [
+         "1. Go to the last frame, frame 48.",
+         "2. Lean the thing over the other way - about "
+         "a third of a quarter-turn the opposite way "
+         "from the tilt piece, not over onto its "
+         "side - and press Remember how it faces "
+         "right now.",
+         "3. Scrub the Timeline: the thing leans over "
+         "the other way and stays leaning."],
+     "missing": "No real tilt the other way yet - a "
+                "lean of -0.6 to -1.8 on the tilt axis "
+                "at the end, at least 20 frames across, "
+                "in its own place, and no turning "
+                "around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_othertilt,
+     "check": _check_othertilt},
+    {"title": "Watch it tilt the other way, then save it",
+     "skill": "Finishing a tilt the other way: the "
+              "lean the other way really plays, and "
+              "the file is saved with the facing "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean over the other way and stay "
+            "leaned. Then save the file. The facing "
+            "memories are saved with it, so the tilt "
+            "still plays when the file is opened "
+            "again. The tick checks the save and that "
+            "the tilt the other way is still proven "
+            "from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing tilt the other way - it "
+         "ends resting leaned over the other way, "
+         "still in its place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the tilt the other way "
+         "is still proven.",
+         "3. That is animation's seventy-second piece: "
+         "tilting the other way - one thing, its upright facing "
+         "remembered at the start, its leaned facing "
+         "remembered at the end leaned the other way, and Blender filling "
+         "in the leaning between. The next piece bows "
+         "a thing the other way - leaned deep over the "
+         "opposite way and brought back upright. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the tilt the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_othertilt_finish,
+     "check": _check_othertilt_finish},
+]
+
+def _otherbow_measure(context):
+    """(span, peak signed X lean, other-way X lean,
+    direction reversals, ends gap, Y drift, Z
+    drift, place drift) for the main thing's
+    facing memories. A real bow the other way
+    leans a thing over the other way on the X axis
+    - the axis the bow piece leans +0.9 on - and
+    brings it back upright: the peak signed X lean
+    - the most negative X facing read against the
+    starting facing - must land between -1.6 and
+    -0.6, the other-way (most positive) X lean
+    must never pass 0.15, the lean must change
+    direction at least once (the coming back), the
+    ends must land back within 0.3 of level, the Y
+    and Z axes must each hold within 0.35, and the
+    thing must stay within 0.5 of its place. The
+    bow piece's measure read the lean on whichever
+    side axis leaned the most and took the peak by
+    absolute value, so it cannot tell the two bow
+    directions apart; this measure reads the
+    signed X lean, so the direction is what is
+    measured: the other-way bow reads peak -0.9
+    with other-way 0.0, the first-way bow reads
+    peak 0.0 with other-way +0.9 and cannot pass.
+    A tilt the other way cannot pass - it leans
+    and stays, so it never comes back and ends
+    leaned; a sway cannot pass - it leans 0.8 the
+    first way too; a spin cannot pass - its Z
+    facing turns the whole way; a small bow the
+    other way cannot pass - it only leans -0.2;
+    and a nod the other way cannot pass - it only
+    leans -0.5, twice. Probed on Blender 5.3.0 and
+    4.2.5 before building (probe
+    scratch/probe_otherbow.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, leaned -0.9 on the
+    X axis at frame 24 and level again at frame 48
+    read back (span 47, peak -0.9, other-way 0.0,
+    reversals 1, ends 0.0, Y drift 0.0, Z drift
+    0.0, place drift 0.0, reading -0.45 partway
+    back up at frame 36); a first-way bow read
+    peak 0.0 with other-way 0.9, a tilt the other
+    way read peak -1.0 with reversals 0 and ends
+    1.0, a sway read peak -0.8 with other-way 0.8,
+    a spin read Z drift 6.2832, a small bow the
+    other way read peak -0.2, a nod the other way
+    read peak -0.5, and a bow the other way that
+    moved read place drift 3.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    xs = [r[0] - start[0] for r in rots]
+    peak = min(xs)
+    other = max(xs)
+    diffs = [xs[i + 1] - xs[i]
+             for i in range(len(xs) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = max(abs(rots[-1][0] - start[0]),
+               abs(rots[-1][1] - start[1]))
+    ydrift = max(abs(r[1] - start[1]) for r in rots)
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, peak, other, reversals, ends,
+            ydrift, zdrift, drift)
+
+
+def _check_otherbow_start(context):
+    return _check_bow_start(context)
+
+
+def _anim_run_otherbow_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherbow_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_otherbow(context):
+    span, peak, other, reversals, ends, ydrift, \
+        zdrift, drift = _otherbow_measure(context)
+    return (span >= 20 and -1.6 <= peak <= -0.6
+            and other <= 0.15 and reversals >= 1
+            and ends <= 0.3 and ydrift <= 0.35
+            and zdrift <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_otherbow(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherbow(context):
+        return
+    scene = context.scene
+    if not _check_otherbow_start(context):
+        _anim_run_otherbow_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, lean in ((23, -0.9), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0] + lean,
+                               start[1], start[2])
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherbow_finish(context):
+    return (_check_saved(context)
+            and _check_otherbow(context))
+
+
+def _anim_run_otherbow_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERBOW_STEPS = [
+    {"title": "Pick the thing that will bow the other way",
+     "skill": "One thing, chosen: a bow the other "
+              "way starts with a single thing that "
+              "will lean over the other way and come "
+              "back up",
+     "how": "The bow piece leaned a thing deep over "
+            "to one side and brought it back upright; "
+            "this piece leans it over the other way - "
+            "the same deep lean, leaned the opposite "
+            "way, and brought back upright again. The "
+            "way is the facing-memories way again: the "
+            "upright facing remembered at the start, "
+            "the deep lean the other way remembered at "
+            "the bottom of the bow, the upright facing "
+            "remembered again at the end, and Blender "
+            "fills in the bowing between. Start by "
+            "picking the thing: any shape you already "
+            "have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will bow the other way.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "bow comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The bow will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A bow the other way is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, standing upright - Blender "
+            "stores a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole bow is measured from this facing, "
+            "and the thing must come back to it at "
+            "the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing bows "
+         "yet. One remembered facing cannot bow - it "
+         "takes the lean remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherbow_start,
+     "check": _check_otherbow_start},
+    {"title": "Bow it over the other way and bring it back upright",
+     "skill": "The bow the other way itself: leaned "
+              "deep the other way at the middle, never "
+              "leaning the first way, and upright "
+              "again at the last frame, in its own "
+              "place the whole way",
+     "how": "Lean the thing deep over the other way "
+            "and remember its facing, then set it "
+            "upright and remember once more at the "
+            "last frame, keeping it in its place, not "
+            "turning it around, and never leaning it "
+            "the first way: leaned -0.9 on the bow "
+            "axis remembered at frame 24, and upright "
+            "again remembered at frame 48. Blender "
+            "fills in the bowing between. The tick "
+            "reads the real evaluated facing sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the peak signed lean on "
+            "the bow axis must land between -1.6 and "
+            "-0.6, the lean the first way must never "
+            "pass 0.15, the lean must change direction "
+            "at least once (the coming back), the ends "
+            "must land within 0.3 of level, the other "
+            "axes must each hold within 0.35, and the "
+            "thing must stay within 0.5 of its place "
+            "- signed, so the direction is what is "
+            "measured. A first-way bow does not tick "
+            "it - it leans +0.9 the first way; a tilt "
+            "the other way does not tick it - it leans "
+            "and stays, never coming back; a sway does "
+            "not tick it - it leans the first way too; "
+            "a spin does not tick it - it turns around "
+            "and never leans; a small bow the other "
+            "way does not tick it - it leans only "
+            "-0.2; a nod the other way does not tick "
+            "it - it leans only -0.5, twice; and a bow "
+            "the other way that travels does not tick "
+            "it - it leaves its place. Probed before "
+            "building on both supported Blenders: the "
+            "facing memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 24. Lean the thing deep "
+         "over the other way - about a quarter of a "
+         "quarter-turn the opposite way from the bow "
+         "piece - and press Remember how it faces "
+         "right now.",
+         "2. Go to frame 48. Set it upright again "
+         "and remember once more.",
+         "3. Scrub the Timeline: the thing bows "
+         "over the other way and comes back upright, "
+         "never leaning the first way."],
+     "missing": "No real bow the other way yet - a "
+                "lean of -0.6 to -1.6 on the bow axis, "
+                "no more than 0.15 the first way, "
+                "upright again at the end, at least 20 "
+                "frames across, in its own place, and "
+                "no turning around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherbow,
+     "check": _check_otherbow},
+    {"title": "Watch it bow the other way, then save it",
+     "skill": "Finishing a bow the other way: the "
+              "bowing the other way really plays, and "
+              "the file is saved with the facing "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean deep over the other way and "
+            "come back upright. Then save the file. "
+            "The facing memories are saved with it, so "
+            "the bow still plays when the file is "
+            "opened again. The tick checks the save "
+            "and that the bow the other way is still "
+            "proven from the evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing bow the other way - it "
+         "ends standing upright again, still in its "
+         "place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the bow the other way "
+         "is still proven.",
+         "3. That is animation's seventy-third piece: "
+         "bowing the other way - one thing, its upright facing "
+         "remembered at the start, leaned deep the other "
+         "way remembered at the bottom of the bow, upright again remembered at the "
+         "end, and Blender filling in the bowing "
+         "between. The next piece nods "
+         "a thing the other way - leaned a little way the "
+         "opposite way twice and brought back upright "
+         "each time. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the bow the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherbow_finish,
+     "check": _check_otherbow_finish},
+]
+
+def _othernod_measure(context):
+    """(span, peak signed X lean, other-way X lean,
+    direction reversals, ends gap, Y drift, Z
+    drift, place drift) for the main thing's
+    facing memories. A real nod the other way
+    leans a thing a little way over the other way
+    on the X axis - the axis the nod piece leans
+    +0.5 on - brings it back upright, leans it the
+    other way again, and settles upright: the peak
+    signed X lean - the most negative X facing
+    read against the starting facing - must land
+    between -0.7 and -0.35, the other-way (most
+    positive) X lean must never pass 0.15, the
+    lean must change direction at least three
+    times (down, back, down, back), the ends must
+    land back within 0.3 of level, the Y and Z
+    axes must each hold within 0.35, and the
+    thing must stay within 0.5 of its place. The
+    nod piece's measure read the lean on whichever
+    side axis leaned the most and took the peak by
+    absolute value, so it cannot tell the two nod
+    directions apart; this measure reads the
+    signed X lean, so the direction is what is
+    measured: the other-way nod reads peak -0.5
+    with other-way 0.0, the first-way nod reads
+    peak 0.0 with other-way +0.5 and cannot pass.
+    A bow the other way cannot pass - it leans
+    -0.9, past the nod's cap, and comes back only
+    once; a tilt the other way cannot pass - it
+    leans and stays, so it never comes back and
+    ends leaned; a sway cannot pass - it leans
+    0.8 the first way too; a spin cannot pass -
+    its Z facing turns the whole way; a small nod
+    the other way cannot pass - it only leans
+    -0.15; and a single nod the other way cannot
+    pass - it comes back only once. Probed on
+    Blender 5.3.0 and 4.2.5 before building (probe
+    scratch/probe_othernod.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, leaned -0.5 on the
+    X axis at frame 13, level again at frame 24,
+    leaned -0.5 again at frame 37 and level again
+    at frame 48 read back (span 47, peak -0.5,
+    other-way 0.0, reversals 3, ends 0.0, Y drift
+    0.0, Z drift 0.0, place drift 0.0, reading
+    -0.4916 near the bottom of the second nod at
+    frame 36); a first-way nod read peak 0.0 with
+    other-way 0.5, a bow the other way read peak
+    -0.9 with reversals 1, a tilt the other way
+    read peak -1.0 with reversals 0 and ends 1.0,
+    a sway read peak -0.8 with other-way 0.8, a
+    spin read Z drift 6.2832, a small nod the
+    other way read peak -0.15, a single nod the
+    other way read peak -0.5 with reversals 1,
+    and a nod the other way that moved read place
+    drift 3.0 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0, 99.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 99.0, 0, 99.0, 99.0, 99.0, 99.0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    xs = [r[0] - start[0] for r in rots]
+    peak = min(xs)
+    other = max(xs)
+    diffs = [xs[i + 1] - xs[i]
+             for i in range(len(xs) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = max(abs(rots[-1][0] - start[0]),
+               abs(rots[-1][1] - start[1]))
+    ydrift = max(abs(r[1] - start[1]) for r in rots)
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, peak, other, reversals, ends,
+            ydrift, zdrift, drift)
+
+
+def _check_othernod_start(context):
+    return _check_nod_start(context)
+
+
+def _anim_run_othernod_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othernod_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_othernod(context):
+    span, peak, other, reversals, ends, ydrift, \
+        zdrift, drift = _othernod_measure(context)
+    return (span >= 20 and -0.7 <= peak <= -0.35
+            and other <= 0.15 and reversals >= 3
+            and ends <= 0.3 and ydrift <= 0.35
+            and zdrift <= 0.35 and drift <= 0.5)
+
+
+def _anim_run_othernod(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othernod(context):
+        return
+    scene = context.scene
+    if not _check_othernod_start(context):
+        _anim_run_othernod_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, lean in ((12, -0.5), (23, 0.0),
+                      (36, -0.5), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0] + lean,
+                               start[1], start[2])
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_othernod_finish(context):
+    return (_check_saved(context)
+            and _check_othernod(context))
+
+
+def _anim_run_othernod_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERNOD_STEPS = [
+    {"title": "Pick the thing that will nod the other way",
+     "skill": "One thing, chosen: a nod the other "
+              "way starts with a single thing that "
+              "will lean a little way over the other "
+              "way, twice, and come back up each time",
+     "how": "The nod piece leaned a thing a little "
+            "way to one side, twice, and brought it "
+            "back upright each time; this piece "
+            "leans it the other way - the same "
+            "little lean, leaned the opposite way, "
+            "twice, and brought back upright each "
+            "time. The way is the facing-memories "
+            "way again: the upright facing "
+            "remembered at the start, the lean the "
+            "other way remembered at the bottom of "
+            "each nod, the upright facing remembered "
+            "again after each nod, and Blender fills "
+            "in the nodding between. Start by "
+            "picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will nod the other way.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "nods come after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The nods will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A nod the other way is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, standing upright - Blender "
+            "stores a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole nod is measured from this facing, "
+            "and the thing must come back to it after "
+            "each nod and at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing nods "
+         "yet. One remembered facing cannot nod - it "
+         "takes the leans remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_othernod_start,
+     "check": _check_othernod_start},
+    {"title": "Nod it the other way twice and bring it back upright each time",
+     "skill": "The nod the other way itself: leaned "
+              "a little way the other way at the "
+              "bottom of each nod, never leaning the "
+              "first way, and upright again after "
+              "each nod, in its own place the whole "
+              "way",
+     "how": "Lean the thing a little way over the "
+            "other way and remember its facing, set "
+            "it upright and remember once more, lean "
+            "it the other way again and remember, "
+            "then set it upright and remember at the "
+            "last frame, keeping it in its place, not "
+            "turning it around, and never leaning it "
+            "the first way: leaned -0.5 on the nod "
+            "axis remembered at frame 13, upright "
+            "again remembered at frame 24, leaned "
+            "-0.5 again remembered at frame 37, and "
+            "upright again remembered at frame 48. "
+            "Blender fills in the nodding between. "
+            "The tick reads the real evaluated facing "
+            "sampled across the span: the span must "
+            "run at least 20 frames, the peak signed "
+            "lean on the nod axis must land between "
+            "-0.7 and -0.35, the lean the first way "
+            "must never pass 0.15, the lean must "
+            "change direction at least three times "
+            "(down, back, down, back), the ends must "
+            "land within 0.3 of level, the other axes "
+            "must each hold within 0.35, and the "
+            "thing must stay within 0.5 of its place "
+            "- signed, so the direction is what is "
+            "measured. A first-way nod does not tick "
+            "it - it leans +0.5 the first way, twice; "
+            "a bow the other way does not tick it - "
+            "it leans -0.9, past the nod's cap, and "
+            "comes back only once; a tilt the other "
+            "way does not tick it - it leans and "
+            "stays, never coming back; a sway does "
+            "not tick it - it leans the first way "
+            "too; a spin does not tick it - it turns "
+            "around and never leans; a small nod the "
+            "other way does not tick it - it leans "
+            "only -0.15, twice; a single nod the "
+            "other way does not tick it - it comes "
+            "back only once; and a nod the other way "
+            "that travels does not tick it - it "
+            "leaves its place. Probed before "
+            "building on both supported Blenders: the "
+            "facing memories read back and interpolate "
+            "identically on each.",
+     "teach": [
+         "1. Go to frame 13. Lean the thing a "
+         "little way over the other way - about an "
+         "eighth of a turn the opposite way from "
+         "the nod piece - and press Remember how "
+         "it faces right now.",
+         "2. Go to frame 24. Set it upright again "
+         "and remember once more. Go to frame 37, "
+         "lean it the other way again, and "
+         "remember; then go to frame 48, set it "
+         "upright, and remember a last time.",
+         "3. Scrub the Timeline: the thing nods "
+         "the other way twice and comes back "
+         "upright each time, never leaning the "
+         "first way."],
+     "missing": "No real nod the other way yet - a "
+                "lean of -0.35 to -0.7 on the nod "
+                "axis, twice, no more than 0.15 the "
+                "first way, upright again after each "
+                "nod and at the end, at least 20 "
+                "frames across, in its own place, and "
+                "no turning around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_othernod,
+     "check": _check_othernod},
+    {"title": "Watch it nod the other way, then save it",
+     "skill": "Finishing a nod the other way: the "
+              "nodding the other way really plays, "
+              "and the file is saved with the facing "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean a little way over the other "
+            "way, come back upright, lean the other "
+            "way again, and settle upright. Then save "
+            "the file. The facing memories are saved "
+            "with it, so the nods still play when the "
+            "file is opened again. The tick checks "
+            "the save and that the nod the other way "
+            "is still proven from the evaluated "
+            "facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing nod the other way - it "
+         "ends standing upright again, still in its "
+         "place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the nod the other way "
+         "is still proven.",
+         "3. That is animation's seventy-fourth piece: "
+         "nodding the other way - one thing, its upright facing "
+         "remembered at the start, leaned a little way the other "
+         "way remembered at the bottom of each nod, upright again remembered after "
+         "each nod and at the "
+         "end, and Blender filling in the nodding "
+         "between. The next piece wags "
+         "a thing the other way - turned a little the "
+         "opposite way first, back and forth, and "
+         "settled facing forward. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the nod the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_othernod_finish,
+     "check": _check_othernod_finish},
+]
+
+def _otherwag_measure(context):
+    """(span, highest turn, lowest turn,
+    direction reversals, ends gap, side-axis
+    drift, place drift, first extreme sign) for
+    the main thing's facing memories. A real wag
+    the other way turns a thing a little way the
+    other way FIRST on the upright (Z) axis -
+    the way the wag piece does not start - back
+    through the middle to the first way, back
+    the other way again, and settles facing
+    forward: the turn - read against the
+    starting facing - must reach between 0.3
+    and 0.65 one way and between -0.65 and -0.3
+    the other way, must change direction at
+    least three times (the other way, the first
+    way, back, settle), the ends must land back
+    within 0.3 of the starting facing, the side
+    axes (X and Y) must hold within 0.35, and
+    the thing must stay within 0.5 of its place.
+    The wag piece's measure read only the high
+    and low turns, so it cannot tell which way
+    the wag swung first; this measure also
+    records the sign of the first sampled turn
+    whose size passes 0.2 - the first extreme
+    excursion - and that sign must be negative:
+    the other-way wag reads first_sign -1, the
+    first-way wag reads first_sign +1 with the
+    same high, low and reversals and cannot
+    pass. A spin cannot pass - it turns the
+    whole way round; a nod cannot pass - it
+    leans on a side axis and never turns; a
+    sway cannot pass - it leans on a side axis
+    too; a small wag the other way cannot pass
+    - it only turns 0.15 each way and never
+    passes the 0.2 first-extreme line; a single
+    swing the other way cannot pass - it turns
+    the other way and comes back only once; and
+    a turn-around the other way cannot pass -
+    it turns the whole half circle and stays
+    facing the other way. Probed on Blender
+    5.3.0 and 4.2.5 before building (probe
+    scratch/probe_otherwag.py; outputs
+    byte-identical on both versions): facing
+    memories level at frame 1, turned -0.4 on
+    the Z axis at frame 13, turned 0.4 at frame
+    25, turned -0.4 again at frame 37 and level
+    again at frame 48 read back (span 47, high
+    0.4, low -0.4, reversals 3, ends 0.0, side
+    drift 0.0, place drift 0.0, first_sign -1);
+    a first-way wag read the same high, low and
+    reversals with first_sign +1, a spin read
+    high 6.2832 with ends 6.2832, a nod read
+    high 0.0 with side drift 0.5, a sway read
+    high 0.0 with side drift 0.8, a small wag
+    the other way read high 0.15 and low -0.15
+    with first_sign 0, a single swing the other
+    way read low -0.4 with reversals 1, and a
+    turn-around the other way read low -3.1416
+    with ends 3.1416 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0, 0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0, 0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0, 0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    turn = [r[2] - start[2] for r in rots]
+    first_sign = 0
+    for t in turn:
+        if abs(t) > 0.2:
+            first_sign = 1 if t > 0 else -1
+            break
+    diffs = [turn[i + 1] - turn[i]
+             for i in range(len(turn) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = abs(rots[-1][2] - start[2])
+    side = max(max(abs(r[0] - start[0]),
+                   abs(r[1] - start[1])) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, max(turn), min(turn),
+            reversals, ends, side, drift, first_sign)
+
+
+def _check_otherwag_start(context):
+    return _check_wag_start(context)
+
+
+def _anim_run_otherwag_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherwag_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_otherwag(context):
+    span, high, low, reversals, ends, side, drift, \
+        first_sign = _otherwag_measure(context)
+    return (span >= 20 and 0.3 <= high <= 0.65
+            and -0.65 <= low <= -0.3
+            and reversals >= 3 and ends <= 0.3
+            and side <= 0.35 and drift <= 0.5
+            and first_sign < 0)
+
+
+def _anim_run_otherwag(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherwag(context):
+        return
+    scene = context.scene
+    if not _check_otherwag_start(context):
+        _anim_run_otherwag_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, turn in ((12, -0.4), (24, 0.4),
+                      (36, -0.4), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0], start[1],
+                               start[2] + turn)
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherwag_finish(context):
+    return (_check_saved(context)
+            and _check_otherwag(context))
+
+
+def _anim_run_otherwag_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERWAG_STEPS = [
+    {"title": "Pick the thing that will wag the other way",
+     "skill": "One thing, chosen: a wag the other "
+              "way starts with a single thing that "
+              "will turn a little the other way "
+              "first, and the other, again and again",
+     "how": "The wag piece turned a thing a little "
+            "one way first, back through the middle "
+            "to the other way, back again, and "
+            "settled it facing forward; this piece "
+            "swings it the other way first - the "
+            "same little turns, started in the "
+            "opposite direction. The way is the "
+            "facing-memories way again: the facing "
+            "remembered at the start, the turn the "
+            "other way remembered, the turn the "
+            "first way remembered, the other-way "
+            "turn remembered once more, and facing "
+            "forward again at the end, and Blender "
+            "fills in the wagging between. Start by "
+            "picking the thing: any shape you "
+            "already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will wag the other way.",
+         "2. Leave its facing alone for now. The "
+         "starting facing is remembered first; the "
+         "wag comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The wag will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing",
+     "skill": "The starting facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A wag the other way is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, facing forward - Blender "
+            "stores a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole wag is measured from this facing, "
+            "and the thing must come back to it at "
+            "the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing wags "
+         "yet. One remembered facing cannot wag - it "
+         "takes the turns remembered too."],
+     "missing": "No starting facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherwag_start,
+     "check": _check_otherwag_start},
+    {"title": "Wag it the other way and settle it forward",
+     "skill": "The wag the other way itself: turned "
+              "a little the other way first, back "
+              "through the middle to the first way, "
+              "back the other way again, and facing "
+              "forward at the last frame, never "
+              "leaning, in its own place the whole way",
+     "how": "Turn the thing a little the other way "
+            "and remember its facing, turn it back "
+            "through the middle to the first way and "
+            "remember again, turn it back the other "
+            "way and remember, then face it forward "
+            "and remember at the last frame, keeping "
+            "it in its place and never leaning it: "
+            "turned -0.4 on the upright axis "
+            "remembered at frame 13, turned 0.4 the "
+            "first way at frame 25, turned -0.4 the "
+            "other way again at frame 37, and facing "
+            "forward again at frame 48. Blender "
+            "fills in the wagging between. The tick "
+            "reads the real evaluated facing sampled "
+            "across the span: the span must run at "
+            "least 20 frames, the turn must reach "
+            "between 0.3 and 0.65 each way, the turn "
+            "must change direction at least three "
+            "times (the other way, the first way, "
+            "back, settle), the ends must land "
+            "within 0.3 of the starting facing, the "
+            "side axes must hold within 0.35, the "
+            "thing must stay within 0.5 of its "
+            "place, and the first turn big enough to "
+            "read - the first sampled turn past 0.2 "
+            "- must swing the other way, negative. "
+            "A first-way wag does not tick it - it "
+            "reaches the same turns but swings the "
+            "first way first; a spin does not tick "
+            "it - it turns the whole way round; a "
+            "nod does not tick it - it leans and "
+            "never turns; a sway does not tick it - "
+            "it leans too; a small wag the other "
+            "way does not tick it - it barely turns; "
+            "a single swing the other way does not "
+            "tick it - it comes back only once; and "
+            "a turn-around the other way does not "
+            "tick it either - it turns the whole "
+            "half circle and stays. Probed before "
+            "building on both supported Blenders: "
+            "the facing memories read back and "
+            "interpolate identically on each.",
+     "teach": [
+         "1. Go to frame 13. Turn the thing a "
+         "little the other way - the opposite way "
+         "from the wag piece's first swing - and "
+         "press Remember how it faces right now. "
+         "Go to frame 25, turn it the same amount "
+         "the first way, and remember once more.",
+         "2. Go to frame 37. Turn it back the other "
+         "way and remember. Go to frame 48, face it "
+         "forward, and remember once more.",
+         "3. Scrub the Timeline: the thing wags "
+         "the other way - the other way first, the "
+         "first way, back again - and settles "
+         "facing forward, never leaning."],
+     "missing": "No real wag the other way yet - "
+                "turns of 0.3 to 0.65 each way with "
+                "the other way swung first and "
+                "repeated and facing forward at the "
+                "end, at least 20 frames across, in "
+                "its own place, and no leaning.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherwag,
+     "check": _check_otherwag},
+    {"title": "Watch it wag the other way, then save it",
+     "skill": "Finishing a wag the other way: the "
+              "wagging the other way really plays, "
+              "and the file is saved with the facing "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing turn a little the other way first, "
+            "back through the middle to the first "
+            "way, back the other way again, and "
+            "settle facing forward. Then save the "
+            "file. The facing memories are saved "
+            "with it, so the wag still plays when "
+            "the file is opened again. The tick "
+            "checks the save and that the wag the "
+            "other way is still proven from the "
+            "evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing wag the other way - it "
+         "ends facing forward again, still in its "
+         "place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the wag the other way "
+         "is still proven.",
+         "3. That is animation's seventy-fifth piece: "
+         "wagging the other way - one thing, its facing "
+         "remembered at the start, turned a little the other "
+         "way remembered first, turned the first way "
+         "remembered, turned back the other way remembered, "
+         "facing forward again remembered at the "
+         "end, and Blender filling in the wagging "
+         "between. The next piece sways "
+         "a thing the other way - leaned to the "
+         "opposite side first, then the first side, "
+         "and settled upright. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the wag the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherwag_finish,
+     "check": _check_otherwag_finish},
+]
+
+def _othersway_measure(context):
+    """(span, most lean, least lean, direction
+    reversals, ends gap, upright drift, place
+    drift, first extreme sign) for the main
+    thing's facing memories. A real sway the
+    other way leans a thing to the other side
+    FIRST, then to the first side, and settles
+    it upright again: on whichever side axis
+    leans the most, the lean - read against the
+    starting facing - must reach at least +0.6
+    one way and at least -0.6 the other, must
+    change direction at least twice, the ends
+    must land back within 0.3 of level, the
+    upright (Z) facing must hold within 0.35,
+    and the thing must stay within 0.5 of its
+    place. The sway piece's measure read only
+    the most and least leans, so it cannot tell
+    which way the sway leaned first; this
+    measure also records the sign of the first
+    sampled lean whose size passes 0.2 - the
+    first extreme excursion - and that sign
+    must be negative: the other-way sway reads
+    first_sign -1, the first-way sway reads
+    first_sign +1 with the same most, least and
+    reversals and cannot pass. A tilt cannot
+    pass - it leans one way and stays; a spin
+    cannot pass - its side axes never lean and
+    its upright facing turns the whole way; a
+    small sway the other way cannot pass - it
+    only leans 0.2 each way; a one-way rock the
+    other way cannot pass - it never leans the
+    first way and changes direction only once;
+    and a bow cannot pass - it leans deep one
+    way only and changes direction only once.
+    Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_othersway.py;
+    outputs byte-identical on both versions):
+    facing memories level at frame 1, leaned
+    -0.8 on the X axis at frame 17, leaned +0.8
+    at frame 33 and level again at frame 48 read
+    back (span 47, most 0.8, least -0.8,
+    reversals 2, ends 0.0, upright drift 0.0,
+    place drift 0.0, first_sign -1); a first-way
+    sway read the same most, least and reversals
+    with first_sign +1, a tilt read most 0.0 with
+    least -0.8, reversals 0 and ends 0.8, a spin
+    read upright drift 6.2832 with first_sign 0,
+    a small sway the other way read most 0.2 and
+    least -0.2, a one-way rock the other way read
+    most 0.0 with least -0.8 and reversals 1, and
+    a bow read most 0.0 with least -0.9 and
+    reversals 1 - none can pass."""
+    import math
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0, 0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0, 0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 0, 99.0, 99.0, 99.0, 0
+    step = max(1, (last - first) // 24)
+    rots = []
+    places = []
+    frame = first
+    while frame <= last:
+        rots.append(_anim_eval(context, main, frame,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        rots.append(_anim_eval(context, main, last,
+                               "rotation_euler"))
+        places.append(_anim_eval(context, main, last,
+                                 "location"))
+    start = rots[0]
+    series = {a: [r[a] - start[a] for r in rots]
+              for a in (0, 1)}
+    busiest = max((0, 1),
+                  key=lambda a: max(series[a])
+                  - min(series[a]))
+    lean = series[busiest]
+    first_sign = 0
+    for t in lean:
+        if abs(t) > 0.2:
+            first_sign = 1 if t > 0 else -1
+            break
+    diffs = [lean[i + 1] - lean[i]
+             for i in range(len(lean) - 1)]
+    diffs = [d for d in diffs if abs(d) > 1e-9]
+    reversals = sum(1 for i in range(1, len(diffs))
+                    if (diffs[i] > 0) != (diffs[i - 1] > 0))
+    ends = max(abs(rots[-1][0] - start[0]),
+               abs(rots[-1][1] - start[1]))
+    zdrift = max(abs(r[2] - start[2]) for r in rots)
+    drift = 0.0
+    for p in places:
+        d = math.sqrt(sum((p[i] - places[0][i]) ** 2
+                          for i in range(3)))
+        drift = max(drift, d)
+    return (last - first, max(lean), min(lean),
+            reversals, ends, zdrift, drift, first_sign)
+
+
+def _check_othersway_start(context):
+    return _check_sway_start(context)
+
+
+def _anim_run_othersway_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othersway_start(context):
+        return
+    context.scene.frame_set(1)
+    main.rotation_euler = (0.0, 0.0, 0.0)
+    main.keyframe_insert(data_path="rotation_euler",
+                         frame=1)
+
+
+def _check_othersway(context):
+    span, most, least, reversals, ends, zdrift, drift, \
+        first_sign = _othersway_measure(context)
+    return (span >= 20 and most >= 0.6 and least <= -0.6
+            and reversals >= 2 and ends <= 0.3
+            and zdrift <= 0.35 and drift <= 0.5
+            and first_sign < 0)
+
+
+def _anim_run_othersway(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_othersway(context):
+        return
+    scene = context.scene
+    if not _check_othersway_start(context):
+        _anim_run_othersway_start(context)
+    keys = _anim_keys(main, "rotation_euler")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first,
+                       "rotation_euler")
+    for off, lean in ((16, -0.8), (32, 0.8), (47, 0.0)):
+        scene.frame_set(first + off)
+        main.rotation_euler = (start[0] + lean,
+                               start[1], start[2])
+        main.keyframe_insert(data_path="rotation_euler",
+                             frame=first + off)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_othersway_finish(context):
+    return (_check_saved(context)
+            and _check_othersway(context))
+
+
+def _anim_run_othersway_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERSWAY_STEPS = [
+    {"title": "Pick the thing that will sway the other way",
+     "skill": "One thing, chosen: a sway the other "
+              "way starts with a single thing that "
+              "will lean from side to side, the other "
+              "side first",
+     "how": "The sway piece leaned a thing to one "
+            "side first, then to the other, and "
+            "settled it upright again; this piece "
+            "leans it to the other side first - the "
+            "same leans, started in the opposite "
+            "direction. The way is the "
+            "facing-memories way again: the upright "
+            "facing remembered at the start, the lean "
+            "each way remembered as it passes, the "
+            "upright facing remembered again at the "
+            "end, and Blender fills in the swaying "
+            "between. Start by picking the thing: "
+            "any shape you already have, or a fresh "
+            "cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will sway the other way.",
+         "2. Leave its facing alone for now. The "
+         "upright facing is remembered first; the "
+         "swaying comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The sway will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, upright",
+     "skill": "The upright facing, remembered: a "
+              "facing memory at frame 1, level on every "
+              "axis",
+     "how": "A sway the other way is read against "
+            "the facing the thing starts from, so the "
+            "start remembers the thing's facing at "
+            "frame 1, standing upright - Blender "
+            "stores a facing memory (a keyframe on the "
+            "thing's Rotation). The tick reads the "
+            "facing memories themselves: one must sit "
+            "at the start, level on every axis. The "
+            "whole sway is measured from this facing, "
+            "and the thing must come back to it at "
+            "the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Press Remember how it faces right now "
+         "above - Buddy remembers its facing there, "
+         "and this piece reads the facing memory.",
+         "3. Scrub forward and back: nothing sways "
+         "yet. One remembered facing cannot sway - "
+         "it takes the leans remembered too."],
+     "missing": "No upright facing remembered yet - "
+                "remember the thing's facing at frame 1.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_othersway_start,
+     "check": _check_othersway_start},
+    {"title": "Sway it side to side the other way and settle it upright",
+     "skill": "The sway the other way itself: leaned "
+              "the other way first, leaned the first "
+              "way, and upright again at the last "
+              "frame, in its own place the whole way",
+     "how": "Lean the thing over to the other side "
+            "and remember its facing, lean it over to "
+            "the first side and remember again, then "
+            "set it upright and remember once more at "
+            "the last frame, keeping it in its place "
+            "and not turning it around: leaned -0.8 "
+            "on the X axis remembered at frame 17, "
+            "leaned 0.8 the first way remembered at "
+            "frame 33, and upright again remembered "
+            "at frame 48. Blender fills in the "
+            "swaying between. The tick reads the real "
+            "evaluated facing sampled across the span: "
+            "the span must run at least 20 frames, on "
+            "the side axis that leans the most the lean "
+            "must reach at least +0.6 one way and at "
+            "least -0.6 the other, the lean must change "
+            "direction at least twice, the ends must "
+            "land within 0.3 of level, the upright "
+            "facing must hold within 0.35, the thing "
+            "must stay within 0.5 of its place, and "
+            "the first lean big enough to read - the "
+            "first sampled lean past 0.2 - must lean "
+            "the other way, negative. A first-way sway "
+            "does not tick it - it reaches the same "
+            "leans but leans the first way first; a "
+            "tilt does not tick it - it leans one way "
+            "and stays; a spin does not tick it; a "
+            "small sway the other way does not tick "
+            "it - it barely leans; a one-way rock the "
+            "other way does not tick it - it never "
+            "leans the first way; and a bow does not "
+            "tick it either - it leans deep one way "
+            "only. Probed before building on both "
+            "supported Blenders: the facing memories "
+            "read back and interpolate identically on "
+            "each.",
+     "teach": [
+         "1. Go to frame 17. Lean the thing over to "
+         "the other side - the opposite side from "
+         "the sway piece's first lean - and press "
+         "Remember how it faces right now.",
+         "2. Go to frame 33. Lean it over to the "
+         "first side by the same amount, and "
+         "remember again.",
+         "3. Go to frame 48. Set it upright again and "
+         "remember once more. Scrub the Timeline: "
+         "the thing sways the other way - the other "
+         "side first, the first side, and settles "
+         "upright."],
+     "missing": "No real sway the other way yet - "
+                "a lean of 0.6 or more each way on one "
+                "side axis with the other way leaned "
+                "first, at least two changes of "
+                "direction, upright again at the end, "
+                "at least 20 frames across, in its own "
+                "place, and no turning around.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_othersway,
+     "check": _check_othersway},
+    {"title": "Watch it sway the other way, then save it",
+     "skill": "Finishing a sway the other way: the "
+              "swaying the other way really plays, "
+              "and the file is saved with the facing "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean the other way first, lean the "
+            "first way, and settle upright. Then save "
+            "the file. The facing memories are saved "
+            "with it, so the sway still plays when "
+            "the file is opened again. The tick "
+            "checks the save and that the sway the "
+            "other way is still proven from the "
+            "evaluated facing.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing sway the other way - it "
+         "ends standing upright again, still in its "
+         "place.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the sway the other way "
+         "is still proven.",
+         "3. That is animation's seventy-sixth piece: "
+         "swaying the other way - one thing, its upright facing "
+         "remembered at the start, leaned the other way "
+         "remembered first, leaned the first way "
+         "remembered, upright again remembered at the "
+         "end, and Blender filling in the swaying "
+         "between. The next piece swings "
+         "a thing the other way - leaned the other "
+         "way first, then the first way, "
+         "and back to the first lean. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the sway the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_othersway_finish,
+     "check": _check_othersway_finish},
+]
+
+def _otherswing_measure(context):
+    """(span, lean range, ends gap, lowest lean,
+    highest lean, starting lean) on the main thing's
+    busiest facing axis. A real swing the other way
+    starts leaned the OTHER way, leans the first way
+    in the middle, and comes back to its starting
+    lean: the first five readings are the swing
+    piece's own arc readings - the lean, read across
+    the whole span by putting the play line across
+    it, must sweep at least one radian end to end,
+    must reach clearly negative AND clearly positive
+    on the busiest axis, and the two ends must sit
+    at about the same lean - and the sixth is the
+    starting lean itself, the evaluated facing on
+    that busiest axis at the first remembered frame,
+    the absolute leaned value, not a lean read
+    against the start. The swing piece's arc checker
+    is symmetric, so it cannot tell the two ways
+    apart; this measure can: the other-way swing
+    reads a starting lean of +0.7, the first-way
+    swing reads -0.7 with the same span, range, ends,
+    low and high and cannot pass. A tip that never
+    crosses the middle cannot pass - it leans one
+    way only; a small swing the other way cannot
+    pass - it only leans 0.2 each way; a one-way
+    move cannot pass - it holds only two facing
+    memories, and this measure requires at least
+    three; and a swing starting upright cannot pass
+    - it starts at 0.0 and never leans the other way
+    at all. Probed on Blender 5.3.0 and 4.2.5 before
+    building (probe scratch/probe_otherswing.py;
+    outputs byte-identical on both versions): facing
+    memories leaned +0.7 on the Y axis at frame 1,
+    -0.7 at frame 24 and +0.7 again at frame 48 read
+    back (span 47, range 1.4, ends 0.0, low -0.7,
+    high 0.7, starting lean 0.7); a first-way swing
+    read the same span, range, ends, low and high
+    with starting lean -0.7, a tip that never crosses
+    the middle read range 0.7 with low 0.7 and high
+    1.4, a small swing the other way read range 0.4
+    with starting lean 0.2, a one-way move held only
+    2 memories, and a swing starting upright read
+    starting lean 0.0 with high 0.0 - none can
+    pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0.0, 0.0, 99.0, 0.0, 0.0, 0.0
+    keys = _anim_keys(main, "rotation_euler")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 3:
+        return 0.0, 0.0, 99.0, 0.0, 0.0, 0.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0.0, 0.0, 99.0, 0.0, 0.0, 0.0
+    lows = [99.0, 99.0, 99.0]
+    highs = [-99.0, -99.0, -99.0]
+    step = max(1, (last - first) // 24)
+    frame = first
+    while frame <= last:
+        here = _anim_eval(context, main, frame, "rotation_euler")
+        for i in range(3):
+            lows[i] = min(lows[i], here[i])
+            highs[i] = max(highs[i], here[i])
+        frame += step
+    axis = max(range(3), key=lambda i: highs[i] - lows[i])
+    start = _anim_eval(context, main, first, "rotation_euler")
+    end = _anim_eval(context, main, last, "rotation_euler")
+    return (last - first, highs[axis] - lows[axis],
+            abs(end[axis] - start[axis]), lows[axis], highs[axis],
+            start[axis])
+
+
+def _check_otherswing_start(context):
+    """The starting facing, remembered while leaned
+    the OTHER way: a facing (rotation) memory at the
+    start whose evaluated facing's biggest lean is
+    positive and at least 0.3 rad. The swing piece's
+    start tick accepts a lean either way; this one
+    must lean the other way - positive - because that
+    is the lean this swing swings FROM. A facing
+    remembered leaned the first way, or upright,
+    holds no other-way lean to swing from."""
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "rotation_euler")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = min(int(k[0]) for k in keys)
+    rot = _anim_eval(context, main, first, "rotation_euler")
+    axis = max(range(3), key=lambda i: abs(rot[i]))
+    return rot[axis] >= 0.3
+
+
+def _anim_run_otherswing_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherswing_start(context):
+        return
+    scene = context.scene
+    scene.frame_set(1)
+    rot = _anim_eval(context, main, 1, "rotation_euler")
+    main.rotation_euler = (rot[0], 0.7, rot[2])
+    main.keyframe_insert(data_path="rotation_euler", frame=1)
+
+
+def _check_otherswing_arc(context):
+    span, rng, ends, low, high, start_lean = \
+        _otherswing_measure(context)
+    return (span >= 20 and rng >= 1.0 and ends <= 0.3
+            and low <= -0.35 and high >= 0.35
+            and start_lean >= 0.3)
+
+
+def _anim_run_otherswing_arc(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherswing_arc(context):
+        return
+    scene = context.scene
+    if not _check_otherswing_start(context):
+        _anim_run_otherswing_start(context)
+    start = _anim_eval(context, main, 1, "rotation_euler")
+    scene.frame_set(24)
+    main.rotation_euler = (start[0], -0.7, start[2])
+    main.keyframe_insert(data_path="rotation_euler", frame=24)
+    scene.frame_set(48)
+    main.rotation_euler = start
+    main.keyframe_insert(data_path="rotation_euler", frame=48)
+    scene.frame_end = max(scene.frame_end, 48)
+
+
+def _check_otherswing_finish(context):
+    return (_check_saved(context)
+            and _check_otherswing_arc(context))
+
+
+def _anim_run_otherswing_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERSWING_STEPS = [
+    {"title": "Pick the thing that will swing the other way",
+     "skill": "One thing, chosen: a swing the other "
+              "way starts with a single thing that "
+              "will lean both ways, the other way first",
+     "how": "The swing piece leaned a thing one way "
+            "first, then the other way, and back to "
+            "the first lean; this piece starts it "
+            "leaned the other way - the same swing, "
+            "started from the opposite lean. The way "
+            "is the memories way again, but the "
+            "memories hold the thing's facing (its "
+            "turn), not its place: leaned the other "
+            "way, leaned the first way, and back. "
+            "Start by picking the thing: any shape "
+            "you already have, or a fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will swing the other way.",
+         "2. Leave its facing alone for now. The first "
+         "lean is remembered first; the swing comes "
+         "after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The swing will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember its starting facing, leaned the other way",
+     "skill": "The starting facing, remembered leaned "
+              "the other way: a facing memory at "
+              "frame 1, leaning at least a third of a "
+              "radian the positive way",
+     "how": "A swing the other way needs the other "
+            "lean to start from. Go to frame 1, lean "
+            "the thing clearly to the other side - the "
+            "reference build leans it 0.7 radians the "
+            "positive way on the Y axis - and remember "
+            "its facing there. Blender stores a facing "
+            "memory (a keyframe on the thing's "
+            "Rotation). The tick reads the facing "
+            "memories themselves and the real facing "
+            "at the first one: its biggest lean must be "
+            "positive and at least 0.3 - a facing "
+            "remembered leaned the first way, or "
+            "upright, holds no other-way lean to swing "
+            "from.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline.",
+         "2. Lean the thing to the other side - press R "
+         "then Y and drag the positive way, or set its "
+         "Y turn to about +0.7 in the Item panel.",
+         "3. With the thing picked, press Remember where "
+         "it is right now above - Buddy remembers its "
+         "facing there. Scrub forward: nothing swings "
+         "yet. One lean alone cannot make a swing."],
+     "missing": "No other-way leaned facing remembered "
+                "yet - lean the thing the other way at "
+                "frame 1 and remember its facing there.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherswing_start,
+     "check": _check_otherswing_start},
+    {"title": "Lean it the first way, and back",
+     "skill": "The swing the other way itself: a "
+              "facing memory leaned the first way in "
+              "the middle, and the first lean "
+              "remembered again at the end",
+     "how": "Jump to frame 24, lean the thing clearly "
+            "the FIRST way - the reference build leans "
+            "it 0.7 radians the negative way on the Y "
+            "axis - and remember its facing. Then jump "
+            "to frame 48, put its facing back at the "
+            "first lean, and remember again. Blender "
+            "fills in the sweep between the three "
+            "memories, so the thing swings across the "
+            "middle and back. The tick reads the real "
+            "evaluated facing across the whole span: "
+            "the span must run at least 20 frames, the "
+            "lean must sweep at least one radian end "
+            "to end, it must reach clearly to BOTH "
+            "sides of upright on the same axis, the two "
+            "ends must sit at about the same lean, and "
+            "the starting lean itself - the evaluated "
+            "facing on that axis at the first "
+            "remembered frame - must be at least +0.3, "
+            "leaned the other way. A first-way swing "
+            "does not tick it - it reaches the same "
+            "leans but starts leaned the first way; a "
+            "tip that never crosses the middle does not "
+            "tick it; a small swing the other way does "
+            "not tick it; a one-way move does not tick "
+            "it - it holds only two memories; and a "
+            "swing starting upright does not tick it - "
+            "it starts with no lean at all. Probed "
+            "before building on both supported "
+            "Blenders: a lean-lean-back set of facing "
+            "memories reads back and interpolates "
+            "identically on each - plus 0.7 at frame 1, "
+            "minus 0.7 at frame 24, plus 0.7 again at "
+            "frame 48.",
+     "teach": [
+         "1. Jump to frame 24. Lean the thing the first "
+         "way - its Y turn to about -0.7 - and remember "
+         "its facing.",
+         "2. Jump to frame 48. Put its facing back at "
+         "the first lean (Y turn about +0.7) and "
+         "remember its facing again.",
+         "3. Scrub the Timeline: the thing leans the "
+         "other way, sweeps through upright, leans "
+         "the first way, and comes back - a swing the "
+         "other way."],
+     "missing": "No real swing the other way yet - a "
+                "facing leaned the first way remembered "
+                "in the middle, and the first lean "
+                "remembered again at least 20 frames "
+                "after the start.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherswing_arc,
+     "check": _check_otherswing_arc},
+    {"title": "Watch it swing the other way, then save it",
+     "skill": "Finishing a swing the other way: the "
+              "lean really plays both ways, starting "
+              "the other way, and the file is saved "
+              "with all three facing memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing lean the other way, sweep across, "
+            "lean the first way, and come back. Then "
+            "save the file. The facing memories are "
+            "saved with it, so the swing still plays "
+            "when the file is opened again. The tick "
+            "checks the save and that the swing the "
+            "other way is still proven from the "
+            "memories.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the lean, not the travel - side to "
+         "side is the journey here.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the swing the other way "
+         "is still proven.",
+         "3. That is animation's seventy-seventh piece: "
+         "swinging the other way - one thing, its facing remembered "
+         "leaned the other way, leaned the first way, and "
+         "back, and Blender filling in the sweep "
+         "between. The next piece leaps "
+         "a thing the other way - up off the "
+         "ground, far the other way through "
+         "the air, and landed far the other "
+         "way on the ground. "
+         "It is still not the whole craft: performances "
+         "are built from pieces like this, one change "
+         "at a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the swing the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherswing_finish,
+     "check": _check_otherswing_finish},
+]
+
+def _otherleap_measure(context):
+    """(span, signed forward displacement - the
+    end place's X minus the start place's X, peak
+    height above the start height, ends height
+    gap - how far apart the two ends sit in
+    height, sideways drift - the largest change
+    along the Y axis from the start place across
+    all sampled places) for the main thing's
+    place memories. A real leap the other way
+    leaves the ground, travels far the OTHER way,
+    and lands back on the ground far the other
+    way: the signed forward displacement must
+    land between -3.8 and -2.2, the peak height
+    must clear at least 1.2 above the start
+    height somewhere across the span, the two
+    ends must sit within 0.35 of each other in
+    height, and the sideways drift must stay
+    within 0.5, all read from the real evaluated
+    place sampled across the span. The leap
+    piece's own checker accepts forward travel
+    between 2.2 and 3.8, so it cannot pass here -
+    and a first-way leap cannot pass here either:
+    it reads the same span, peak, ends and
+    sideways with signed forward +3.0, the wrong
+    sign. A slide the other way cannot pass - it
+    travels along the ground and never leaves
+    it, so its peak is 0.0; a bounce in place
+    cannot pass - it arcs but lands where it
+    started, so its forward is 0.0; a glide-like
+    travel the other way cannot pass - it starts
+    up in the air and ends still up, so its ends
+    gap is 1.0; a small leap the other way cannot
+    pass - it only travels -1.0 forward and peaks
+    0.4 up; a leap the other way that returns
+    cannot pass - it ends back where it started,
+    so its forward is 0.0; and a diagonal leap
+    the other way cannot pass - it drifts 1.5
+    sideways. Probed on Blender 5.3.0 and 4.2.5
+    before building (probe
+    scratch/probe_otherleap.py; outputs
+    byte-identical on both versions): place
+    memories at (0, 0, 1), (-1.5, 0, 3) and
+    (-3, 0, 1) across frames 1/24/48 read back
+    (span 47, forward -3.0, peak 2.0, ends gap
+    0.0, sideways 0.0, reading (-2.5375, 0, 2.0)
+    partway down at frame 36); a first-way leap
+    read forward 3.0 with the same span, peak,
+    ends and sideways, a slide the other way
+    read peak 0.0, a bounce in place read
+    forward 0.0 with peak 2.5, a glide-like
+    travel the other way read ends gap 1.0, a
+    small leap the other way read forward -1.0
+    with peak 0.4, a leap the other way that
+    returned read forward 0.0, and a diagonal
+    leap the other way read sideways 1.5 - none
+    can pass."""
+    main = _flow_main(context)
+    if main is None:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    keys = _anim_keys(main, "location")
+    frames = sorted(set(int(k[0]) for k in keys))
+    if len(frames) < 2:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    first, last = frames[0], frames[-1]
+    if last - first < 1:
+        return 0, 0.0, 0.0, 99.0, 99.0
+    start = _anim_eval(context, main, first, "location")
+    end = _anim_eval(context, main, last, "location")
+    step = max(1, (last - first) // 24)
+    places = []
+    frame = first
+    while frame <= last:
+        places.append(_anim_eval(context, main, frame,
+                                 "location"))
+        frame += step
+    if (last - first) % step:
+        places.append(end)
+    forward = end[0] - start[0]
+    peak = max(p[2] for p in places) - start[2]
+    side = max(abs(p[1] - start[1]) for p in places)
+    return (last - first, forward, peak,
+            abs(end[2] - start[2]), side)
+
+
+def _check_otherleap_start(context):
+    main = _flow_main(context)
+    if main is None:
+        return False
+    keys = _anim_keys(main, "location")
+    if not keys or min(k[0] for k in keys) > 2:
+        return False
+    first = int(min(k[0] for k in keys))
+    start = _anim_eval(context, main, first, "location")
+    return 0.7 <= start[2] <= 1.3
+
+
+def _anim_run_otherleap_start(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherleap_start(context):
+        return
+    context.scene.frame_set(1)
+    main.location = (main.location[0], main.location[1], 1.0)
+    main.keyframe_insert(data_path="location", frame=1)
+
+
+def _check_otherleap(context):
+    span, forward, peak, ends, side = \
+        _otherleap_measure(context)
+    return (span >= 20 and -3.8 <= forward <= -2.2
+            and peak >= 1.2 and ends <= 0.35
+            and side <= 0.5)
+
+
+def _anim_run_otherleap(context):
+    main = _flow_pick_main(context)
+    if main is None:
+        return
+    if _check_otherleap(context):
+        return
+    scene = context.scene
+    if not _check_otherleap_start(context):
+        _anim_run_otherleap_start(context)
+    keys = _anim_keys(main, "location")
+    first = min(int(k[0]) for k in keys)
+    start = _anim_eval(context, main, first, "location")
+    scene.frame_set(first + 23)
+    main.location = (start[0] - 1.5, start[1],
+                     start[2] + 2.0)
+    main.keyframe_insert(data_path="location",
+                         frame=first + 23)
+    scene.frame_set(first + 47)
+    main.location = (start[0] - 3.0, start[1], start[2])
+    main.keyframe_insert(data_path="location",
+                         frame=first + 47)
+    scene.frame_end = max(scene.frame_end, first + 47)
+
+
+def _check_otherleap_finish(context):
+    return (_check_saved(context)
+            and _check_otherleap(context))
+
+
+def _anim_run_otherleap_finish(context):
+    bpy.ops.buddy.action(action_id="save_work")
+
+
+ANIM_OTHERLEAP_STEPS = [
+    {"title": "Pick the thing that will leap the other way",
+     "skill": "One thing, chosen: a leap the other "
+              "way starts with a single thing that "
+              "will leave the ground, travel far the "
+              "other way in the air, and land far "
+              "the other way",
+     "how": "The leap piece sent a thing up off the "
+            "ground, far forward through the air, and "
+            "landed it far ahead on the ground; this "
+            "piece leaps the same leap the other way - "
+            "up off the ground, far the other way "
+            "through the air, and landed far the other "
+            "way back on the ground. The way is the "
+            "place-memories way again: the starting "
+            "place remembered down on the ground, the "
+            "mid-leap place remembered up in the air "
+            "halfway across the other way, the landing "
+            "place remembered far the other way on the "
+            "ground at the end, and Blender fills in "
+            "the leap between. Start by picking the "
+            "thing: any shape you already have, or a "
+            "fresh cube here.",
+     "teach": [
+         "1. Press Add a cube above, or click a shape of "
+         "your own so it is outlined orange - that is "
+         "the thing that will leap the other way.",
+         "2. Leave it down on the ground for now. The "
+         "starting place is remembered first; the "
+         "leap comes after.",
+         "3. Look at the strip along the bottom - the "
+         "Timeline. The leap will be told in frames, "
+         "like every journey here."],
+     "missing": "No thing yet - add a cube, or pick a "
+                "shape you already have.",
+     "tools": ["add_cube", "add_ball"],
+     "run": _anim_run_pick,
+     "check": _check_anim_pick},
+    {"title": "Remember where it starts, down on the ground",
+     "skill": "The start, remembered down on the ground: "
+              "a place memory at frame 1, location "
+              "(0, 0, 1) - its centre 1.0 up, resting "
+              "on the ground",
+     "how": "A leap the other way is read against the "
+            "place the thing leaps from, so the start "
+            "remembers the thing's place at frame 1, "
+            "down on the ground - Blender stores a "
+            "place memory (a keyframe on the thing's "
+            "Location). The tick reads the place "
+            "memories themselves: one must sit at the "
+            "start, and the thing must be down low "
+            "there - its centre between 0.7 and 1.3 "
+            "units up, resting on the ground. The "
+            "whole leap is measured from this place, "
+            "and the thing must land at this same "
+            "height, far the other way, at the end.",
+     "teach": [
+         "1. Go to frame 1 in the Timeline. Leave the "
+         "thing resting down on the ground.",
+         "2. Press Remember where it is right now "
+         "above - Buddy remembers its place there, "
+         "and this piece reads the place memory.",
+         "3. Scrub forward and back: nothing leaps "
+         "yet. One remembered place cannot leap - "
+         "it takes the mid-leap place and the "
+         "landing remembered too."],
+     "missing": "No starting place remembered yet - "
+                "remember the thing's place at frame 1, "
+                "down on the ground.",
+     "tools": ["remember_pose"],
+     "run": _anim_run_otherleap_start,
+     "check": _check_otherleap_start},
+    {"title": "Leap it up and the other way and land it far the other way",
+     "skill": "The leap the other way itself: up in "
+              "the air halfway across the other way - "
+              "place (-1.5, 0, 3) remembered at "
+              "frame 24 - and landed far the other way "
+              "on the ground - place (-3, 0, 1) "
+              "remembered at frame 48 - never "
+              "travelling sideways",
+     "how": "Leap the thing up and the other way: "
+            "lift it up in the air and halfway across "
+            "the other way - 1.5 units the other way "
+            "along X and 2.0 units up, to (-1.5, 0, 3) "
+            "- and remember its place at frame 24, "
+            "then land it far the other way on the "
+            "ground - 3.0 units the other way along X "
+            "in all, back down at its starting height, "
+            "at (-3, 0, 1) - and remember its place "
+            "again at frame 48, never travelling "
+            "sideways along Y. Blender fills in the "
+            "leap between. The tick reads the real "
+            "evaluated place sampled across the span: "
+            "the span must run at least 20 frames, the "
+            "signed travel from the start place to the "
+            "landing place - the landing's X minus the "
+            "start's X - must land between -3.8 and "
+            "-2.2, the highest place must clear at "
+            "least 1.2 above the start height, the "
+            "landing height must sit within 0.35 of "
+            "the start height, and the sideways drift "
+            "along Y must stay within 0.5 across all "
+            "samples. A first-way leap does not tick "
+            "it - it travels the same far, rises the "
+            "same and lands the same, but its signed "
+            "travel reads +3.0, the wrong sign; a "
+            "slide the other way does not tick it - it "
+            "travels along the ground and never leaves "
+            "it; a bounce in place does not tick it - "
+            "it arcs but lands where it started; a "
+            "small leap the other way does not tick "
+            "it - it barely travels and barely rises; "
+            "and a leap the other way that returns "
+            "does not tick it - it ends back where it "
+            "started. Probed before building on both "
+            "supported Blenders: the place memories "
+            "read back and interpolate identically on "
+            "each.",
+     "teach": [
+         "1. Go to frame 24. Move the thing halfway "
+         "across the other way - 1.5 units the other "
+         "way - and lift it well up in the air, 2.0 "
+         "units up, and press Remember where it is "
+         "right now.",
+         "2. Go to frame 48. Move it the rest of the "
+         "way - 3.0 units the other way in all - "
+         "back down on the ground at its starting "
+         "height, and remember again.",
+         "3. Scrub the Timeline: the thing leaps the "
+         "other way - up in the air by the middle - "
+         "and lands far the other way on the ground."],
+     "missing": "No real leap the other way yet - "
+                "signed travel of -3.8 to -2.2, a peak "
+                "at least 1.2 above the start height, "
+                "landed within 0.35 of the start "
+                "height, at least 20 frames across, and "
+                "sideways drift within 0.5.",
+     "tools": ["remember_pose", "play_it"],
+     "run": _anim_run_otherleap,
+     "check": _check_otherleap},
+    {"title": "Watch it leap the other way, then save",
+     "skill": "Finishing a leap the other way: the "
+              "leaping the other way really plays, and "
+              "the file is saved with the place "
+              "memories in it",
+     "how": "Finish the way every piece here finishes: "
+            "look at the work, then save it. Play the "
+            "whole span from the start and watch the "
+            "thing leave the ground, fly far the other "
+            "way through the air, and land far the "
+            "other way on the ground. Then save the "
+            "file. The place memories are saved with "
+            "it, so the leap still plays when the file "
+            "is opened again. The tick checks the save "
+            "and that the leap the other way is still "
+            "proven from the evaluated place.",
+     "teach": [
+         "1. Go back to the start and press Play / "
+         "stop what moves above (or the space bar). "
+         "Watch the thing leap the other way - it "
+         "ends on the ground, far the other way from "
+         "where it started.",
+         "2. Save the file (Ctrl+S). The tick checks "
+         "the save, and that the leap the other way "
+         "is still proven.",
+         "3. That is animation's seventy-eighth piece: "
+         "leaping the other way - one thing, its place remembered "
+         "down on the ground at the start, up in the "
+         "air halfway across the other way in the "
+         "middle, landed far the other way on the "
+         "ground at the end, and "
+         "Blender filling in the leap between. The "
+         "next piece is not "
+         "yet taught. It is still "
+         "not the whole craft: performances are "
+         "built from pieces like this, one change at "
+         "a time."],
+     "missing": "Not finished: the file needs a save, "
+                "with the leap the other way still proven.",
+     "tools": ["play_it", "save_work"],
+     "run": _anim_run_otherleap_finish,
+     "check": _check_otherleap_finish},
 ]
 
 PACKAGES = [
@@ -12258,6 +30890,1761 @@ PACKAGES = [
               "starting facing. Each step ticks only "
               "when the scene itself proves it.",
      "steps": ANIM_FLIP_STEPS},
+    {"id": "anim_stretch",
+     "kind": "flow",
+     "name": "Make it stretch",
+     "byline": "Animation's fifteenth piece: stretching - "
+               "one thing, its size remembered, stretched "
+               "along one axis and remembered again, and "
+               "the lengthening filled in between.",
+     "intro": "Buddy's fifteenth animation piece - "
+              "stretching. The grow piece made a thing "
+              "bigger all over; this piece changes its "
+              "shape: starting size remembered at frame "
+              "1, stretched size remembered at frame 48 "
+              "with one axis two and a half times longer "
+              "and the other two held, and Blender fills "
+              "in the lengthening between them. Checked "
+              "from the size memories themselves and the "
+              "real evaluated size at the first and last "
+              "memories - the span must run at least 20 "
+              "frames, the longest axis at least 1.8 "
+              "times its start, and the other axes within "
+              "0.3 of theirs, so a grow cannot pass for "
+              "a stretch. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_STRETCH_STEPS},
+    {"id": "anim_orbit",
+     "kind": "flow",
+     "name": "Make it orbit",
+     "byline": "Animation's sixteenth piece: orbiting - "
+               "one thing, its place remembered at the "
+               "quarter points of one circle, and the "
+               "ring filled in between.",
+     "intro": "Buddy's sixteenth animation piece - "
+              "orbiting. The path piece followed a drawn "
+              "route and the loop piece went out and back; "
+              "this piece travels a circle: starting place "
+              "remembered at frame 1 out at the edge of the "
+              "ring, the other quarter points remembered "
+              "at frames 13, 25 and 37, and home to the "
+              "start at frame 48, the same distance from "
+              "the middle the whole way. Checked from the "
+              "real evaluated place sampled across the "
+              "span - the angle around the middle must "
+              "reach at least 5.0 radians, the average "
+              "radius at least 1.5, the radius variation "
+              "at most 0.5, and the ends must meet, so a "
+              "straight move or a quarter arc cannot pass "
+              "for an orbit. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_ORBIT_STEPS},
+    {"id": "anim_roll",
+     "kind": "flow",
+     "name": "Make it roll",
+     "byline": "Animation's seventeenth piece: rolling - "
+               "one thing, its place and facing "
+               "remembered at both ends of a journey, "
+               "and the tumble filled in between.",
+     "intro": "Buddy's seventeenth animation piece - "
+              "rolling. The move piece travelled in a "
+              "straight line and the flip piece turned "
+              "on the spot; this piece joins the two: "
+              "the far end remembered four units across "
+              "with four radians of turn, the travel and "
+              "the turning paced to each other. Checked "
+              "from the real evaluated place and facing "
+              "at the first and last memories - the span "
+              "must run at least 20 frames, the travel "
+              "at least 2.0 units, the turn at least 2.5 "
+              "radians, and the travel per radian "
+              "between 0.4 and 2.5, so a slide or a spin "
+              "on the spot cannot pass for a roll. Each "
+              "step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_ROLL_STEPS},
+    {"id": "anim_fall",
+     "kind": "flow",
+     "name": "Make it fall",
+     "byline": "Animation's eighteenth piece: falling - "
+               "one thing, its place remembered up high "
+               "and remembered on the ground, "
+               "and the drop filled in between.",
+     "intro": "Buddy's eighteenth animation piece - "
+              "falling. The bounce piece sent a thing up "
+              "and brought it back down; this piece is "
+              "the one-way trip: the place remembered up "
+              "high at frame 1 and on the ground at frame "
+              "48, and Blender fills in the fall between. "
+              "Checked from the real evaluated place at "
+              "the first and last memories - the span "
+              "must run at least 20 frames, the drop at "
+              "least 1.5 units, the end height at most 1.3 "
+              "so the thing truly lands, and the sideways "
+              "drift at most half the drop, so a slide at "
+              "height or a bounce back up cannot pass for "
+              "a fall. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_FALL_STEPS},
+    {"id": "anim_rise",
+     "kind": "flow",
+     "name": "Make it rise",
+     "byline": "Animation's nineteenth piece: rising - "
+               "one thing, its place remembered on the "
+               "ground and remembered up high, "
+               "and the climb filled in between.",
+     "intro": "Buddy's nineteenth animation piece - "
+              "rising. The fall piece dropped a thing from "
+              "up high to the ground; this piece is the trip "
+              "back up: the place remembered on the ground at "
+              "frame 1 and up high at frame 48, and Blender "
+              "fills in the rise between. Checked from the "
+              "real evaluated place at the first and last "
+              "memories - the span must run at least 20 "
+              "frames, the rise at least 1.5 units, the start "
+              "height at most 1.3 so the thing truly starts "
+              "on the ground, the end height at least 3.0 so "
+              "it truly ends up high, and the sideways drift "
+              "at most half the rise, so a fall or a slide on "
+              "the ground cannot pass for a rise. Each step "
+              "ticks only when the scene itself proves it.",
+     "steps": ANIM_RISE_STEPS},
+    {"id": "anim_shrink",
+     "kind": "flow",
+     "name": "Make it shrink",
+     "byline": "Animation's twentieth piece: shrinking - "
+               "one thing, its size remembered full "
+               "and remembered small, "
+               "and the shrinking filled in between.",
+     "intro": "Buddy's twentieth animation piece - "
+              "shrinking. The grow piece made a thing "
+              "bigger; this piece is the trip back down: "
+              "the size remembered full at frame 1 and "
+              "small at frame 48, and Blender fills in the "
+              "shrinking between. Checked from the real "
+              "evaluated size at the first and last "
+              "memories - the span must run at least 20 "
+              "frames, and the biggest side's end ratio "
+              "must be at most 0.55 of its start, so every "
+              "side truly shrank and a grow, a small shrink "
+              "or a one-side-only change cannot pass for a "
+              "shrink. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_SHRINK_STEPS},
+    {"id": "anim_spin",
+     "kind": "flow",
+     "name": "Make it spin",
+     "byline": "Animation's twenty-first piece: spinning - "
+               "one thing, its facing remembered at the "
+               "start, halfway around and home again, "
+               "and the turn filled in between.",
+     "intro": "Buddy's twenty-first animation piece - "
+              "spinning. The flip piece turned a thing "
+              "over; this piece turns it around: upright "
+              "and in place, one full turn on the upright "
+              "axis, its facing remembered at frame 1, "
+              "halfway around at frame 24 and home at "
+              "frame 48, and Blender fills in the spinning "
+              "between. Checked from the real evaluated "
+              "facing sampled across the span - the span "
+              "must run at least 20 frames, the total turn "
+              "on the upright axis at least 5.0 rad, the "
+              "tilt on the other axes within 0.35 rad, the "
+              "ends landing on the same facing allowing "
+              "whole turns, and the thing staying within "
+              "half a unit of its start, so a half spin, a "
+              "rock back and forth or a flip cannot pass "
+              "for a spin. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_SPIN_STEPS},
+    {"id": "anim_shake",
+     "kind": "flow",
+     "name": "Make it shake",
+     "byline": "Animation's twenty-second piece: shaking - "
+               "one thing, its home place remembered at the "
+               "start, swung out to each side in turn, "
+               "remembered home again, and the rattling "
+               "filled in between.",
+     "intro": "Buddy's twenty-second animation piece - "
+              "shaking. The bounce piece sent a thing up "
+              "and down; this piece rattles it side to "
+              "side: at its home height, out to one side "
+              "and the other in turn across frames "
+              "10/19/29/38, and home again at frame 48, "
+              "its place remembered at frame 1, at each "
+              "swing and back home, and Blender fills in "
+              "the rattling between. Checked from the real "
+              "evaluated place sampled across the span - "
+              "the span must run at least 20 frames, the "
+              "travel on the busiest sideways axis at "
+              "least 1.0 unit, the direction of travel "
+              "must change at least 3 times, the thing "
+              "must end within 0.3 of its start, and its "
+              "height must hold within 0.35, so a one-way "
+              "move, a bounce or a small wiggle cannot "
+              "pass for a shake. Each step ticks only when "
+              "the scene itself proves it.",
+     "steps": ANIM_SHAKE_STEPS},
+    {"id": "anim_slide",
+     "kind": "flow",
+     "name": "Make it slide",
+     "byline": "Animation's twenty-third piece: sliding - "
+               "one thing, its place remembered on the "
+               "ground at the start, remembered again far "
+               "across the ground, and the gliding filled "
+               "in between.",
+     "intro": "Buddy's twenty-third animation piece - "
+              "sliding. The shake piece rattled a thing "
+              "in place; this piece sends it somewhere: "
+              "flat across the ground from its start at "
+              "frame 1 to a far place at frame 48, "
+              "staying at its ground height the whole "
+              "way, its place remembered at both ends, "
+              "and Blender fills in the gliding between. "
+              "Checked from the real evaluated place at "
+              "the first and last memories, sampled "
+              "across the span - the span must run at "
+              "least 20 frames, the flat travel at least "
+              "2.0 units, the height at the end within "
+              "0.35 of the height at the start, and the "
+              "height held within 0.35 the whole way, so "
+              "a rise, a bounce or a small shuffle cannot "
+              "pass for a slide. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_SLIDE_STEPS},
+    {"id": "anim_pace",
+     "kind": "flow",
+     "name": "Make it pace",
+     "byline": "Animation's twenty-fourth piece: pacing - "
+               "one thing, its home place remembered at "
+               "the start, a far place remembered in the "
+               "middle, home remembered again at the end, "
+               "and the walking filled in between.",
+     "intro": "Buddy's twenty-fourth animation piece - "
+              "pacing. The slide piece sent a thing "
+              "somewhere and left it there; this piece "
+              "brings it home: a long way across the "
+              "ground from its home at frame 1 to a far "
+              "place at frame 24, then all the way back "
+              "home at frame 48, staying at its ground "
+              "height the whole way, its place remembered "
+              "at home, far and home again, and Blender "
+              "fills in the walking between. Checked from "
+              "the real evaluated place sampled across "
+              "the span - the span must run at least 20 "
+              "frames, the sideways travel at least 2.5 "
+              "units, the movement must turn around at "
+              "least once, the end must land within 0.3 "
+              "of the start, and the height must hold "
+              "within 0.35 the whole way, so a one-way "
+              "slide, a bounce, a small back-and-forth or "
+              "a shake cannot pass for a pace. Each step "
+              "ticks only when the scene itself proves "
+              "it.",
+     "steps": ANIM_PACE_STEPS},
+    {"id": "anim_tilt",
+     "kind": "flow",
+     "name": "Make it tilt",
+     "byline": "Animation's twenty-fifth piece: tilting - "
+               "one thing, its upright facing remembered "
+               "at the start, its leaned facing remembered "
+               "at the end, and the leaning filled in "
+               "between.",
+     "intro": "Buddy's twenty-fifth animation piece - "
+              "tilting. The spin piece turned a thing "
+              "around where it stood and the flip piece "
+              "turned it all the way over; this piece "
+              "leans a thing over to one side and leaves "
+              "it leaning, its upright facing remembered "
+              "at frame 1 and its leaned facing remembered "
+              "at frame 48, and Blender fills in the "
+              "leaning between. Checked from the real "
+              "evaluated facing sampled across the span - "
+              "the span must run at least 20 frames, the "
+              "lean at the end must reach at least 0.6 "
+              "radians on a side axis but no more than "
+              "1.8, the lean must never pass 2.2, the "
+              "upright facing must hold within 0.35, and "
+              "the thing must stay within 0.5 of its "
+              "place, so a spin, a flip, a small lean or "
+              "a rock that settles upright cannot pass "
+              "for a tilt. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_TILT_STEPS},
+    {"id": "anim_squash",
+     "kind": "flow",
+     "name": "Make it squash",
+     "byline": "Animation's twenty-sixth piece: squashing - "
+               "one thing, flattened down with its sides "
+               "bulged out in the middle, settled back to "
+               "its own shape at the end.",
+     "intro": "Buddy's twenty-sixth animation piece - "
+              "squashing. The pulse piece swelled a thing "
+              "evenly and the shrink piece made it smaller "
+              "on every side; this piece flattens a thing "
+              "down while its sides bulge out, then lets it "
+              "settle back to its own shape - its size "
+              "remembered at frame 1, flattened to 0.4 of "
+              "its height and bulged to 1.5 at frame 24, "
+              "and its own size remembered again at frame "
+              "48, and Blender fills in the flattening and "
+              "the settling between. Checked from the real "
+              "evaluated size sampled across the span - "
+              "the span must run at least 20 frames, the "
+              "height must fall to at most 0.55 of its "
+              "start, a side must bulge to at least 1.25, "
+              "and the end must land within 0.3 of the "
+              "starting size, so a shrink, a pulse, a "
+              "stretch that stays stretched or a squash "
+              "that never settles cannot pass for a "
+              "squash. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_SQUASH_STEPS},
+    {"id": "anim_hop",
+     "kind": "flow",
+     "name": "Make it hop",
+     "byline": "Animation's twenty-seventh piece: hopping - "
+               "one thing, up in the air and across, "
+               "landed far from where it started.",
+     "intro": "Buddy's twenty-seventh animation piece - "
+              "hopping. The bounce piece sent a thing up "
+              "and brought it back down in its own place, "
+              "and the slide piece sent it across the "
+              "ground without ever leaving it; this piece "
+              "sends a thing up in the air AND across, "
+              "landing far from where it started - its "
+              "place remembered on the ground at frame 1, "
+              "up two units and halfway across at frame "
+              "24, and landed three units across at frame "
+              "48, and Blender fills in the arc between. "
+              "Checked from the real evaluated place "
+              "sampled across the span - the span must run "
+              "at least 20 frames, the height must clear "
+              "at least 1.5 above the lower end, the "
+              "landing must sit at least 2.0 sideways from "
+              "the start, and the ends must sit within 0.3 "
+              "of each other in height, so a bounce in its "
+              "own place, a slide, a rise that never lands "
+              "or a small hop cannot pass for a hop. Each "
+              "step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_HOP_STEPS},
+    {"id": "anim_zigzag",
+     "kind": "flow",
+     "name": "Make it zigzag",
+     "byline": "Animation's twenty-eighth piece: zigzagging - "
+               "one thing, travelling forward and "
+               "turning side to side as it goes.",
+     "intro": "Buddy's twenty-eighth animation piece - "
+              "zigzagging. The slide piece sent a thing "
+              "straight across the ground, and the pace "
+              "piece sent it out and brought it home; "
+              "this piece sends a thing forward in a "
+              "zigzag - out to one side, back across the "
+              "line, out to the side again, on to a far "
+              "end - its place remembered on the ground "
+              "at frame 1, each turn remembered as it is "
+              "reached, and the far end remembered at "
+              "frame 48, and Blender fills in the legs "
+              "between. Checked from the real evaluated "
+              "place sampled across the span - the span "
+              "must run at least 20 frames, the forward "
+              "travel must reach at least 2.5, the "
+              "sideways range at least 1.0, the sideways "
+              "direction must turn at least twice, and "
+              "the height must hold within 0.35, so a "
+              "straight slide, a pace that comes home, a "
+              "small zigzag or a hop cannot pass for a "
+              "zigzag. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_ZIGZAG_STEPS},
+    {"id": "anim_climb",
+     "kind": "flow",
+     "name": "Make it climb",
+     "byline": "Animation's twenty-ninth piece: climbing - "
+               "one thing, going up and forward "
+               "together, step by step.",
+     "intro": "Buddy's twenty-ninth animation piece - "
+              "climbing. The rise piece sent a thing "
+              "straight up, and the slide piece sent it "
+              "straight across the ground; this piece "
+              "sends a thing up and forward together, "
+              "step by step, like climbing stairs or a "
+              "hillside - its place remembered on the "
+              "ground at frame 1, a step up remembered "
+              "at frame 17, another at frame 33, and "
+              "the top remembered at frame 48, and "
+              "Blender fills in the climb between. "
+              "Checked from the real evaluated place "
+              "sampled across the span - the span must "
+              "run at least 20 frames, the rise from "
+              "the start height to the end height must "
+              "reach at least 2.5, the forward travel "
+              "must reach at least 2.5, and the height "
+              "must never drop back by more than 0.35 "
+              "in a step, so a rise on the spot, a "
+              "slide, a hop, a fall or a small climb "
+              "cannot pass for a climb. Each step ticks "
+              "only when the scene itself proves it.",
+     "steps": ANIM_CLIMB_STEPS},
+    {"id": "anim_descend",
+     "kind": "flow",
+     "name": "Make it descend",
+     "byline": "Animation's thirtieth piece: descending - "
+               "one thing, going down and forward "
+               "together, step by step.",
+     "intro": "Buddy's thirtieth animation piece - "
+              "descending. The climb piece sent a thing "
+              "up and forward together, step by step; "
+              "this piece brings a thing back down the "
+              "same way - down and forward together, "
+              "step by step, like walking down stairs "
+              "or a hillside - its place remembered up "
+              "high at frame 1, a step down remembered "
+              "at frame 17, another at frame 33, and "
+              "the bottom remembered at frame 48, and "
+              "Blender fills in the descend between. "
+              "Checked from the real evaluated place "
+              "sampled across the span - the span must "
+              "run at least 20 frames, the drop from "
+              "the start height to the end height must "
+              "reach at least 2.5, the forward travel "
+              "must reach at least 2.5, and the height "
+              "must never rise back by more than 0.35 "
+              "in a step, so a fall on the spot, a "
+              "slide, a climb, a hop or a small descend "
+              "cannot pass for a descend. Each step ticks "
+              "only when the scene itself proves it.",
+     "steps": ANIM_DESCEND_STEPS},
+    {"id": "anim_hover",
+     "kind": "flow",
+     "name": "Make it hover",
+     "byline": "Animation's thirty-first piece: hovering - "
+               "one thing, rising up and staying "
+               "there, in its own place.",
+     "intro": "Buddy's thirty-first animation piece - "
+              "hovering. The rise piece sent a thing up "
+              "high and left it there at the end of its "
+              "journey; this piece teaches the staying "
+              "itself - rise up, arrive by the middle of "
+              "the span, and hold that high place to the "
+              "end - its place remembered on the ground "
+              "at frame 1, its high place remembered at "
+              "frame 24, and the same high place "
+              "remembered again at frame 48, and Blender "
+              "fills in the rise between. Checked from "
+              "the real evaluated place sampled across "
+              "the span - the span must run at least 20 "
+              "frames, the rise must reach at least 2.5, "
+              "the end height must reach at least 3.0, "
+              "the lowest height from the middle onward "
+              "must stay at least 2.8, and no sampled "
+              "place may stray more than 0.5 sideways, "
+              "so a plain rise, a bounce, a slide, a "
+              "small lift or a diagonal climb cannot "
+              "pass for a hover. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_HOVER_STEPS},
+    {"id": "anim_land",
+     "kind": "flow",
+     "name": "Make it land",
+     "byline": "Animation's thirty-second piece: landing - "
+               "one thing, coming down and staying "
+               "there, in its own place.",
+     "intro": "Buddy's thirty-second animation piece - "
+              "landing. The fall piece dropped a thing "
+              "to the ground and left it there at the "
+              "end of its journey; this piece teaches "
+              "the staying itself - come down, arrive "
+              "by the middle of the span, and hold that "
+              "ground place to the end - its place "
+              "remembered up high at frame 1, its "
+              "ground place remembered at frame 24, "
+              "and the same ground place remembered "
+              "again at frame 48, and Blender fills in "
+              "the descent between. Checked from the "
+              "real evaluated place sampled across the "
+              "span - the span must run at least 20 "
+              "frames, the drop must reach at least 2.5, "
+              "the end height must be no more than 1.3, "
+              "the highest height from the middle "
+              "onward must stay no more than 1.7, and "
+              "no sampled place may stray more than 0.5 "
+              "sideways, so a plain fall, a bounce, a "
+              "slide at height, a small drop or a "
+              "diagonal descend cannot pass for a "
+              "landing. Each step ticks only when the "
+              "scene itself proves it.",
+     "steps": ANIM_LAND_STEPS},
+    {"id": "anim_glide",
+     "kind": "flow",
+     "name": "Make it glide far",
+     "byline": "Animation's thirty-third piece: gliding - "
+               "one thing, travelling far across the "
+               "air, sinking only a little.",
+     "intro": "Buddy's thirty-third animation piece - "
+              "gliding. The descend piece brought a thing "
+              "down and forward together, all the way to "
+              "the ground; this piece teaches the long, "
+              "nearly-level flight itself - far across, "
+              "sinking only a little, and still in the air "
+              "at the end - its place remembered up high at "
+              "frame 1, halfway across and only half a unit "
+              "lower remembered at frame 24, and the far end, "
+              "three across and only one down, remembered at "
+              "frame 48, and Blender fills in the glide "
+              "between. Checked from the real evaluated place "
+              "sampled across the span - the span must run at "
+              "least 20 frames, the travel between the ends "
+              "must reach at least 2.5, the drop must sit "
+              "between 0.7 and 1.8, the end height must stay "
+              "at least 2.2, and the height must never rise "
+              "back by more than 0.35 in a step, so a fall on "
+              "the spot, a diagonal descend, a slide at "
+              "height, a hop or a small glide cannot pass for "
+              "a glide. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_GLIDE_STEPS},
+    {"id": "anim_sway",
+     "kind": "flow",
+     "name": "Make it sway",
+     "byline": "Animation's thirty-fourth piece: swaying - "
+               "one thing, leaned to one side, leaned to "
+               "the other, and settled upright again.",
+     "intro": "Buddy's thirty-fourth animation piece - "
+              "swaying. The tilt piece leaned a thing over "
+              "to one side and left it leaning; this piece "
+              "leans it to one side, then to the other, and "
+              "settles it upright again - its upright facing "
+              "remembered at frame 1, leaned 0.8 of a turn "
+              "unit one way remembered at frame 17, leaned "
+              "0.8 the other way remembered at frame 33, and "
+              "upright again remembered at frame 48, and "
+              "Blender fills in the swaying between. Checked "
+              "from the real evaluated facing sampled across "
+              "the span - the span must run at least 20 "
+              "frames, on the side axis that leans the most "
+              "the lean must reach at least +0.6 one way and "
+              "at least -0.6 the other, the lean must change "
+              "direction at least twice, the ends must land "
+              "within 0.3 of level, the upright facing must "
+              "hold within 0.35, and the thing must stay "
+              "within 0.5 of its place, so a tilt, a spin, a "
+              "small sway or a one-way rock cannot pass for "
+              "a sway. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_SWAY_STEPS},
+    {"id": "anim_bow",
+     "kind": "flow",
+     "name": "Make it bow",
+     "byline": "Animation's thirty-fifth piece: bowing - "
+               "one thing, leaned deep to one side, and "
+               "brought back upright again.",
+     "intro": "Buddy's thirty-fifth animation piece - "
+              "bowing. The tilt piece leaned a thing over "
+              "and left it leaning, and the sway piece leaned "
+              "it to both sides; this piece leans it deep to "
+              "one side only and brings it back upright - its "
+              "upright facing remembered at frame 1, leaned 0.9 "
+              "of a turn unit one way remembered at frame 24, "
+              "and upright again remembered at frame 48, and "
+              "Blender fills in the bowing between. Checked "
+              "from the real evaluated facing sampled across "
+              "the span - the span must run at least 20 "
+              "frames, on the side axis that leans the most "
+              "the lean must reach at least 0.6 one way and no "
+              "more than 0.15 the other way, the lean must "
+              "change direction at least once, the ends must "
+              "land within 0.3 of level, the upright facing "
+              "must hold within 0.35, and the thing must stay "
+              "within 0.5 of its place, so a tilt, a sway, a "
+              "spin or a small bow cannot pass for a bow. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_BOW_STEPS},
+    {"id": "anim_nod",
+     "kind": "flow",
+     "name": "Make it nod",
+     "byline": "Animation's thirty-sixth piece: nodding - "
+               "one thing, leaned a little to one side, "
+               "brought back, leaned again, and settled "
+               "upright.",
+     "intro": "Buddy's thirty-sixth animation piece - "
+              "nodding. The bow piece leaned a thing deep "
+              "to one side once and brought it back; this "
+              "piece leans it a little way to one side, "
+              "brings it back upright, leans it again, and "
+              "settles it upright - its upright facing "
+              "remembered at frame 1, leaned 0.5 of a turn "
+              "unit one way remembered at frame 13, upright "
+              "at frame 24, leaned 0.5 again at frame 37, "
+              "and upright again at frame 48, and Blender "
+              "fills in the nodding between. Checked from "
+              "the real evaluated facing sampled across the "
+              "span - the span must run at least 20 frames, "
+              "on the side axis that leans the most the lean "
+              "must reach between 0.35 and 0.7 one way and "
+              "no more than 0.15 the other way, the lean must "
+              "change direction at least three times, the "
+              "ends must land within 0.3 of level, the "
+              "upright facing must hold within 0.35, and the "
+              "thing must stay within 0.5 of its place, so a "
+              "bow, a tilt, a sway, a spin, a small nod or a "
+              "single nod cannot pass for a nod. Each step "
+              "ticks only when the scene itself proves it.",
+     "steps": ANIM_NOD_STEPS},
+    {"id": "anim_wag",
+     "kind": "flow",
+     "name": "Make it wag",
+     "byline": "Animation's thirty-seventh piece: wagging - "
+               "one thing, turned a little one way, back "
+               "through the middle to the other way, back "
+               "again, and settled facing forward.",
+     "intro": "Buddy's thirty-seventh animation piece - "
+              "wagging. The nod piece leaned a thing a "
+              "little to one side twice and brought it back; "
+              "this piece turns it a little one way, back "
+              "through the middle to the other way, back "
+              "again, and settles it facing forward - its "
+              "facing remembered at frame 1, turned 0.4 of a "
+              "turn unit one way remembered at frame 13, "
+              "turned 0.4 the other way at frame 25, turned "
+              "0.4 the first way again at frame 37, and facing "
+              "forward again at frame 48, and Blender fills "
+              "in the wagging between. Checked from the real "
+              "evaluated facing sampled across the span - the "
+              "span must run at least 20 frames, the turn must "
+              "reach between 0.3 and 0.65 one way and between "
+              "0.3 and 0.65 the other way, the turn must change "
+              "direction at least three times, the ends must "
+              "land within 0.3 of the starting facing, the "
+              "side axes must hold within 0.2, and the thing "
+              "must stay within 0.5 of its place, so a spin, a "
+              "nod, a sway, a small wag, a single swing or a "
+              "one-way turn cannot pass for a wag. Each step "
+              "ticks only when the scene itself proves it.",
+     "steps": ANIM_WAG_STEPS},
+    {"id": "anim_turn",
+     "kind": "flow",
+     "name": "Make it turn around",
+     "byline": "Animation's thirty-eighth piece: turning around - "
+               "one thing, turned right around the whole "
+               "half circle and left facing the other way.",
+     "intro": "Buddy's thirty-eighth animation piece - "
+              "turning around. The wag piece turned a thing a "
+              "little one way and the other and settled it "
+              "facing forward; this piece turns it right "
+              "around - the whole half circle - and leaves it "
+              "facing the other way - its facing remembered "
+              "at frame 1, turned 3.1416 of a turn unit on the "
+              "upright axis remembered at frame 48, and "
+              "Blender fills in the turning between. Checked "
+              "from the real evaluated facing sampled across "
+              "the span - the span must run at least 20 frames, "
+              "the end turn on the upright axis must land "
+              "between 2.8 and 3.45, the side axes must hold "
+              "within 0.35, and the thing must stay within 0.5 "
+              "of its place, so a spin, a wag, a small turn, a "
+              "tilt, a sway or a nod cannot pass for a turn "
+              "around. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_TURN_STEPS},
+    {"id": "anim_bob",
+     "kind": "flow",
+     "name": "Make it bob",
+     "byline": "Animation's thirty-ninth piece: bobbing - "
+               "one thing, bobbed up and down twice in "
+               "its own place and settled back on the ground.",
+     "intro": "Buddy's thirty-ninth animation piece - "
+              "bobbing. The bounce piece sent a thing up "
+              "once and brought it back down, and the hop "
+              "piece sent it up and across; this piece bobs "
+              "a thing up and down twice in its own place "
+              "and settles it back on the ground - its place "
+              "remembered on the ground at frame 1, raised "
+              "one unit remembered at frame 13, back down "
+              "remembered at frame 25, raised one unit again "
+              "remembered at frame 37, and settled back on "
+              "the ground remembered at frame 48, and "
+              "Blender fills in the bobbing between. Checked "
+              "from the real evaluated place sampled across "
+              "the span - the span must run at least 20 frames, "
+              "the peak rise must land between 0.7 and 1.4, "
+              "the height must change direction at least "
+              "three times, the ends must sit within 0.3 of "
+              "each other in height, and the thing must stay "
+              "within 0.5 sideways of its start place, so a "
+              "single bounce, a rise, a hover, a small bob, "
+              "a slide or a hop cannot pass for a bob. Each "
+              "step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_BOB_STEPS},
+    {"id": "anim_float",
+     "kind": "flow",
+     "name": "Make it float",
+     "byline": "Animation's fortieth piece: floating - "
+               "one thing, floated up a little and kept "
+               "there, floating in its own place.",
+     "intro": "Buddy's fortieth animation piece - "
+              "floating. The hover piece sent a thing up "
+              "high and kept it there, and the bob piece "
+              "went up and down twice and settled back on "
+              "the ground; this piece floats a thing up a "
+              "little and keeps it there - its place "
+              "remembered on the ground at frame 1, raised "
+              "one and a half units remembered at frame 24, "
+              "and the same floating place remembered again "
+              "at frame 48, and Blender fills in the rise "
+              "between. Checked from the real evaluated "
+              "place sampled across the span - the span must "
+              "run at least 20 frames, the rise from the "
+              "start height to the end height must land "
+              "between 1.0 and 2.0, the end height must land "
+              "between 1.2 and 2.3, the lowest height from "
+              "the middle of the span onward must stay "
+              "within 0.35 of the end height, and the thing "
+              "must stay within 0.5 sideways of its start "
+              "place, so a hover, a bob, a bounce, a small "
+              "lift, a slide or a plain rise cannot pass for "
+              "a float. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_FLOAT_STEPS},
+    {"id": "anim_dip",
+     "kind": "flow",
+     "name": "Make it dip",
+     "byline": "Animation's forty-first piece: dipping - "
+               "one thing, dipped down toward the ground "
+               "and brought back up to its high place.",
+     "intro": "Buddy's forty-first animation piece - "
+              "dipping. The float piece sent a thing up a "
+              "little and kept it there, and the land piece "
+              "brought a thing down and left it there; this "
+              "piece dips a thing down toward the ground and "
+              "brings it back up - its place remembered up in "
+              "the air at frame 1, dipped to about 0.5 units "
+              "up remembered at frame 24, and back at its "
+              "starting high place remembered again at frame "
+              "48, and Blender fills in the way down and the "
+              "way back up between. Checked from the real "
+              "evaluated place sampled across the span - the "
+              "span must run at least 20 frames, the start "
+              "height must land between 1.7 and 2.3, the dip "
+              "depth from the start height to the lowest "
+              "sampled height must land between 1.0 and 1.8, "
+              "the lowest height must land between 0.2 and "
+              "0.9, the end height must land within 0.3 of "
+              "the start height, and the thing must stay "
+              "within 0.5 sideways of its start place, so a "
+              "hover, a land, a float, a bob, a small dip or "
+              "a slide cannot pass for a dip. Each step ticks "
+              "only when the scene itself proves it.",
+     "steps": ANIM_DIP_STEPS},
+    {"id": "anim_sidestep",
+     "kind": "flow",
+     "name": "Make it sidestep",
+     "byline": "Animation's forty-second piece: sidestepping - "
+               "one thing, stepped sideways along the ground "
+               "and kept there in its new place.",
+     "intro": "Buddy's forty-second animation piece - "
+              "sidestepping. The slide piece sent a thing "
+              "travelling forward along the ground, and the "
+              "pace piece stepped a thing out sideways and "
+              "brought it back home; this piece sidesteps a "
+              "thing sideways and keeps it there - its place "
+              "remembered on the ground at frame 1, moved "
+              "sideways 2.0 units along Y remembered at frame "
+              "24, and the same sidestepped place remembered "
+              "again at frame 48, and Blender fills in the step "
+              "across between. Checked from the real evaluated "
+              "place sampled across the span - the span must "
+              "run at least 20 frames, the sideways displacement "
+              "from the start place to the end place must land "
+              "between 1.7 and 2.3, the forward drift along X "
+              "must stay within 0.5 across all samples, the end "
+              "height must land within 0.3 of the start height, "
+              "and the total sampled height range must stay "
+              "within 0.35, so a slide, a pace, a small sidestep, "
+              "a diagonal move, a hop or a rise cannot pass for "
+              "a sidestep. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_SIDESTEP_STEPS},
+    {"id": "anim_backstep",
+     "kind": "flow",
+     "name": "Make it step back",
+     "byline": "Animation's forty-third piece: stepping back - "
+               "one thing, stepped backward along the ground "
+               "and kept there in its new place.",
+     "intro": "Buddy's forty-third animation piece - "
+              "stepping back. The slide piece sent a thing "
+              "travelling forward along the ground, and the "
+              "sidestep piece stepped a thing sideways and "
+              "kept it there; this piece steps a thing back "
+              "and keeps it there - its place remembered on "
+              "the ground at frame 1, moved backward 2.0 units "
+              "along X remembered at frame 24, and the same "
+              "stepped-back place remembered again at frame "
+              "48, and Blender fills in the step back across "
+              "between. Checked from the real evaluated place "
+              "sampled across the span - the span must run at "
+              "least 20 frames, the backward displacement from "
+              "the start place to the end place must land "
+              "between 1.7 and 2.3 (the end place's X minus "
+              "the start place's X between -2.3 and -1.7), "
+              "the sideways drift along Y must stay within "
+              "0.5 across all samples, the end height must "
+              "land within 0.3 of the start height, and the "
+              "total sampled height range must stay within "
+              "0.35, so a forward slide, a sidestep, a pace, "
+              "a small step back, a diagonal step back or a "
+              "hop cannot pass for a step back. Each step "
+              "ticks only when the scene itself proves it.",
+     "steps": ANIM_BACKSTEP_STEPS},
+    {"id": "anim_forwardstep",
+     "kind": "flow",
+     "name": "Make it step forward",
+     "byline": "Animation's forty-fourth piece: stepping forward - "
+               "one thing, stepped forward along the ground "
+               "and kept there in its new place.",
+     "intro": "Buddy's forty-fourth animation piece - "
+              "stepping forward. The slide piece sent a thing "
+              "travelling forward along the ground, and the "
+              "step back piece stepped a thing backward and "
+              "kept it there; this piece steps a thing forward "
+              "and keeps it there - its place remembered on "
+              "the ground at frame 1, moved forward 2.0 units "
+              "along X remembered at frame 24, and the same "
+              "stepped-forward place remembered again at frame "
+              "48, and Blender fills in the step forward across "
+              "between. Checked from the real evaluated place "
+              "sampled across the span - the span must run at "
+              "least 20 frames, the forward displacement from "
+              "the start place to the end place must land "
+              "between 1.7 and 2.3, the sideways drift along Y "
+              "must stay within 0.5 across all samples, the end "
+              "height must land within 0.3 of the start height, "
+              "and the total sampled height range must stay "
+              "within 0.35, so a step back, a sidestep, a pace, "
+              "a small step forward, a diagonal step forward, "
+              "a hop or a long slide forward cannot pass for a "
+              "step forward. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_FORWARDSTEP_STEPS},
+    {"id": "anim_stepup",
+     "kind": "flow",
+     "name": "Make it step up",
+     "byline": "Animation's forty-fifth piece: stepping up - "
+               "one thing, stepped forward and up together "
+               "and kept there in its new higher place.",
+     "intro": "Buddy's forty-fifth animation piece - "
+              "stepping up. The step forward piece stepped a "
+              "thing forward along the ground and kept it "
+              "there, and the float piece raised a thing "
+              "straight up and kept it there; this piece steps "
+              "a thing forward and up together and keeps it "
+              "there - its place remembered on the ground at "
+              "frame 1, moved forward 1.0 units along X and up "
+              "1.0 units along Z remembered at frame 24, and "
+              "the same stepped-up place remembered again at "
+              "frame 48, and Blender fills in the step up across "
+              "between. Checked from the real evaluated place "
+              "sampled across the span - the span must run at "
+              "least 20 frames, the forward displacement from "
+              "the start place to the end place must land "
+              "between 0.7 and 1.3, the rise from the start "
+              "height to the end height must land between 0.7 "
+              "and 1.3, the end height must land between 0.7 and "
+              "1.3, the sideways drift along Y must stay within "
+              "0.5 across all samples, and the sampled height "
+              "must never drop more than 0.35 below the start "
+              "height, so a float, a step forward or slide, a "
+              "climb straight up, a hop, a small step up, a "
+              "diagonal sidestep-up or a step down cannot pass "
+              "for a step up. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_STEPUP_STEPS},
+    {"id": "anim_stepdown",
+     "kind": "flow",
+     "name": "Make it step down",
+     "byline": "Animation's forty-sixth piece: stepping down - "
+               "one thing, stepped forward and down together "
+               "and kept there in its new place on the ground.",
+     "intro": "Buddy's forty-sixth animation piece - "
+              "stepping down. The step up piece stepped a "
+              "thing forward and up together and kept it "
+              "there in its new higher place; this piece steps "
+              "a thing forward and down together and keeps it "
+              "there on the ground - its place remembered up "
+              "high at frame 1, moved forward 1.0 units along X and down "
+              "1.0 units along Z remembered at frame 24, and "
+              "the same stepped-down place remembered again at "
+              "frame 48, and Blender fills in the step down across "
+              "between. Checked from the real evaluated place "
+              "sampled across the span - the span must run at "
+              "least 20 frames, the forward displacement from "
+              "the start place to the end place must land "
+              "between 0.7 and 1.3, the drop from the start "
+              "height to the end height must land between 0.7 "
+              "and 1.3, the start height must land between 0.7 and "
+              "1.3, the end height must land between -0.3 and "
+              "0.3, the sideways drift along Y must stay within "
+              "0.5 across all samples, and the sampled height "
+              "must never rise more than 0.35 above the start "
+              "height, so a step up, a step forward, a "
+              "straight drop, a hop, a small step down, a "
+              "diagonal sidestep-down or a climb cannot pass "
+              "for a step down. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_STEPDOWN_STEPS},
+    {"id": "anim_crouch",
+     "kind": "flow",
+     "name": "Make it crouch",
+     "byline": "Animation's forty-seventh piece: crouching - "
+               "one thing, lowered to half height and kept "
+               "crouched, its sides staying at their own size.",
+     "intro": "Buddy's forty-seventh animation piece - "
+              "crouching. The squash piece flattened a thing "
+              "down while its sides bulged out and then let it "
+              "settle back, and the shrink piece made it smaller "
+              "on every side; this piece lowers a thing's height "
+              "and keeps it lowered, its sides staying at their own "
+              "size the whole way - its starting size remembered at "
+              "frame 1, at its own shape, scale 1, 1, 1, its height "
+              "down to 0.5 remembered at frame 24, and the same "
+              "crouched size remembered again at frame 48, and "
+              "Blender fills in the crouching across between. Checked "
+              "from the real evaluated size sampled across the span - "
+              "the span must run at least 20 frames, the end height "
+              "ratio must land between 0.35 and 0.65, the end side "
+              "ratios (X and Y) must each land between 0.8 and 1.2, "
+              "and the sampled height ratio must never rise above "
+              "1.15, so a squash, a shrink, a stretch, a small crouch "
+              "or a crouch that recovers cannot pass for a crouch. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_CROUCH_STEPS},
+    {"id": "anim_standup",
+     "kind": "flow",
+     "name": "Make it stand up",
+     "byline": "Animation's forty-eighth piece: standing up - "
+               "one thing, started crouched down, stood up to "
+               "full height and kept standing, its sides staying "
+               "at their own size.",
+     "intro": "Buddy's forty-eighth animation piece - "
+              "standing up. The crouch piece lowered a thing's "
+              "height and kept it lowered, its sides staying at "
+              "their own size; this piece starts a thing crouched "
+              "down and stands it up to full height, keeping it "
+              "standing, its sides staying at their own size the "
+              "whole way - its starting size remembered at frame 1, "
+              "crouched down, scale 1, 1, 0.5, its full height of "
+              "1.0 remembered at frame 24, and the same full size "
+              "remembered again at frame 48, and Blender fills in "
+              "the standing up across between. Checked from the real "
+              "evaluated size sampled across the span - the span must "
+              "run at least 20 frames, the start height ratio (start Z "
+              "over end Z) must land between 0.35 and 0.65, the end "
+              "height ratio (end Z against a full height of 1.0) must "
+              "land between 0.85 and 1.15, the end side ratios (X and Y) "
+              "must each land between 0.8 and 1.2, and the sampled height "
+              "ratio must never fall below 0.35 or rise above 1.15, so a "
+              "crouch, a squash, a shrink, a stretch, a small stand or a "
+              "stand that crouches back cannot pass for a stand-up. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_STANDUP_STEPS},
+    {"id": "anim_widen",
+     "kind": "flow",
+     "name": "Make it widen",
+     "byline": "Animation's forty-ninth piece: widening - "
+               "one thing, its sides spread out to twice "
+               "their size and kept spread, its height staying "
+               "at its own height.",
+     "intro": "Buddy's forty-ninth animation piece - "
+              "widening. The crouch and stand-up pieces changed "
+              "a thing's height only, its sides staying at "
+              "their own size; this piece spreads a thing's "
+              "sides out to twice their size and keeps them "
+              "spread, its height staying at its own height the "
+              "whole way - its starting size remembered at frame 1, "
+              "at its own shape, scale 1, 1, 1, its sides spread "
+              "to 2.0 remembered at frame 24, and the same widened "
+              "size remembered again at frame 48, and Blender fills in "
+              "the widening across between. Checked from the real "
+              "evaluated size sampled across the span - the span must "
+              "run at least 20 frames, the end side ratios (X and Y) "
+              "must each land between 1.7 and 2.3, the end height "
+              "ratio must land between 0.8 and 1.2, the sampled height "
+              "ratio must never fall below 0.65 or rise above 1.35, and "
+              "the sampled side ratios must never rise above 2.35, so a "
+              "grow, a shrink, a squash, a small widen, a widen that "
+              "returns or a stretch cannot pass for a widening. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_WIDEN_STEPS},
+    {"id": "anim_narrow",
+     "kind": "flow",
+     "name": "Make it narrow",
+     "byline": "Animation's fiftieth piece: narrowing - "
+               "one thing, its sides pulled in to half "
+               "their size and kept pulled in, its height staying "
+               "at its own height.",
+     "intro": "Buddy's fiftieth animation piece - "
+              "narrowing. The widen piece spread a thing's "
+              "sides out to twice their size; this piece pulls "
+              "a thing's sides in to half their size and keeps "
+              "them pulled in, its height staying at its own "
+              "height the whole way - its starting size remembered "
+              "at frame 1, at its own shape, scale 1, 1, 1, its sides "
+              "pulled in to 0.5 remembered at frame 24, and the same "
+              "narrowed size remembered again at frame 48, and Blender "
+              "fills in the narrowing across between. Checked from the "
+              "real evaluated size sampled across the span - the span "
+              "must run at least 20 frames, the end side ratios (X and "
+              "Y) must each land between 0.35 and 0.65, the end height "
+              "ratio must land between 0.8 and 1.2, the sampled height "
+              "ratio must never fall below 0.65 or rise above 1.35, and "
+              "the sampled side ratios must never fall below 0.3, so a "
+              "shrink, a grow, a squash, a small narrow, a narrow that "
+              "returns or a stretch cannot pass for a narrowing. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_NARROW_STEPS},
+    {"id": "anim_lengthen",
+     "kind": "flow",
+     "name": "Make it lengthen",
+     "byline": "Animation's fifty-first piece: lengthening - "
+               "one thing, stretched along its length to twice "
+               "its size and kept long, its width and height staying "
+               "at their own size.",
+     "intro": "Buddy's fifty-first animation piece - "
+              "lengthening. The widen piece spread a thing's "
+              "sides out together and the narrow piece pulled "
+              "them in together; this piece stretches a thing "
+              "along its length only, to twice its size, and keeps "
+              "it long, its width and height staying at their own "
+              "size the whole way - its starting size remembered "
+              "at frame 1, at its own shape, scale 1, 1, 1, its length "
+              "stretched to 2.0 remembered at frame 24, and the same "
+              "lengthened size remembered again at frame 48, and Blender "
+              "fills in the lengthening across between. Checked from the "
+              "real evaluated size sampled across the span - the span "
+              "must run at least 20 frames, the end length ratio (X) "
+              "must land between 1.7 and 2.3, the end width and height "
+              "ratios must each land between 0.8 and 1.2, the sampled "
+              "length ratio must never rise above 2.35, and the sampled "
+              "width and height ratios must never rise above 1.35 or "
+              "fall below 0.65, so a widen, a grow, a shrink, a stretch "
+              "in height, a small lengthen, a lengthen that returns or "
+              "a width-only widen cannot pass for a lengthening. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_LENGTHEN_STEPS},
+    {"id": "anim_shorten",
+     "kind": "flow",
+     "name": "Make it shorten",
+     "byline": "Animation's fifty-second piece: shortening - "
+               "one thing, pulled in along its length to half "
+               "its size and kept short, its width and height staying "
+               "at their own size.",
+     "intro": "Buddy's fifty-second animation piece - "
+              "shortening. The lengthen piece stretched a thing "
+              "along its length only, to twice its size, and kept "
+              "it long; this piece pulls a thing "
+              "in along its length only, to half its size, and keeps "
+              "it short, its width and height staying at their own "
+              "size the whole way - its starting size remembered "
+              "at frame 1, at its own shape, scale 1, 1, 1, its length "
+              "pulled in to 0.5 remembered at frame 24, and the same "
+              "shortened size remembered again at frame 48, and Blender "
+              "fills in the shortening across between. Checked from the "
+              "real evaluated size sampled across the span - the span "
+              "must run at least 20 frames, the end length ratio (X) "
+              "must land between 0.35 and 0.65, the end width and height "
+              "ratios must each land between 0.8 and 1.2, the sampled "
+              "length ratio must never fall below 0.3, and the sampled "
+              "width and height ratios must never rise above 1.35 or "
+              "fall below 0.65, so a widen, a grow, a shrink, a stretch "
+              "in height, a lengthen, a small shorten or a shorten that returns "
+              "cannot pass for a shortening. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_SHORTEN_STEPS},
+    {"id": "anim_thicken",
+     "kind": "flow",
+     "name": "Make it thicken",
+     "byline": "Animation's fifty-third piece: thickening - "
+               "one thing, spread across its width to twice "
+               "its size and kept thick, its length and height staying "
+               "at their own size.",
+     "intro": "Buddy's fifty-third animation piece - "
+              "thickening. The lengthen piece stretched a thing "
+              "along its length only, to twice its size, and the "
+              "shorten piece pulled its length back in; this piece "
+              "spreads a thing "
+              "across its width only, to twice its size, and keeps "
+              "it thick, its length and height staying at their own "
+              "size the whole way - its starting size remembered "
+              "at frame 1, at its own shape, scale 1, 1, 1, its width "
+              "spread to 2.0 remembered at frame 24, and the same "
+              "thickened size remembered again at frame 48, and Blender "
+              "fills in the thickening across between. Checked from the "
+              "real evaluated size sampled across the span - the span "
+              "must run at least 20 frames, the end width ratio (Y) "
+              "must land between 1.7 and 2.3, the end length and height "
+              "ratios must each land between 0.8 and 1.2, the sampled "
+              "width ratio must never rise above 2.35, and the sampled "
+              "length and height ratios must never rise above 1.35 or "
+              "fall below 0.65, so a widen, a grow, a lengthen, a stretch "
+              "in height, a shrink, a small thicken or a thicken that returns "
+              "cannot pass for a thickening. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_THICKEN_STEPS},
+    {"id": "anim_thin",
+     "kind": "flow",
+     "name": "Make it thin",
+     "byline": "Animation's fifty-fourth piece: thinning - "
+               "one thing, pulled in across its width to half "
+               "its size and kept thin, its length and height staying "
+               "at their own size.",
+     "intro": "Buddy's fifty-fourth animation piece - "
+              "thinning. The thicken piece spread a thing "
+              "across its width only, to twice its size, and kept "
+              "it thick; this piece pulls a thing "
+              "in across its width only, to half its size, and keeps "
+              "it thin, its length and height staying at their own "
+              "size the whole way - its starting size remembered "
+              "at frame 1, at its own shape, scale 1, 1, 1, its width "
+              "pulled in to 0.5 remembered at frame 24, and the same "
+              "thinned size remembered again at frame 48, and Blender "
+              "fills in the thinning across between. Checked from the "
+              "real evaluated size sampled across the span - the span "
+              "must run at least 20 frames, the end width ratio (Y) "
+              "must land between 0.35 and 0.65, the end length and height "
+              "ratios must each land between 0.8 and 1.2, the sampled "
+              "width ratio must never fall below 0.3, and the sampled "
+              "length and height ratios must never rise above 1.35 or "
+              "fall below 0.65, so a widen, a thicken, a grow, a shrink, a lengthen, a stretch "
+              "in height, a small thin or a thin that returns "
+              "cannot pass for a thinning. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_THIN_STEPS},
+    {"id": "anim_taller",
+     "kind": "flow",
+     "name": "Make it taller",
+     "byline": "Animation's fifty-fifth piece: growing taller - "
+               "one thing, raised up through its height to twice "
+               "its size and kept tall, its length and width staying "
+               "at their own size.",
+     "intro": "Buddy's fifty-fifth animation piece - "
+              "growing taller. The thin piece pulled a thing "
+              "in across its width only, to half its size, and kept "
+              "it thin; this piece raises a thing "
+              "up through its height only, to twice its size, and keeps "
+              "it tall, its length and width staying at their own "
+              "size the whole way - its starting size remembered "
+              "at frame 1, at its own shape, scale 1, 1, 1, its height "
+              "raised up to 2.0 remembered at frame 24, and the same "
+              "taller size remembered again at frame 48, and Blender "
+              "fills in the growing taller across between. Checked from the "
+              "real evaluated size sampled across the span - the span "
+              "must run at least 20 frames, the end height ratio (Z) "
+              "must land between 1.7 and 2.3, the end length and width "
+              "ratios must each land between 0.8 and 1.2, the sampled "
+              "height ratio must never rise above 2.35, and the sampled "
+              "length and width ratios must never rise above 1.35 or "
+              "fall below 0.65, so a widen, a thicken, a lengthen, a grow, a shrink, a crouch, "
+              "a small taller or a taller that returns "
+              "cannot pass for a growing taller. Each "
+              "step ticks only when the scene itself proves it.",
+     "steps": ANIM_TALLER_STEPS},
+    {"id": "anim_sideturn",
+     "kind": "flow",
+     "name": "Make it turn to the side",
+     "byline": "Animation's fifty-sixth piece: turning to the side - "
+               "one thing, turned a quarter turn on the upright "
+               "axis and kept turned, left facing sideways.",
+     "intro": "Buddy's fifty-sixth animation piece - "
+              "turning to the side. The taller piece raised a "
+              "thing up through its height to twice its size and "
+              "kept it tall; this piece turns a thing a quarter "
+              "turn to the side and keeps it turned - its facing "
+              "remembered at frame 1, level, rotation Z 0, turned "
+              "1.5708 of a turn unit on the upright axis remembered "
+              "at frame 24, and the same turned facing remembered "
+              "again at frame 48, its side axes staying level and "
+              "its place held, and Blender fills in the turning "
+              "between. Checked from the real evaluated facing "
+              "sampled across the span - the span must run at least "
+              "20 frames, the end turn on the upright axis must land "
+              "between 1.25 and 1.9, the side axes must hold within "
+              "0.35, and the thing must stay within 0.5 of its place, "
+              "so a turn around, a spin, a wag, a small turn, a tilt "
+              "or a turn that returns cannot pass for a turn to the "
+              "side. Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_SIDETURN_STEPS},
+    {"id": "anim_leap",
+     "kind": "flow",
+     "name": "Make it leap",
+     "byline": "Animation's fifty-seventh piece: leaping - "
+               "one thing, leapt up and forward through the "
+               "air and landed far ahead on the ground.",
+     "intro": "Buddy's fifty-seventh animation piece - "
+              "leaping. The turn-to-the-side piece turned a "
+              "thing a quarter turn and left it facing "
+              "sideways; this piece leaps a thing up and "
+              "forward and lands it far ahead on the ground - "
+              "its starting place remembered down on the ground "
+              "at frame 1, location (0, 0, 1), its mid-leap place "
+              "(1.5, 0, 3) remembered up in the air at frame 24, "
+              "and its landing place (3, 0, 1) remembered far "
+              "ahead on the ground at frame 48, never travelling "
+              "sideways, and Blender fills in the leap between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the forward travel must land between 2.2 "
+              "and 3.8, the peak height must clear at least 1.2 "
+              "above the start height, the landing height must sit "
+              "within 0.35 of the start height, and the sideways "
+              "drift must stay within 0.5, so a slide, a bounce in "
+              "place, a glide-like travel, a small leap, a leap that "
+              "returns or a diagonal leap cannot pass for a leap. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_LEAP_STEPS},
+    {"id": "anim_dive",
+     "kind": "flow",
+     "name": "Make it dive",
+     "byline": "Animation's fifty-eighth piece: diving - "
+               "one thing, dived down and forward from up "
+               "high and landed far ahead on the ground.",
+     "intro": "Buddy's fifty-eighth animation piece - "
+              "diving. The leap piece sent a thing up off the "
+              "ground and far forward through the air; this "
+              "piece dives a thing down and forward from up "
+              "high and lands it far ahead on the ground - "
+              "its starting place remembered up high "
+              "at frame 1, location (0, 0, 3), its mid-dive place "
+              "(1.5, 0, 2) remembered halfway down at frame 24, "
+              "and its landing place (3, 0, 1) remembered far "
+              "ahead on the ground at frame 48, never travelling "
+              "sideways and never rising first, and Blender fills "
+              "in the dive between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the forward travel must land between 2.2 "
+              "and 3.8, the drop must land between 1.7 and 2.3, "
+              "no sampled place may sit more than 0.35 above the "
+              "start height, the landing height must sit within "
+              "0.35 of the ground centre 1.0, and the sideways "
+              "drift must stay within 0.5, so a leap, a glide, a "
+              "descend in place, a slide, a small dive, a dive that "
+              "rises back or a diagonal dive cannot pass for a dive. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_DIVE_STEPS},
+    {"id": "anim_lookback",
+     "kind": "flow",
+     "name": "Make it look behind",
+     "byline": "Animation's fifty-ninth piece: looking behind - "
+               "one thing, turned right around to face behind "
+               "and brought back to facing forward.",
+     "intro": "Buddy's fifty-ninth animation piece - "
+              "looking behind. The turn-around piece turned a "
+              "thing right around and left it facing the other "
+              "way; this piece turns a thing the whole half "
+              "circle to look behind and brings it back to "
+              "facing forward - its starting facing remembered "
+              "at frame 1, level, rotation (0, 0, 0), its turned "
+              "facing (0, 0, 3.1416) remembered at frame 24, and "
+              "the starting facing remembered again at frame 48, "
+              "its side axes staying level and its place held, "
+              "and Blender fills in the turning between. "
+              "Checked from the real evaluated facing sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the peak turn on the upright axis must land "
+              "between 2.8 and 3.5, the end turn must settle within "
+              "0.35 of the starting facing, the side axes must hold "
+              "within 0.35, and the thing must stay within 0.5 of "
+              "its place, so a turn around, a spin, a wag, a small "
+              "look, a tilt or a look that stays cannot pass for "
+              "looking behind. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_LOOKBACK_STEPS},
+    {"id": "anim_diagonal",
+     "kind": "flow",
+     "name": "Make it move diagonally",
+     "byline": "Animation's sixtieth piece: moving diagonally - "
+               "one thing, moved forward and sideways together "
+               "on the ground and kept far ahead and far across.",
+     "intro": "Buddy's sixtieth animation piece - "
+              "moving diagonally. The slide piece carried a thing "
+              "sideways across the ground and the move pieces "
+              "carried one forward; this piece travels both ways "
+              "at once, on the ground the whole way - "
+              "its starting place remembered on the ground "
+              "at frame 1, location (0, 0, 1), its mid-diagonal place "
+              "(1.5, 1.5, 1) remembered halfway forward and halfway "
+              "across at frame 24, and its end place (3, 3, 1) "
+              "remembered far ahead and far across on the ground "
+              "at frame 48, and Blender fills in the diagonal "
+              "between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the forward travel must land between 2.2 "
+              "and 3.8, the sideways travel must land between 2.2 "
+              "and 3.8, no sampled place may sit more than 0.35 "
+              "above or below the start height, and the end height "
+              "must sit within 0.35 of the start height, so a slide, "
+              "a forward-only move, a leap, a small diagonal, a "
+              "diagonal that returns or a diagonal up in the air "
+              "cannot pass for moving diagonally. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_DIAGONAL_STEPS},
+    {"id": "anim_backdiagonal",
+     "kind": "flow",
+     "name": "Make it move back diagonally",
+     "byline": "Animation's sixty-first piece: moving back diagonally - "
+               "one thing, moved backward and sideways together "
+               "on the ground and kept far behind and far across.",
+     "intro": "Buddy's sixty-first animation piece - "
+              "moving back diagonally. The diagonal piece carried a thing "
+              "forward and sideways together; this piece travels backward "
+              "and sideways at once, on the ground the whole way - "
+              "its starting place remembered on the ground "
+              "at frame 1, location (0, 0, 1), its mid-back-diagonal place "
+              "(-1.5, 1.5, 1) remembered halfway back and halfway "
+              "across at frame 24, and its end place (-3, 3, 1) "
+              "remembered far behind and far across on the ground "
+              "at frame 48, and Blender fills in the back diagonal "
+              "between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the backward travel must land between 2.2 "
+              "and 3.8, the sideways travel must land between 2.2 "
+              "and 3.8, no sampled place may sit more than 0.35 "
+              "above or below the start height, and the end height "
+              "must sit within 0.35 of the start height, so a slide, "
+              "a backward-only move, a leap, a small back-diagonal, a "
+              "back-diagonal that returns or a back-diagonal up in the air "
+              "cannot pass for moving back diagonally. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_BACKDIAGONAL_STEPS},
+    {"id": "anim_otherdiagonal",
+     "kind": "flow",
+     "name": "Make it move diagonally the other way",
+     "byline": "Animation's sixty-second piece: moving diagonally the other way - "
+               "one thing, moved forward and sideways the other way together "
+               "on the ground and kept far ahead and far across the other way.",
+     "intro": "Buddy's sixty-second animation piece - "
+              "moving diagonally the other way. The diagonal piece carried a thing "
+              "forward and sideways together; this piece travels forward "
+              "and sideways the other way at once, on the ground the whole way - "
+              "its starting place remembered on the ground "
+              "at frame 1, location (0, 0, 1), its mid-other-diagonal place "
+              "(1.5, -1.5, 1) remembered halfway forward and halfway "
+              "across the other way at frame 24, and its end place (3, -3, 1) "
+              "remembered far ahead and far across the other way on the ground "
+              "at frame 48, and Blender fills in the other diagonal "
+              "between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the forward travel must land between 2.2 "
+              "and 3.8, the sideways-other travel must land between 2.2 "
+              "and 3.8, no sampled place may sit more than 0.35 "
+              "above or below the start height, and the end height "
+              "must sit within 0.35 of the start height, so a slide the other way, "
+              "a forward-only move, a leap, a small other-diagonal, an "
+              "other-diagonal that returns or an other-diagonal up in the air "
+              "cannot pass for moving diagonally the other way. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_OTHERDIAGONAL_STEPS},
+    {"id": "anim_backotherdiagonal",
+     "kind": "flow",
+     "name": "Make it move back diagonally the other way",
+     "byline": "Animation's sixty-third piece: moving back diagonally the other way - "
+               "one thing, moved backward and sideways the other way together "
+               "on the ground and kept far behind and far across the other way.",
+     "intro": "Buddy's sixty-third animation piece - "
+              "moving back diagonally the other way. The other-diagonal piece carried a thing "
+              "forward and sideways the other way together; this piece travels backward "
+              "and sideways the other way at once, on the ground the whole way - "
+              "its starting place remembered on the ground "
+              "at frame 1, location (0, 0, 1), its mid-back-other-diagonal place "
+              "(-1.5, -1.5, 1) remembered halfway backward and halfway "
+              "across the other way at frame 24, and its end place (-3, -3, 1) "
+              "remembered far behind and far across the other way on the ground "
+              "at frame 48, and Blender fills in the back-other diagonal "
+              "between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the backward travel must land between 2.2 "
+              "and 3.8, the sideways-other travel must land between 2.2 "
+              "and 3.8, no sampled place may sit more than 0.35 "
+              "above or below the start height, and the end height "
+              "must sit within 0.35 of the start height, so a slide the other way, "
+              "a backward-only move, a leap, a small back-other-diagonal, a "
+              "back-other-diagonal that returns or a back-other-diagonal up in the air "
+              "cannot pass for moving back diagonally the other way. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_BACKOTHERDIAGONAL_STEPS},
+    {"id": "anim_othersideturn",
+     "kind": "flow",
+     "name": "Make it turn to the other side",
+     "byline": "Animation's sixty-fourth piece: turning to the other side - "
+               "one thing, turned a quarter turn the other way on the upright "
+               "axis and kept turned, left facing sideways the other way.",
+     "intro": "Buddy's sixty-fourth animation piece - "
+              "turning to the other side. The turn-to-the-side piece turned a "
+              "thing a quarter turn one way and kept it turned; this piece turns a thing a quarter "
+              "turn the other way, to the other side, and keeps it turned - its facing "
+              "remembered at frame 1, level, rotation Z 0, turned "
+              "-1.5708 of a turn unit on the upright axis remembered "
+              "at frame 24, and the same turned facing remembered "
+              "again at frame 48, its side axes staying level and "
+              "its place held, and Blender fills in the turning "
+              "between. Checked from the real evaluated facing "
+              "sampled across the span - the span must run at least "
+              "20 frames, the end turn on the upright axis must land "
+              "between -1.9 and -1.25, the side axes must hold within "
+              "0.35, and the thing must stay within 0.5 of its place, "
+              "so a turn to the first side, a turn around, a spin, a wag, a small turn, a tilt "
+              "or a turn that returns cannot pass for a turn to the "
+              "other side. Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_OTHERSIDETURN_STEPS},
+    {"id": "anim_othersidestep",
+     "kind": "flow",
+     "name": "Make it sidestep the other way",
+     "byline": "Animation's sixty-fifth piece: sidestepping the other way - "
+               "one thing, stepped sideways the other way along the ground "
+               "and kept there, ending far across the other way.",
+     "intro": "Buddy's sixty-fifth animation piece - "
+              "sidestepping the other way. The sidestep piece stepped a thing "
+              "sideways one way and kept it there; this piece steps a thing sideways the "
+              "other way and keeps it there, on the ground the whole way - "
+              "its starting place remembered on the ground "
+              "at frame 1, location (0, 0, 1), its mid-sidestep place "
+              "(0, -1.5, 1) remembered halfway across the other "
+              "way at frame 24, and its end place (0, -3, 1) "
+              "remembered far across the other way on the ground "
+              "at frame 48, and Blender fills in the sidestep "
+              "between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the sideways-other travel must land between 2.2 "
+              "and 3.8, the forward/backward drift must stay within 0.5, "
+              "no sampled place may sit more than 0.35 "
+              "above or below the start height, and the end height "
+              "must sit within 0.35 of the start height, so a sidestep the first way, "
+              "a forward slide, a pace that returns, a small sidestep the other way, a diagonal, "
+              "a hop or a sidestep the other way that returns "
+              "cannot pass for a sidestep the "
+              "other way. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_OTHERSIDESTEP_STEPS},
+    {"id": "anim_otherspin",
+     "kind": "flow",
+     "name": "Make it spin the other way",
+     "byline": "Animation's sixty-sixth piece: spinning the other way - "
+               "one thing, spun one full turn the other way in its own "
+               "place, ending facing the way it started.",
+     "intro": "Buddy's sixty-sixth animation piece - "
+              "spinning the other way. The spin piece spun a thing "
+              "all the way around one way and brought it home; this piece spins a thing "
+              "all the way around the other way and keeps the facing it lands on - "
+              "its starting facing remembered level "
+              "at frame 1, rotation (0, 0, 0), its halfway facing "
+              "-3.1416 on the upright axis remembered halfway around the other "
+              "way at frame 24, and the facing it lands on -6.2832 "
+              "remembered one full turn the other way "
+              "at frame 48, and Blender fills in the spinning "
+              "between. "
+              "Checked from the real evaluated facing sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the end turn must land between -6.6 "
+              "and -5.9, the side axes must hold within 0.35, "
+              "and the thing must stay within 0.5 of its place, so a spin the first way, "
+              "a turn around the other way, a turn to the other side, a wag, a small turn, a tilt or "
+              "a spin that returns "
+              "cannot pass for a spin the "
+              "other way. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_OTHERSPIN_STEPS},
+    {"id": "anim_otherturn",
+     "kind": "flow",
+     "name": "Make it turn around the other way",
+     "byline": "Animation's sixty-seventh piece: turning around the other way - "
+               "one thing, turned a half turn the other way in its own "
+               "place, ending facing behind it.",
+     "intro": "Buddy's sixty-seventh animation piece - "
+              "turning around the other way. The turn-around piece turned a thing "
+              "half a turn one way and left it facing behind it; this piece turns a thing "
+              "half a turn the other way and keeps it turned - "
+              "its starting facing remembered level "
+              "at frame 1, rotation (0, 0, 0), its turned facing "
+              "-3.1416 on the upright axis remembered turned around the other "
+              "way at frame 24, and the same turned facing -3.1416 "
+              "remembered again "
+              "at frame 48, and Blender fills in the turning "
+              "between. "
+              "Checked from the real evaluated facing sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the end turn must land between -3.45 "
+              "and -2.8, the side axes must hold within 0.35, "
+              "and the thing must stay within 0.5 of its place, so a turn around the first way, "
+              "a spin the other way, a spin the first way, a wag, a small turn, a tilt or "
+              "a turn that returns "
+              "cannot pass for a turn around the "
+              "other way. "
+              "Each step ticks only when the scene itself "
+              "proves it.",
+     "steps": ANIM_OTHERTURN_STEPS},
+    {"id": "anim_otherlookback",
+     "kind": "flow",
+     "name": "Make it look behind the other way",
+     "byline": "Animation's sixty-eighth piece: looking behind the other way - "
+               "one thing, turned right around the other way to face behind "
+               "and brought back to facing forward.",
+     "intro": "Buddy's sixty-eighth animation piece - "
+              "looking behind the other way. The look-behind piece turned a "
+              "thing the whole half circle one way to look behind and brought "
+              "it back to facing forward; this piece turns a thing "
+              "the whole half circle the other way to look behind and brings "
+              "it back to facing forward - its starting facing remembered "
+              "at frame 1, level, rotation (0, 0, 0), its turned "
+              "facing (0, 0, -3.1416) remembered at frame 24, and "
+              "the starting facing remembered again at frame 48, "
+              "its side axes staying level and its place held, "
+              "and Blender fills in the turning between. "
+              "Checked from the real evaluated facing sampled "
+              "across the span - the span must run at least 20 "
+              "frames, the peak turn on the upright axis must land "
+              "between -3.5 and -2.8, the end turn must settle within "
+              "0.35 of the starting facing, the side axes must hold "
+              "within 0.35, and the thing must stay within 0.5 of "
+              "its place, so a look behind the first way, a turn around the other way, a spin the other way, a wag, a small "
+              "look the other way, a tilt or a look behind the other way that stays cannot pass for "
+              "looking behind the other way. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_OTHERLOOKBACK_STEPS},
+    {"id": "anim_otherorbit",
+     "kind": "flow",
+     "name": "Make it orbit the other way",
+     "byline": "Animation's sixty-ninth piece: orbiting the other way - "
+               "one thing, its place remembered at the "
+               "quarter points of one circle travelled the other way, and the "
+               "ring filled in between.",
+     "intro": "Buddy's sixty-ninth animation piece - "
+              "orbiting the other way. The orbit piece travelled a "
+              "thing all the way round one centre and home; "
+              "this piece travels the same ring the other way: starting place "
+              "remembered at frame 1 out at the edge of the "
+              "ring, at (3, 0, 1), the other quarter points remembered "
+              "at frames 13, 25 and 37 - (0, -3, 1), (-3, 0, 1) and (0, 3, 1) - and home to the "
+              "start at frame 48, the same distance from "
+              "the middle the whole way. Checked from the "
+              "real evaluated place sampled across the "
+              "span - the span must run at least 20 frames, the signed angle around the middle must "
+              "land between -6.6 and -5.0, the average "
+              "radius at least 1.5, the radius variation "
+              "at most 0.5, and the ends must meet within 0.3, so a first-way orbit, a quarter arc, a straight move, an out-and-back, a small circle or an ellipse-ish path cannot pass "
+              "for orbiting the other way. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_OTHERORBIT_STEPS},
+    {"id": "anim_otherroll",
+     "kind": "flow",
+     "name": "Make it roll the other way",
+     "byline": "Animation's seventieth piece: rolling the other way - "
+               "one thing, its place and facing "
+               "remembered at both ends of a journey back across, "
+               "and the tumble filled in between.",
+     "intro": "Buddy's seventieth animation piece - "
+              "rolling the other way. The roll piece travelled a "
+              "thing across the ground while turning it over one way; "
+              "this piece rolls the same journey the other way: starting place and facing "
+              "remembered at frame 1 at (2, 0, 1), facing level, the far end remembered "
+              "at frame 48 at (-2, 0, 1) turned +4 radians on Y, the travel and "
+              "the turning paced to each other. Checked from the "
+              "real evaluated place and facing at the first and last memories - the span must run at least 20 frames, the signed travel across must "
+              "land between -5.5 and -2.0, the signed turn on Y "
+              "between 2.5 and 5.5, and the travel per radian "
+              "between 0.4 and 2.5, so a first-way roll, a slide, a spin on the spot, a small roll, an out-of-pace roll or a roll that comes back cannot pass "
+              "for rolling the other way. Each step ticks only when the scene "
+              "itself proves it.",
+     "steps": ANIM_OTHERROLL_STEPS},
+    {"id": "anim_otherflip",
+     "kind": "flow",
+     "name": "Make it flip the other way",
+     "byline": "Animation's seventy-first piece: flipping the other way - "
+               "one thing, its facing remembered upright, "
+               "remembered upside down the other way, and remembered "
+               "upright again as one full turn the other way, and the "
+               "roll filled in between.",
+     "intro": "Buddy's seventy-first animation piece - "
+              "flipping the other way. The flip piece turned a thing "
+              "all the way over one way; this piece turns it all "
+              "the way over the other way: upright facing remembered "
+              "at frame 1, upside-down facing remembered "
+              "at frame 24 reached the other way round, upright facing remembered "
+              "again at frame 48 as one full turn the other way, and "
+              "Blender fills in the roll between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - the span must run at least 20 frames, the signed end turn on the flip axis must "
+              "land between -6.6 and -5.9, the other axes must hold within 0.35, and the thing must stay within 0.5 of its place, so a first-way flip, a half flip, a small turn, a flip on another axis, a tilt, a flip that comes back or a flip that travels cannot pass "
+              "for flipping the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERFLIP_STEPS},
+    {"id": "anim_othertilt",
+     "kind": "flow",
+     "name": "Make it tilt the other way",
+     "byline": "Animation's seventy-second piece: tilting the other way - "
+               "one thing, its facing remembered upright, "
+               "remembered leaned the other way, and the "
+               "leaning filled in between.",
+     "intro": "Buddy's seventy-second animation piece - "
+              "tilting the other way. The tilt piece leaned a thing "
+              "over to one side; this piece leans it over the other way: upright facing remembered "
+              "at frame 1, leaned facing remembered "
+              "at frame 48 at -1.0 on the tilt axis, and "
+              "Blender fills in the leaning between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - the span must run at least 20 frames, the signed end lean on the tilt axis must "
+              "land between -1.8 and -0.6, the peak lean must stay within 2.2, the other axes must hold within 0.35, and the thing must stay within 0.5 of its place, so a first-way tilt, a small lean, an over-lean, a rock that settles, a spin, a flip, a lean on another axis or a tilt that travels cannot pass "
+              "for tilting the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERTILT_STEPS},
+    {"id": "anim_otherbow",
+     "kind": "flow",
+     "name": "Make it bow the other way",
+     "byline": "Animation's seventy-third piece: bowing the other way - "
+               "one thing, its facing remembered upright, "
+               "remembered leaned deep the other way, "
+               "remembered upright again, and the "
+               "bowing filled in between.",
+     "intro": "Buddy's seventy-third animation piece - "
+              "bowing the other way. The bow piece leaned a thing "
+              "deep over to one side and brought it back upright; this piece leans it over the other way: upright facing remembered "
+              "at frame 1, leaned facing remembered "
+              "at frame 24 at -0.9 on the bow axis, upright facing remembered again "
+              "at frame 48, and "
+              "Blender fills in the bowing between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - the span must run at least 20 frames, the peak signed lean on the bow axis must "
+              "land between -1.6 and -0.6, the lean the first way must stay within 0.15, the lean must change direction at least once, the ends must land within 0.3 of level, the other axes must hold within 0.35, and the thing must stay within 0.5 of its place, so a first-way bow, a tilt the other way, a sway, a spin, a small bow, a nod the other way or a bow that travels cannot pass "
+              "for bowing the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERBOW_STEPS},
+    {"id": "anim_othernod",
+     "kind": "flow",
+     "name": "Make it nod the other way",
+     "byline": "Animation's seventy-fourth piece: nodding the other way - "
+               "one thing, its facing remembered upright, "
+               "remembered leaned a little way the other way, "
+               "remembered upright again, twice, and the "
+               "nodding filled in between.",
+     "intro": "Buddy's seventy-fourth animation piece - "
+              "nodding the other way. The nod piece leaned a thing a little way to one side, twice, and brought it back upright each time; this piece leans it the other way: upright facing remembered "
+              "at frame 1, leaned facing remembered "
+              "at frame 13 at -0.5 on the nod axis, upright facing remembered again "
+              "at frame 24, leaned -0.5 again at frame 37, upright again "
+              "at frame 48, and "
+              "Blender fills in the nodding between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - the span must run at least 20 frames, the peak signed lean on the nod axis must "
+              "land between -0.7 and -0.35, the lean the first way must stay within 0.15, the lean must change direction at least three times, the ends must land within 0.3 of level, the other axes must hold within 0.35, and the thing must stay within 0.5 of its place, so a first-way nod, a bow the other way, a tilt the other way, a sway, a spin, a small nod the other way, a single nod the other way or a nod that travels cannot pass "
+              "for nodding the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERNOD_STEPS},
+    {"id": "anim_otherwag",
+     "kind": "flow",
+     "name": "Make it wag the other way",
+     "byline": "Animation's seventy-fifth piece: wagging the other way - "
+               "one thing, its facing remembered forward, "
+               "remembered turned a little the other way first, "
+               "remembered turned the first way, "
+               "remembered turned the other way again, "
+               "remembered forward again, and the "
+               "wagging filled in between.",
+     "intro": "Buddy's seventy-fifth animation piece - "
+              "wagging the other way. The wag piece turned a thing a little one way first, back through the middle to the other way, back again, and settled it facing forward; this piece swings it the other way first: forward facing remembered "
+              "at frame 1, turned facing remembered "
+              "at frame 13 at -0.4 on the upright axis, turned the first way remembered "
+              "at frame 25 at 0.4, turned -0.4 again at frame 37, forward again "
+              "at frame 48, and "
+              "Blender fills in the wagging between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - the span must run at least 20 frames, the turn must reach between 0.3 and 0.65 each way, the turn must change direction at least three times, the ends must land within 0.3 of the starting facing, the side axes must hold within 0.35, the thing must stay within 0.5 of its place, and the first sampled turn past 0.2 must swing negative - the other way - so a first-way wag, a spin, a nod, a sway, a small wag the other way, a single swing the other way or a turn-around the other way cannot pass "
+              "for wagging the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERWAG_STEPS},
+    {"id": "anim_othersway",
+     "kind": "flow",
+     "name": "Make it sway the other way",
+     "byline": "Animation's seventy-sixth piece: swaying the other way - "
+               "one thing, its facing remembered upright, "
+               "remembered leaned the other way first, "
+               "remembered leaned the first way, "
+               "remembered upright again, and the "
+               "swaying filled in between.",
+     "intro": "Buddy's seventy-sixth animation piece - "
+              "swaying the other way. The sway piece leaned a thing to one side first, then to the other side, and settled it upright again; this piece leans it to the other side first: upright facing remembered "
+              "at frame 1, leaned facing remembered "
+              "at frame 17 at -0.8 on the X axis, leaned the first way remembered "
+              "at frame 33 at 0.8, upright again "
+              "at frame 48, and "
+              "Blender fills in the swaying between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - the span must run at least 20 frames, the lean must reach at least 0.6 each way, the lean must change direction at least twice, the ends must land within 0.3 of level, the upright axis must hold within 0.35, the thing must stay within 0.5 of its place, and the first sampled lean past 0.2 must lean negative - the other way - so a first-way sway, a tilt, a spin, a small sway the other way, a one-way rock the other way or a bow cannot pass "
+              "for swaying the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERSWAY_STEPS},
+    {"id": "anim_otherswing",
+     "kind": "flow",
+     "name": "Make it swing the other way",
+     "byline": "Animation's seventy-seventh piece: swinging the other way - "
+               "one thing, its facing remembered leaned the other way, "
+               "remembered leaned the first way, "
+               "remembered at the first lean again, and the "
+               "swinging filled in between.",
+     "intro": "Buddy's seventy-seventh animation piece - "
+              "swinging the other way. The swing piece leaned a thing one way first, then the other way, and back to the first lean; this piece starts it leaned the other way: leaned facing remembered "
+              "at frame 1 at +0.7 on the Y axis, leaned the first way remembered "
+              "at frame 24 at -0.7, the first lean again "
+              "at frame 48, and "
+              "Blender fills in the swinging between them. "
+              "Checked from the facing memories "
+              "themselves and the real evaluated facing "
+              "sampled across the span - the span must run at least 20 frames, the lean must sweep at least one radian, the lean must reach clearly to both sides of upright on the same axis, the ends must land within 0.3 of each other, and the starting lean itself must reach at least +0.3 - leaned the other way - so a first-way swing, a tip that never crosses the middle, a small swing the other way, a one-way move or a swing starting upright cannot pass "
+              "for swinging the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERSWING_STEPS},
+    {"id": "anim_otherleap",
+     "kind": "flow",
+     "name": "Make it leap the other way",
+     "byline": "Animation's seventy-eighth piece: leaping the other way - "
+               "one thing, leapt up and the other way through the "
+               "air and landed far the other way on the ground.",
+     "intro": "Buddy's seventy-eighth animation piece - "
+              "leaping the other way. The leap piece leapt a thing up and forward and landed it far ahead on the ground; this piece leaps it the other way: its starting place remembered down on the ground "
+              "at frame 1, location (0, 0, 1), its mid-leap place "
+              "(-1.5, 0, 3) remembered up in the air at frame 24, "
+              "and its landing place (-3, 0, 1) remembered far "
+              "the other way on the ground at frame 48, never travelling "
+              "sideways, and Blender fills in the leap between. "
+              "Checked from the real evaluated place sampled "
+              "across the span - the span must run at least 20 frames, the signed travel - the landing place's X minus the starting place's X - must land between -3.8 and -2.2, the peak height must clear at least 1.2 above the start height, the landing height must sit "
+              "within 0.35 of the start height, and the sideways "
+              "drift must stay within 0.5, so a first-way leap, a slide the other way, a bounce in "
+              "place, a glide-like travel the other way, a small leap the other way, a leap the other way that "
+              "returns or a diagonal leap the other way cannot pass for a leap the other way. Each step ticks only "
+              "when the scene itself proves it.",
+     "steps": ANIM_OTHERLEAP_STEPS},
 ]
 
 PACKAGES_BY_ID = {p["id"]: p for p in PACKAGES}
@@ -17239,6 +37626,262 @@ _STEP_SCREENS = {
     ("anim_flip", 1): ("Buddy Model", None, None, None),
     ("anim_flip", 2): ("Buddy Model", None, None, None),
     ("anim_flip", 3): ("Buddy Finish", None, None, None),
+    ("anim_stretch", 0): ("Buddy Model", None, None, None),
+    ("anim_stretch", 1): ("Buddy Model", None, None, None),
+    ("anim_stretch", 2): ("Buddy Model", None, None, None),
+    ("anim_stretch", 3): ("Buddy Finish", None, None, None),
+    ("anim_orbit", 0): ("Buddy Model", None, None, None),
+    ("anim_orbit", 1): ("Buddy Model", None, None, None),
+    ("anim_orbit", 2): ("Buddy Model", None, None, None),
+    ("anim_orbit", 3): ("Buddy Finish", None, None, None),
+    ("anim_roll", 0): ("Buddy Model", None, None, None),
+    ("anim_roll", 1): ("Buddy Model", None, None, None),
+    ("anim_roll", 2): ("Buddy Model", None, None, None),
+    ("anim_roll", 3): ("Buddy Finish", None, None, None),
+    ("anim_fall", 0): ("Buddy Model", None, None, None),
+    ("anim_fall", 1): ("Buddy Model", None, None, None),
+    ("anim_fall", 2): ("Buddy Model", None, None, None),
+    ("anim_fall", 3): ("Buddy Finish", None, None, None),
+    ("anim_rise", 0): ("Buddy Model", None, None, None),
+    ("anim_rise", 1): ("Buddy Model", None, None, None),
+    ("anim_rise", 2): ("Buddy Model", None, None, None),
+    ("anim_rise", 3): ("Buddy Finish", None, None, None),
+    ("anim_shrink", 0): ("Buddy Model", None, None, None),
+    ("anim_shrink", 1): ("Buddy Model", None, None, None),
+    ("anim_shrink", 2): ("Buddy Model", None, None, None),
+    ("anim_shrink", 3): ("Buddy Finish", None, None, None),
+    ("anim_spin", 0): ("Buddy Model", None, None, None),
+    ("anim_spin", 1): ("Buddy Model", None, None, None),
+    ("anim_spin", 2): ("Buddy Model", None, None, None),
+    ("anim_spin", 3): ("Buddy Finish", None, None, None),
+    ("anim_shake", 0): ("Buddy Model", None, None, None),
+    ("anim_shake", 1): ("Buddy Model", None, None, None),
+    ("anim_shake", 2): ("Buddy Model", None, None, None),
+    ("anim_shake", 3): ("Buddy Finish", None, None, None),
+    ("anim_slide", 0): ("Buddy Model", None, None, None),
+    ("anim_slide", 1): ("Buddy Model", None, None, None),
+    ("anim_slide", 2): ("Buddy Model", None, None, None),
+    ("anim_slide", 3): ("Buddy Finish", None, None, None),
+    ("anim_pace", 0): ("Buddy Model", None, None, None),
+    ("anim_pace", 1): ("Buddy Model", None, None, None),
+    ("anim_pace", 2): ("Buddy Model", None, None, None),
+    ("anim_pace", 3): ("Buddy Finish", None, None, None),
+    ("anim_tilt", 0): ("Buddy Model", None, None, None),
+    ("anim_tilt", 1): ("Buddy Model", None, None, None),
+    ("anim_tilt", 2): ("Buddy Model", None, None, None),
+    ("anim_tilt", 3): ("Buddy Finish", None, None, None),
+    ("anim_squash", 0): ("Buddy Model", None, None, None),
+    ("anim_squash", 1): ("Buddy Model", None, None, None),
+    ("anim_squash", 2): ("Buddy Model", None, None, None),
+    ("anim_squash", 3): ("Buddy Finish", None, None, None),
+    ("anim_hop", 0): ("Buddy Model", None, None, None),
+    ("anim_hop", 1): ("Buddy Model", None, None, None),
+    ("anim_hop", 2): ("Buddy Model", None, None, None),
+    ("anim_hop", 3): ("Buddy Finish", None, None, None),
+    ("anim_zigzag", 0): ("Buddy Model", None, None, None),
+    ("anim_zigzag", 1): ("Buddy Model", None, None, None),
+    ("anim_zigzag", 2): ("Buddy Model", None, None, None),
+    ("anim_zigzag", 3): ("Buddy Finish", None, None, None),
+    ("anim_climb", 0): ("Buddy Model", None, None, None),
+    ("anim_climb", 1): ("Buddy Model", None, None, None),
+    ("anim_climb", 2): ("Buddy Model", None, None, None),
+    ("anim_climb", 3): ("Buddy Finish", None, None, None),
+    ("anim_descend", 0): ("Buddy Model", None, None, None),
+    ("anim_descend", 1): ("Buddy Model", None, None, None),
+    ("anim_descend", 2): ("Buddy Model", None, None, None),
+    ("anim_descend", 3): ("Buddy Finish", None, None, None),
+    ("anim_hover", 0): ("Buddy Model", None, None, None),
+    ("anim_hover", 1): ("Buddy Model", None, None, None),
+    ("anim_hover", 2): ("Buddy Model", None, None, None),
+    ("anim_hover", 3): ("Buddy Finish", None, None, None),
+    ("anim_land", 0): ("Buddy Model", None, None, None),
+    ("anim_land", 1): ("Buddy Model", None, None, None),
+    ("anim_land", 2): ("Buddy Model", None, None, None),
+    ("anim_land", 3): ("Buddy Finish", None, None, None),
+    ("anim_glide", 0): ("Buddy Model", None, None, None),
+    ("anim_glide", 1): ("Buddy Model", None, None, None),
+    ("anim_glide", 2): ("Buddy Model", None, None, None),
+    ("anim_glide", 3): ("Buddy Finish", None, None, None),
+    ("anim_sway", 0): ("Buddy Model", None, None, None),
+    ("anim_sway", 1): ("Buddy Model", None, None, None),
+    ("anim_sway", 2): ("Buddy Model", None, None, None),
+    ("anim_sway", 3): ("Buddy Finish", None, None, None),
+    ("anim_bow", 0): ("Buddy Model", None, None, None),
+    ("anim_bow", 1): ("Buddy Model", None, None, None),
+    ("anim_bow", 2): ("Buddy Model", None, None, None),
+    ("anim_bow", 3): ("Buddy Finish", None, None, None),
+    ("anim_nod", 0): ("Buddy Model", None, None, None),
+    ("anim_nod", 1): ("Buddy Model", None, None, None),
+    ("anim_nod", 2): ("Buddy Model", None, None, None),
+    ("anim_nod", 3): ("Buddy Finish", None, None, None),
+    ("anim_wag", 0): ("Buddy Model", None, None, None),
+    ("anim_wag", 1): ("Buddy Model", None, None, None),
+    ("anim_wag", 2): ("Buddy Model", None, None, None),
+    ("anim_wag", 3): ("Buddy Finish", None, None, None),
+    ("anim_turn", 0): ("Buddy Model", None, None, None),
+    ("anim_turn", 1): ("Buddy Model", None, None, None),
+    ("anim_turn", 2): ("Buddy Model", None, None, None),
+    ("anim_turn", 3): ("Buddy Finish", None, None, None),
+    ("anim_bob", 0): ("Buddy Model", None, None, None),
+    ("anim_bob", 1): ("Buddy Model", None, None, None),
+    ("anim_bob", 2): ("Buddy Model", None, None, None),
+    ("anim_bob", 3): ("Buddy Finish", None, None, None),
+    ("anim_float", 0): ("Buddy Model", None, None, None),
+    ("anim_float", 1): ("Buddy Model", None, None, None),
+    ("anim_float", 2): ("Buddy Model", None, None, None),
+    ("anim_float", 3): ("Buddy Finish", None, None, None),
+    ("anim_dip", 0): ("Buddy Model", None, None, None),
+    ("anim_dip", 1): ("Buddy Model", None, None, None),
+    ("anim_dip", 2): ("Buddy Model", None, None, None),
+    ("anim_dip", 3): ("Buddy Finish", None, None, None),
+    ("anim_sidestep", 0): ("Buddy Model", None, None, None),
+    ("anim_sidestep", 1): ("Buddy Model", None, None, None),
+    ("anim_sidestep", 2): ("Buddy Model", None, None, None),
+    ("anim_sidestep", 3): ("Buddy Finish", None, None, None),
+    ("anim_backstep", 0): ("Buddy Model", None, None, None),
+    ("anim_backstep", 1): ("Buddy Model", None, None, None),
+    ("anim_backstep", 2): ("Buddy Model", None, None, None),
+    ("anim_backstep", 3): ("Buddy Finish", None, None, None),
+    ("anim_forwardstep", 0): ("Buddy Model", None, None, None),
+    ("anim_forwardstep", 1): ("Buddy Model", None, None, None),
+    ("anim_forwardstep", 2): ("Buddy Model", None, None, None),
+    ("anim_forwardstep", 3): ("Buddy Finish", None, None, None),
+    ("anim_stepup", 0): ("Buddy Model", None, None, None),
+    ("anim_stepup", 1): ("Buddy Model", None, None, None),
+    ("anim_stepup", 2): ("Buddy Model", None, None, None),
+    ("anim_stepup", 3): ("Buddy Finish", None, None, None),
+    ("anim_stepdown", 0): ("Buddy Model", None, None, None),
+    ("anim_stepdown", 1): ("Buddy Model", None, None, None),
+    ("anim_stepdown", 2): ("Buddy Model", None, None, None),
+    ("anim_stepdown", 3): ("Buddy Finish", None, None, None),
+    ("anim_crouch", 0): ("Buddy Model", None, None, None),
+    ("anim_crouch", 1): ("Buddy Model", None, None, None),
+    ("anim_crouch", 2): ("Buddy Model", None, None, None),
+    ("anim_crouch", 3): ("Buddy Finish", None, None, None),
+    ("anim_standup", 0): ("Buddy Model", None, None, None),
+    ("anim_standup", 1): ("Buddy Model", None, None, None),
+    ("anim_standup", 2): ("Buddy Model", None, None, None),
+    ("anim_standup", 3): ("Buddy Finish", None, None, None),
+    ("anim_widen", 0): ("Buddy Model", None, None, None),
+    ("anim_widen", 1): ("Buddy Model", None, None, None),
+    ("anim_widen", 2): ("Buddy Model", None, None, None),
+    ("anim_widen", 3): ("Buddy Finish", None, None, None),
+    ("anim_narrow", 0): ("Buddy Model", None, None, None),
+    ("anim_narrow", 1): ("Buddy Model", None, None, None),
+    ("anim_narrow", 2): ("Buddy Model", None, None, None),
+    ("anim_narrow", 3): ("Buddy Finish", None, None, None),
+    ("anim_lengthen", 0): ("Buddy Model", None, None, None),
+    ("anim_lengthen", 1): ("Buddy Model", None, None, None),
+    ("anim_lengthen", 2): ("Buddy Model", None, None, None),
+    ("anim_lengthen", 3): ("Buddy Finish", None, None, None),
+    ("anim_shorten", 0): ("Buddy Model", None, None, None),
+    ("anim_shorten", 1): ("Buddy Model", None, None, None),
+    ("anim_shorten", 2): ("Buddy Model", None, None, None),
+    ("anim_shorten", 3): ("Buddy Finish", None, None, None),
+    ("anim_thicken", 0): ("Buddy Model", None, None, None),
+    ("anim_thicken", 1): ("Buddy Model", None, None, None),
+    ("anim_thicken", 2): ("Buddy Model", None, None, None),
+    ("anim_thicken", 3): ("Buddy Finish", None, None, None),
+    ("anim_thin", 0): ("Buddy Model", None, None, None),
+    ("anim_thin", 1): ("Buddy Model", None, None, None),
+    ("anim_thin", 2): ("Buddy Model", None, None, None),
+    ("anim_thin", 3): ("Buddy Finish", None, None, None),
+    ("anim_taller", 0): ("Buddy Model", None, None, None),
+    ("anim_taller", 1): ("Buddy Model", None, None, None),
+    ("anim_taller", 2): ("Buddy Model", None, None, None),
+    ("anim_taller", 3): ("Buddy Finish", None, None, None),
+    ("anim_sideturn", 0): ("Buddy Model", None, None, None),
+    ("anim_sideturn", 1): ("Buddy Model", None, None, None),
+    ("anim_sideturn", 2): ("Buddy Model", None, None, None),
+    ("anim_sideturn", 3): ("Buddy Finish", None, None, None),
+    ("anim_leap", 0): ("Buddy Model", None, None, None),
+    ("anim_leap", 1): ("Buddy Model", None, None, None),
+    ("anim_leap", 2): ("Buddy Model", None, None, None),
+    ("anim_leap", 3): ("Buddy Finish", None, None, None),
+    ("anim_dive", 0): ("Buddy Model", None, None, None),
+    ("anim_dive", 1): ("Buddy Model", None, None, None),
+    ("anim_dive", 2): ("Buddy Model", None, None, None),
+    ("anim_dive", 3): ("Buddy Finish", None, None, None),
+    ("anim_lookback", 0): ("Buddy Model", None, None, None),
+    ("anim_lookback", 1): ("Buddy Model", None, None, None),
+    ("anim_lookback", 2): ("Buddy Model", None, None, None),
+    ("anim_lookback", 3): ("Buddy Finish", None, None, None),
+    ("anim_diagonal", 0): ("Buddy Model", None, None, None),
+    ("anim_diagonal", 1): ("Buddy Model", None, None, None),
+    ("anim_diagonal", 2): ("Buddy Model", None, None, None),
+    ("anim_diagonal", 3): ("Buddy Finish", None, None, None),
+    ("anim_backdiagonal", 0): ("Buddy Model", None, None, None),
+    ("anim_backdiagonal", 1): ("Buddy Model", None, None, None),
+    ("anim_backdiagonal", 2): ("Buddy Model", None, None, None),
+    ("anim_backdiagonal", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherdiagonal", 0): ("Buddy Model", None, None, None),
+    ("anim_otherdiagonal", 1): ("Buddy Model", None, None, None),
+    ("anim_otherdiagonal", 2): ("Buddy Model", None, None, None),
+    ("anim_otherdiagonal", 3): ("Buddy Finish", None, None, None),
+    ("anim_backotherdiagonal", 0): ("Buddy Model", None, None, None),
+    ("anim_backotherdiagonal", 1): ("Buddy Model", None, None, None),
+    ("anim_backotherdiagonal", 2): ("Buddy Model", None, None, None),
+    ("anim_backotherdiagonal", 3): ("Buddy Finish", None, None, None),
+    ("anim_othersideturn", 0): ("Buddy Model", None, None, None),
+    ("anim_othersideturn", 1): ("Buddy Model", None, None, None),
+    ("anim_othersideturn", 2): ("Buddy Model", None, None, None),
+    ("anim_othersideturn", 3): ("Buddy Finish", None, None, None),
+    ("anim_othersidestep", 0): ("Buddy Model", None, None, None),
+    ("anim_othersidestep", 1): ("Buddy Model", None, None, None),
+    ("anim_othersidestep", 2): ("Buddy Model", None, None, None),
+    ("anim_othersidestep", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherspin", 0): ("Buddy Model", None, None, None),
+    ("anim_otherspin", 1): ("Buddy Model", None, None, None),
+    ("anim_otherspin", 2): ("Buddy Model", None, None, None),
+    ("anim_otherspin", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherturn", 0): ("Buddy Model", None, None, None),
+    ("anim_otherturn", 1): ("Buddy Model", None, None, None),
+    ("anim_otherturn", 2): ("Buddy Model", None, None, None),
+    ("anim_otherturn", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherlookback", 0): ("Buddy Model", None, None, None),
+    ("anim_otherlookback", 1): ("Buddy Model", None, None, None),
+    ("anim_otherlookback", 2): ("Buddy Model", None, None, None),
+    ("anim_otherlookback", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherorbit", 0): ("Buddy Model", None, None, None),
+    ("anim_otherorbit", 1): ("Buddy Model", None, None, None),
+    ("anim_otherorbit", 2): ("Buddy Model", None, None, None),
+    ("anim_otherorbit", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherroll", 0): ("Buddy Model", None, None, None),
+    ("anim_otherroll", 1): ("Buddy Model", None, None, None),
+    ("anim_otherroll", 2): ("Buddy Model", None, None, None),
+    ("anim_otherroll", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherflip", 0): ("Buddy Model", None, None, None),
+    ("anim_otherflip", 1): ("Buddy Model", None, None, None),
+    ("anim_otherflip", 2): ("Buddy Model", None, None, None),
+    ("anim_otherflip", 3): ("Buddy Finish", None, None, None),
+    ("anim_othertilt", 0): ("Buddy Model", None, None, None),
+    ("anim_othertilt", 1): ("Buddy Model", None, None, None),
+    ("anim_othertilt", 2): ("Buddy Model", None, None, None),
+    ("anim_othertilt", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherbow", 0): ("Buddy Model", None, None, None),
+    ("anim_otherbow", 1): ("Buddy Model", None, None, None),
+    ("anim_otherbow", 2): ("Buddy Model", None, None, None),
+    ("anim_otherbow", 3): ("Buddy Finish", None, None, None),
+    ("anim_othernod", 0): ("Buddy Model", None, None, None),
+    ("anim_othernod", 1): ("Buddy Model", None, None, None),
+    ("anim_othernod", 2): ("Buddy Model", None, None, None),
+    ("anim_othernod", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherwag", 0): ("Buddy Model", None, None, None),
+    ("anim_otherwag", 1): ("Buddy Model", None, None, None),
+    ("anim_otherwag", 2): ("Buddy Model", None, None, None),
+    ("anim_otherwag", 3): ("Buddy Finish", None, None, None),
+    ("anim_othersway", 0): ("Buddy Model", None, None, None),
+    ("anim_othersway", 1): ("Buddy Model", None, None, None),
+    ("anim_othersway", 2): ("Buddy Model", None, None, None),
+    ("anim_othersway", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherswing", 0): ("Buddy Model", None, None, None),
+    ("anim_otherswing", 1): ("Buddy Model", None, None, None),
+    ("anim_otherswing", 2): ("Buddy Model", None, None, None),
+    ("anim_otherswing", 3): ("Buddy Finish", None, None, None),
+    ("anim_otherleap", 0): ("Buddy Model", None, None, None),
+    ("anim_otherleap", 1): ("Buddy Model", None, None, None),
+    ("anim_otherleap", 2): ("Buddy Model", None, None, None),
+    ("anim_otherleap", 3): ("Buddy Finish", None, None, None),
 }
 
 _CONDUCT = {"key": None, "scheduled": False}
@@ -18094,7 +38737,373 @@ _COVERAGE_LINES = (
     "teaches flipping - one thing, its facing "
     "remembered upright, remembered upside down, and "
     "remembered upright again as one full turn, and "
-    "the roll filled in between. They are first "
+    "the roll filled in between. A fifteenth piece, "
+    "'Make it stretch', teaches stretching - one "
+    "thing, its size remembered, stretched along one "
+    "axis and remembered again, and the lengthening "
+    "filled in between. A sixteenth piece, "
+    "'Make it orbit', teaches orbiting - one thing, "
+    "its place remembered at the quarter points of "
+    "one circle, and the ring filled in between. "
+    "A seventeenth piece, "
+    "'Make it roll', teaches rolling - one thing, "
+    "its place and facing remembered at both ends "
+    "of a journey, and the tumble filled in "
+    "between. An eighteenth piece, "
+    "'Make it fall', teaches falling - one thing, "
+    "its place remembered up high and remembered "
+    "on the ground, and the drop filled in "
+    "between. A nineteenth piece, "
+    "'Make it rise', teaches rising - one thing, "
+    "its place remembered on the ground and "
+    "remembered up high, and the climb filled in "
+    "between. A twentieth piece, "
+    "'Make it shrink', teaches shrinking - one "
+    "thing, its size remembered full and "
+    "remembered small, and the shrinking filled "
+    "in between. A twenty-first piece, "
+    "'Make it spin', teaches spinning - one "
+    "thing, its facing remembered at the start, "
+    "halfway around and home again, and the turn "
+    "filled in between. A twenty-second piece, "
+    "'Make it shake', teaches shaking - one "
+    "thing, its home place remembered at the "
+    "start, swung out to each side in turn, "
+    "remembered home again, and the rattling "
+    "filled in between. A twenty-third piece, "
+    "'Make it slide', teaches sliding - one "
+    "thing, its place remembered on the ground "
+    "at the start, remembered again far across "
+    "the ground, and the gliding filled in "
+    "between. A twenty-fourth piece, "
+    "'Make it pace', teaches pacing - one "
+    "thing, its home place remembered at the "
+    "start, a far place remembered in the "
+    "middle, home remembered again at the end, "
+    "and the walking filled in between. A twenty-fifth piece, "
+    "'Make it tilt', teaches tilting - one "
+    "thing, its upright facing remembered at "
+    "the start, its leaned facing remembered "
+    "at the end, and the leaning filled in "
+    "between. A twenty-sixth piece, "
+    "'Make it squash', teaches squashing - one "
+    "thing, flattened down with its sides "
+    "bulged out in the middle, settled back to "
+    "its own shape at the end. A twenty-seventh piece, "
+    "'Make it hop', teaches hopping - one "
+    "thing, its place remembered on the ground "
+    "at the start, up in the air halfway across "
+    "in the middle, landed far across at the "
+    "end. A twenty-eighth piece, "
+    "'Make it zigzag', teaches zigzagging - one "
+    "thing, its place remembered on the ground "
+    "at the start, each turn remembered as it "
+    "travels forward, the far end remembered "
+    "last. A seventy-eighth piece, "
+    "'Make it leap the other way', teaches leaping "
+    "the other way - one "
+    "thing, its place remembered down on the ground "
+    "at the start, remembered up in the air halfway "
+    "across the other way in the middle, remembered "
+    "landed far the other way on the ground "
+    "at the end, "
+    "and the leaping filled in "
+    "between. A seventy-seventh piece, "
+    "'Make it swing the other way', teaches swinging "
+    "the other way - one "
+    "thing, its facing remembered leaned the other "
+    "way at the start, remembered leaned the first "
+    "way in the middle, remembered at the first "
+    "lean again at the end, "
+    "and the swinging filled in "
+    "between. A seventy-sixth piece, "
+    "'Make it sway the other way', teaches swaying "
+    "the other way - one "
+    "thing, its facing remembered upright at the "
+    "start, remembered leaned the other way first, "
+    "remembered leaned the first way, "
+    "remembered upright again at the end, "
+    "and the swaying filled in "
+    "between. A seventy-fifth piece, "
+    "'Make it wag the other way', teaches wagging "
+    "the other way - one "
+    "thing, its facing remembered forward at the "
+    "start, remembered turned a little the other "
+    "way first, remembered turned the first way, "
+    "remembered turned the other way again, "
+    "remembered forward again at the end, "
+    "and the wagging filled in "
+    "between. A seventy-fourth piece, "
+    "'Make it nod the other way', teaches nodding "
+    "the other way - one "
+    "thing, its facing remembered upright at the "
+    "start, remembered leaned a little way the "
+    "other way at the bottom of each nod, "
+    "remembered upright again after each nod, "
+    "and the nodding filled in "
+    "between. A seventy-third piece, "
+    "'Make it bow the other way', teaches bowing "
+    "the other way - one "
+    "thing, its facing remembered upright at the "
+    "start, remembered leaned deep the other way "
+    "in the middle, remembered upright again at "
+    "the end, and the bowing filled in "
+    "between. A seventy-second piece, "
+    "'Make it tilt the other way', teaches tilting "
+    "the other way - one "
+    "thing, its facing remembered upright at the "
+    "start, remembered leaned the other way at "
+    "the end, and the leaning filled in "
+    "between. A seventy-first piece, "
+    "'Make it flip the other way', teaches flipping "
+    "the other way - one "
+    "thing, its facing remembered upright at the "
+    "start, remembered upside down the other way "
+    "in the middle, remembered upright again as "
+    "one full turn the other way at "
+    "the end, and the flipping filled in "
+    "between. A sixty-fourth piece, "
+    "'Make it turn to the other side', teaches turning "
+    "to the other side - one "
+    "thing, its facing remembered at the "
+    "start, turned a quarter turn to the other side "
+    "remembered as it arrives, the same "
+    "turned facing remembered again at "
+    "the end, and the turning filled in "
+    "between. A sixty-third piece, "
+    "'Make it move back diagonally the other way', teaches moving "
+    "back diagonally the other way - one "
+    "thing, its place remembered on the "
+    "ground at the start, halfway back and "
+    "halfway across the other way in the middle, far behind "
+    "and far across the other way at the end, and the back-other diagonal "
+    "filled in between. A sixty-second piece, "
+    "'Make it move diagonally the other way', teaches moving "
+    "diagonally the other way - one "
+    "thing, its place remembered on the "
+    "ground at the start, halfway forward and "
+    "halfway across the other way in the middle, far ahead "
+    "and far across the other way at the end, and the other diagonal "
+    "filled in between. A sixty-first piece, "
+    "'Make it move back diagonally', teaches moving "
+    "back diagonally - one "
+    "thing, its place remembered on the "
+    "ground at the start, halfway back and "
+    "halfway across in the middle, far behind "
+    "and far across at the end, and the back diagonal "
+    "filled in between. A sixtieth piece, "
+    "'Make it move diagonally', teaches moving "
+    "diagonally - one "
+    "thing, its place remembered on the "
+    "ground at the start, halfway forward and "
+    "halfway across in the middle, far ahead "
+    "and far across at the end, and the diagonal "
+    "filled in between. A fifty-ninth piece, "
+    "'Make it look behind', teaches looking "
+    "behind - one "
+    "thing, its facing remembered at the "
+    "start, turned the whole half circle to "
+    "face behind remembered at the middle, "
+    "the starting facing remembered again at "
+    "the end, and the turning filled in "
+    "between. A fifty-eighth piece, "
+    "'Make it dive', teaches diving - one "
+    "thing, its place remembered up high at "
+    "the start, halfway down halfway across "
+    "in the middle, landed far ahead on the "
+    "ground at the end, and the dive filled "
+    "in between. A fifty-seventh piece, "
+    "'Make it leap', teaches leaping - one "
+    "thing, its place remembered down on the "
+    "ground at the start, up in the air halfway "
+    "across in the middle, landed far ahead on "
+    "the ground at the end, and the leap filled "
+    "in between. A fifty-sixth piece, "
+    "'Make it turn to the side', teaches turning "
+    "to the side - one "
+    "thing, its facing remembered at the "
+    "start, turned a quarter turn to the side "
+    "remembered as it arrives, the same "
+    "turned facing remembered again at "
+    "the end, and the turning filled in "
+    "between. A fifty-fifth piece, "
+    "'Make it taller', teaches growing taller - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its taller size "
+    "remembered as it arrives, the same "
+    "taller size remembered again at "
+    "the end, and the growing taller filled in "
+    "between. A fifty-fourth piece, "
+    "'Make it thin', teaches thinning - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its thinned size "
+    "remembered as it arrives, the same "
+    "thinned size remembered again at "
+    "the end, and the thinning filled in "
+    "between. A fifty-third piece, "
+    "'Make it thicken', teaches thickening - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its thickened size "
+    "remembered as it arrives, the same "
+    "thickened size remembered again at "
+    "the end, and the thickening filled in "
+    "between. A fifty-second piece, "
+    "'Make it shorten', teaches shortening - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its shortened size "
+    "remembered as it arrives, the same "
+    "shortened size remembered again at "
+    "the end, and the shortening filled in "
+    "between. A fifty-first piece, "
+    "'Make it lengthen', teaches lengthening - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its lengthened size "
+    "remembered as it arrives, the same "
+    "lengthened size remembered again at "
+    "the end, and the lengthening filled in "
+    "between. A fiftieth piece, "
+    "'Make it narrow', teaches narrowing - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its narrowed size "
+    "remembered as it arrives, the same "
+    "narrowed size remembered again at "
+    "the end, and the narrowing filled in "
+    "between. A forty-ninth piece, "
+    "'Make it widen', teaches widening - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its widened size "
+    "remembered as it arrives, the same "
+    "widened size remembered again at "
+    "the end, and the widening filled in "
+    "between. A forty-eighth piece, "
+    "'Make it stand up', teaches standing up - one "
+    "thing, its size remembered crouched "
+    "down at the start, its full standing "
+    "size remembered as it arrives, the same "
+    "full size remembered again at "
+    "the end, and the standing up filled in "
+    "between. A forty-seventh piece, "
+    "'Make it crouch', teaches crouching - one "
+    "thing, its size remembered at its own "
+    "shape at the start, its crouched size "
+    "remembered as it arrives, the same "
+    "crouched size remembered again at "
+    "the end, and the crouching filled in "
+    "between. A forty-sixth piece, "
+    "'Make it step down', teaches stepping down - one "
+    "thing, its place remembered up high "
+    "at the start, its stepped-down "
+    "place remembered as it arrives, the same "
+    "stepped-down place remembered again at "
+    "the end, and the step down filled in "
+    "between. A forty-fifth piece, "
+    "'Make it step up', teaches stepping up - one "
+    "thing, its place remembered on the "
+    "ground at the start, its stepped-up "
+    "place remembered as it arrives, the same "
+    "stepped-up place remembered again at "
+    "the end, and the step up filled in "
+    "between. A forty-fourth piece, "
+    "'Make it step forward', teaches stepping forward - one "
+    "thing, its place remembered on the "
+    "ground at the start, its stepped-forward "
+    "place remembered as it arrives, the same "
+    "stepped-forward place remembered again at "
+    "the end, and the step forward filled in "
+    "between. A forty-third piece, "
+    "'Make it step back', teaches stepping back - one "
+    "thing, its place remembered on the "
+    "ground at the start, its stepped-back "
+    "place remembered as it arrives, the same "
+    "stepped-back place remembered again at "
+    "the end, and the step back filled in "
+    "between. A forty-second piece, "
+    "'Make it sidestep', teaches sidestepping - one "
+    "thing, its place remembered on the "
+    "ground at the start, its sidestepped "
+    "place remembered as it arrives, the same "
+    "sidestepped place remembered again at "
+    "the end, and the step across filled in "
+    "between. A forty-first piece, "
+    "'Make it dip', teaches dipping - one "
+    "thing, its place remembered up in the "
+    "air at the start, its dipped place "
+    "remembered at the bottom, its starting "
+    "high place remembered again at the "
+    "end, and the dipping filled in between. "
+    "A fortieth piece, "
+    "'Make it float', teaches floating - one "
+    "thing, its place remembered on the "
+    "ground at the start, its floating place "
+    "remembered as it arrives, the same "
+    "floating place remembered again at the "
+    "end, and the rise filled in between. "
+    "A thirty-ninth piece, "
+    "'Make it bob', teaches bobbing - one "
+    "thing, its place remembered on the "
+    "ground at the start, raised remembered, "
+    "settled remembered, raised again "
+    "remembered, settled back on the ground "
+    "at the end, and the bobbing filled in "
+    "between. "
+    "A thirty-eighth piece, "
+    "'Make it turn around', teaches turning "
+    "around - one "
+    "thing, its facing remembered at the "
+    "start, turned right around remembered "
+    "at the end, facing the other way, and "
+    "the turning filled in between. "
+    "A thirty-seventh piece, "
+    "'Make it wag', teaches wagging - one "
+    "thing, its facing remembered at the "
+    "start, turned a little one way "
+    "remembered, turned the other way "
+    "remembered, turned back again "
+    "remembered, facing forward again at the "
+    "end, and the wagging filled in between. "
+    "A thirty-sixth piece, "
+    "'Make it nod', teaches nodding - one "
+    "thing, its upright facing remembered at "
+    "the start, leaned a little to one side "
+    "remembered, upright remembered, leaned "
+    "again remembered, upright again at the "
+    "end, and the nodding filled in between. "
+    "A thirty-fifth piece, "
+    "'Make it bow', teaches bowing - one "
+    "thing, its upright facing remembered at "
+    "the start, leaned deep to one side "
+    "remembered at the bottom of the bow, "
+    "upright again remembered at the end, and "
+    "the bowing filled in between. A thirty-fourth piece, "
+    "'Make it sway', teaches swaying - one "
+    "thing, its upright facing remembered at "
+    "the start, leaned one way and leaned the "
+    "other way remembered as it passes, upright "
+    "again remembered at the end, and the "
+    "swaying filled in between. A thirty-third piece, "
+    "'Make it glide far', teaches gliding - one "
+    "thing, its place remembered up high "
+    "at the start, far across and only a little "
+    "lower remembered as it travels, the far end "
+    "remembered last, still in the air. A thirty-second piece, "
+    "'Make it land', teaches landing - one "
+    "thing, its place remembered up high "
+    "at the start, its ground place remembered as "
+    "it arrives and remembered again at the end. A thirty-first piece, "
+    "'Make it hover', teaches hovering - one "
+    "thing, its place remembered on the ground "
+    "at the start, its high place remembered as "
+    "it arrives and remembered again at the end. A thirtieth piece, "
+    "'Make it descend', teaches descending - one "
+    "thing, its place remembered up high "
+    "at the start, each step down remembered as "
+    "it descends diagonally down and forward, the "
+    "bottom remembered last. A twenty-ninth piece, "
+    "'Make it climb', teaches climbing - one "
+    "thing, its place remembered on the ground "
+    "at the start, each step up remembered as "
+    "it climbs diagonally up and forward, the "
+    "top remembered last. They are first "
     "pieces of the craft, not the whole of it.",
     "The other crafts are not taught yet.",
     "Each craft is being added one at a time, taught the "
